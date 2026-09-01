@@ -1,0 +1,14 @@
+/node_modules
+/dist
+/target
+/orbit-core/target
+/orbit-server/target
+/src-tauri/target
+/src-tauri/gen
+*.db
+.env
+.env.local
+.DS_Store
+data/session.json
+.vscode
+.idea

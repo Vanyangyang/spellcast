@@ -1,0 +1,26 @@
+{
+  "name": "orbit",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/start.mjs",
+    "plugin": "node scripts/install-orbit-plugin.mjs",
+    "dev": "vite --host 127.0.0.1 --port 47193",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 47193",
+    "desktop": "tauri dev",
+    "app": "tauri dev",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.2.0",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.7",
+    "@types/three": "^0.170.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}

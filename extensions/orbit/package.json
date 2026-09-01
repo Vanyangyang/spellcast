@@ -1,0 +1,61 @@
+{
+  "name": "orbit-board",
+  "displayName": "Orbit 头脑风暴板",
+  "description": "Agent 可安装。侧栏是入口，展开后是独立可操作的头脑风暴板。",
+  "version": "0.1.0",
+  "publisher": "orbit",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "orbit",
+          "title": "Orbit",
+          "icon": "media/orbit.svg"
+        }
+      ]
+    },
+    "views": {
+      "orbit": [
+        {
+          "type": "webview",
+          "id": "orbit.environment",
+          "name": "头脑风暴板"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "orbit.expand",
+        "title": "Orbit: 展开头脑风暴板"
+      },
+      {
+        "command": "orbit.scatter",
+        "title": "Orbit: 把选区丢上板"
+      },
+      {
+        "command": "orbit.importFile",
+        "title": "Orbit: 把当前文件当对话导入"
+      },
+      {
+        "command": "orbit.openExternal",
+        "title": "Orbit: 在浏览器打开整块板"
+      }
+    ],
+    "configuration": {
+      "title": "Orbit",
+      "properties": {
+        "orbit.environmentUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:47193",
+          "description": "头脑风暴板地址。本机先跑 npm run dev 与 cargo run -p orbit-server。"
+        }
+      }
+    }
+  }
+}

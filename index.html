@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orbit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;1,500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="mode-ambient">
+    <div id="desktop" class="desktop" aria-hidden="true"></div>
+    <div id="app">
+      <div id="stage">
+        <canvas id="spatial" hidden></canvas>
+        <div id="plane"></div>
+        <div id="empty" class="empty">
+          <p class="eyebrow" data-i18n="empty.eyebrow"></p>
+          <h1 data-i18n="empty.title"></h1>
+          <p data-i18n="empty.body"></p>
+          <div class="empty-actions">
+            <button type="button" id="empty-add" class="primary" data-i18n="empty.add"></button>
+          </div>
+        </div>
+      </div>
+
+      <header class="top">
+        <div class="brand">
+          <em>Orbit</em>
+          <span data-i18n="brand.board"></span>
+        </div>
+        <p id="topic" class="topic chrome-focus"></p>
+        <nav id="forms" class="forms chrome-focus" data-i18n-aria="forms.aria"></nav>
+        <label class="locale-wrap">
+          <span class="visually-hidden" data-i18n="action.language"></span>
+          <select id="locale"></select>
+        </label>
+        <button type="button" id="mode-focus" class="primary chrome-ambient" data-i18n="mode.focus"></button>
+        <button type="button" id="mode-desktop" class="ghost chrome-focus" data-i18n="mode.desktop"></button>
+        <button type="button" id="add-btn" class="ghost chrome-focus" data-i18n="action.add"></button>
+        <button type="button" id="settings-btn" class="ghost" data-i18n="action.models"></button>
+      </header>
+
+      <aside id="whisper" class="whisper chrome-focus" data-i18n-aria="whisper.title">
+        <header>
+          <span data-i18n="whisper.title"></span>
+          <small data-i18n="whisper.aside"></small>
+        </header>
+        <ol id="log"></ol>
+      </aside>
+
+      <aside id="inspector" class="inspector chrome-focus" hidden>
+        <p class="eyebrow" data-i18n="inspector.title"></p>
+        <input id="ins-title" maxlength="22" />
+        <textarea id="ins-body" rows="4"></textarea>
+        <div class="ins-row">
+          <select id="ins-kind"></select>
+          <select id="ins-weight"></select>
+        </div>
+        <div class="ins-row">
+          <button type="button" id="focus-btn" class="primary" data-i18n="inspector.focus"></button>
+          <button type="button" id="delete-btn" class="ghost" data-i18n="inspector.delete"></button>
+        </div>
+      </aside>
+
+      <footer class="composer chrome-focus">
+        <p id="form-reason" class="reason"></p>
+        <form id="talk">
+          <textarea id="input" rows="2" data-i18n-placeholder="composer.placeholder"></textarea>
+          <div class="row">
+            <button type="button" id="import-btn" class="ghost" data-i18n="action.import"></button>
+            <button type="button" id="clear-btn" class="ghost" data-i18n="action.clear"></button>
+            <button type="submit" class="primary" id="send" data-i18n="action.send"></button>
+          </div>
+        </form>
+      </footer>
+
+      <dialog id="settings">
+        <form method="dialog" id="settings-form">
+          <h2 data-i18n="settings.title"></h2>
+          <p data-i18n="settings.body"></p>
+          <label>
+            <span data-i18n="settings.source"></span>
+            <select id="provider"></select>
+          </label>
+          <p id="provider-hint" class="hint"></p>
+          <label>
+            <span data-i18n="settings.model"></span>
+            <input id="model" data-i18n-placeholder="settings.modelPh" />
+          </label>
+          <label>
+            <span data-i18n="settings.key"></span>
+            <input id="api-key" type="password" autocomplete="off" />
+          </label>
+          <label>
+            <span data-i18n="settings.base"></span>
+            <input id="base-url" data-i18n-placeholder="settings.basePh" />
+          </label>
+          <menu>
+            <button value="cancel" class="ghost" data-i18n="settings.close"></button>
+            <button value="save" class="primary" id="save-settings" data-i18n="settings.save"></button>
+          </menu>
+        </form>
+      </dialog>
+
+      <dialog id="importer">
+        <form method="dialog" id="import-form">
+          <h2 data-i18n="import.title"></h2>
+          <p data-i18n="import.body"></p>
+          <textarea id="transcript" rows="10" placeholder="User: …"></textarea>
+          <menu>
+            <button value="cancel" class="ghost" data-i18n="import.cancel"></button>
+            <button value="ok" class="primary" id="do-import" data-i18n="import.ok"></button>
+          </menu>
+        </form>
+      </dialog>
+    </div>
+
+    <footer id="ambient-dock" class="ambient-dock chrome-ambient">
+      <p id="ambient-hint" class="ambient-hint" data-i18n="ambient.hint"></p>
+      <form id="ambient-form" class="ambient-form">
+        <input id="ambient-input" type="text" autocomplete="off" data-i18n-placeholder="ambient.throwPh" />
+        <button class="primary" type="submit" data-i18n="ambient.throw"></button>
+      </form>
+    </footer>
+
+    <div id="peek" class="peek" hidden>
+      <div class="peek-sheet">
+        <p class="eyebrow" data-i18n="peek.kicker"></p>
+        <h2 id="peek-title"></h2>
+        <p id="peek-body"></p>
+        <textarea id="peek-note" rows="3" data-i18n-placeholder="peek.replyPh"></textarea>
+        <div class="peek-actions">
+          <button type="button" id="peek-reply" class="primary" data-i18n="peek.reply"></button>
+          <button type="button" id="peek-focus" class="ghost" data-i18n="peek.focus"></button>
+          <button type="button" id="peek-dismiss" class="ghost" data-i18n="peek.ignore"></button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orbit · 插件内置环境</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;1,500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="host">
+      <aside class="editor">
+        <header>
+          <em>插件宿主</em>
+          <span>Cursor / VS Code 侧栏就是这样嵌进来的</span>
+        </header>
+        <p class="blurb">
+          Orbit 不是另一个聊天窗。它是插件的<strong>内置环境</strong>：编辑器把选区或一段对话丢进来，环境自己选形式、交出碎片。
+        </p>
+        <label for="selection">当前选区 / 模型对话</label>
+        <textarea id="selection" rows="12">User: 我想做一块所有模型都能用的表达板
+Assistant: 别再把点子塞进气泡。先让模型选一种形式，把还没成形的交出来。
+User: Three.js 会不会只是形式的一种？
+Assistant: 是。立体只是舞台之一。星散、时序、并置都该在环境里。</textarea>
+        <div class="actions">
+          <button type="button" id="send-sel" class="primary">丢进表达板</button>
+          <button type="button" id="import-sel" class="ghost">当对话导入</button>
+          <button type="button" id="reset-env" class="ghost">清空环境</button>
+        </div>
+        <p class="hint">和扩展命令同一套协议：<code>orbit.utter</code> / <code>orbit.import</code></p>
+        <section class="events">
+          <header>环境回传</header>
+          <ol id="events"></ol>
+        </section>
+      </aside>
+      <section class="env">
+        <header>
+          <span>内置环境</span>
+          <a href="/">单独打开</a>
+        </header>
+        <iframe id="orbit" title="Orbit 环境" src="/?embed=1"></iframe>
+      </section>
+    </div>
+    <script type="module" src="/src/host.ts"></script>
+  </body>
+</html>

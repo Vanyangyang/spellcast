@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Orbit desktop permissions",
+  "windows": ["main", "bubble-*"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "core:window:allow-create",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-position",
+    "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-available-monitors",
+    "core:window:allow-current-monitor",
+    "core:window:allow-primary-monitor",
+    "core:window:allow-outer-position",
+    "core:window:allow-scale-factor",
+    "core:window:allow-set-skip-taskbar",
+    "core:event:allow-listen",
+    "core:event:allow-emit"
+  ]
+}
