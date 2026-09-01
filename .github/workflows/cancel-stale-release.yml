@@ -1,0 +1,20 @@
+# One-shot: stop the Orbit-branded v0.1.0 run so it cannot publish.
+name: cancel-stale-release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  cancel:
+    if: contains(github.event.head_commit.message, 'Brand the desktop app as Spellcast')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel Orbit-branded release run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh run cancel 33540244282 --repo "$GITHUB_REPOSITORY" || true
+          gh run view 33540244282 --repo "$GITHUB_REPOSITORY" --json status,conclusion

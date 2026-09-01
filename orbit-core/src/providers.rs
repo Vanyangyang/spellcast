@@ -31,7 +31,7 @@ pub async fn complete(
 
     if meta.needs_key && req.api_key.as_deref().unwrap_or("").trim().is_empty() {
         return Err(OrbitError::user(format!(
-            "{} 需要 API Key。也可以先用 Orbit 本地向导。",
+            "{} 需要 API Key。也可以先用 Spellcast 本地向导。",
             meta.label
         )));
     }
@@ -145,7 +145,7 @@ async fn call_openai(
     if provider_id == "openrouter" {
         req = req
             .header("HTTP-Referer", "https://orbit.local")
-            .header("X-Title", "Orbit Board");
+            .header("X-Title", "Spellcast");
     }
     let value = send(req).await?;
     first_text(&value, &["choices", "0", "message", "content"])

@@ -27,7 +27,7 @@ function boardHtml(webview, url, mode) {
     </style>
   </head>
   <body>
-    <iframe id="orbit" src="${src}" title="Orbit 头脑风暴板"></iframe>
+    <iframe id="orbit" src="${src}" title="Spellcast 头脑风暴板"></iframe>
     <script>
       const vscode = acquireVsCodeApi();
       const frame = document.getElementById("orbit");
@@ -66,7 +66,7 @@ function launcherHtml(webview) {
   </head>
   <body>
     <main>
-      <em>Orbit</em>
+      <em>Spellcast</em>
       <p>插件只是入口。展开之后才是头脑风暴板——独立、可拖、可改。</p>
       <button class="primary" id="expand">展开头脑风暴板</button>
       <button class="ghost" id="scatter">把选区丢上板</button>

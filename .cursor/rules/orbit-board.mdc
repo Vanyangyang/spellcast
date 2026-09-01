@@ -4,4 +4,4 @@ description: 头脑风暴板怎么启动
 
 一步启动：在仓库根目录 `npm start`，打开 http://127.0.0.1:47193。
 
-插件：`./scripts/install-orbit-plugin.sh`，再执行 `Orbit: 展开头脑风暴板`。不要让用户开两个终端。
+插件：`./scripts/install-orbit-plugin.sh`，再执行 `Spellcast: 展开头脑风暴板`。不要让用户开两个终端。

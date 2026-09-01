@@ -122,5 +122,5 @@ pub fn run() {
             close_bubbles
         ])
         .run(tauri::generate_context!())
-        .expect("Orbit failed to start");
+        .expect("Spellcast failed to start");
 }

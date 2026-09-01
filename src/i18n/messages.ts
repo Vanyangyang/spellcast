@@ -9,7 +9,7 @@ export const LOCALES: { id: Locale; native: string }[] = [
 export type MessageKey = keyof typeof zhCN;
 
 export const zhCN = {
-  "doc.title": "Orbit · 头脑风暴板",
+  "doc.title": "Spellcast · 头脑风暴板",
   "brand.board": "头脑风暴板",
   "empty.eyebrow": "头脑风暴板",
   "empty.title": "这是一块你自己操作的板。",
@@ -82,7 +82,7 @@ export const zhCN = {
   "fragment.newTitle": "新碎片",
   "fragment.newBody": "点右边改字，或拖到它该在的位置。",
   "focus.prompt": "把这个再拆细一点，碎一点也没关系。",
-  "provider.orbit": "Orbit 本地向导",
+  "provider.orbit": "Spellcast 本地向导",
   "provider.openai": "OpenAI",
   "provider.anthropic": "Anthropic Claude",
   "provider.gemini": "Google Gemini",
@@ -103,7 +103,7 @@ export const zhCN = {
 } as const;
 
 export const en: Record<MessageKey, string> = {
-  "doc.title": "Orbit · Brainstorm board",
+  "doc.title": "Spellcast · Brainstorm board",
   "brand.board": "Brainstorm board",
   "empty.eyebrow": "Brainstorm board",
   "empty.title": "This board is yours to operate.",
@@ -176,7 +176,7 @@ export const en: Record<MessageKey, string> = {
   "fragment.newTitle": "New scrap",
   "fragment.newBody": "Edit it on the right, or drag it where it belongs.",
   "focus.prompt": "Break this down further. Half-formed is fine.",
-  "provider.orbit": "Orbit local guide",
+  "provider.orbit": "Spellcast local guide",
   "provider.openai": "OpenAI",
   "provider.anthropic": "Anthropic Claude",
   "provider.gemini": "Google Gemini",
@@ -197,7 +197,7 @@ export const en: Record<MessageKey, string> = {
 };
 
 export const ja: Record<MessageKey, string> = {
-  "doc.title": "Orbit · ブレインストーム板",
+  "doc.title": "Spellcast · ブレインストーム板",
   "brand.board": "ブレインストーム板",
   "empty.eyebrow": "ブレインストーム板",
   "empty.title": "操作するのは、この板です。",
@@ -270,7 +270,7 @@ export const ja: Record<MessageKey, string> = {
   "fragment.newTitle": "新しい切れ端",
   "fragment.newBody": "右で直すか、あるべき場所へ動かす。",
   "focus.prompt": "もっと細かく割ってよい。未完成で構わない。",
-  "provider.orbit": "Orbit ローカル案内",
+  "provider.orbit": "Spellcast ローカル案内",
   "provider.openai": "OpenAI",
   "provider.anthropic": "Anthropic Claude",
   "provider.gemini": "Google Gemini",

@@ -1,6 +1,6 @@
 {
   "name": "orbit-board",
-  "displayName": "Orbit 头脑风暴板",
+  "displayName": "Spellcast 头脑风暴板",
   "description": "Agent 可安装。侧栏是入口，展开后是独立可操作的头脑风暴板。",
   "version": "0.1.0",
   "publisher": "orbit",
@@ -15,7 +15,7 @@
       "activitybar": [
         {
           "id": "orbit",
-          "title": "Orbit",
+          "title": "Spellcast",
           "icon": "media/orbit.svg"
         }
       ]
@@ -32,23 +32,23 @@
     "commands": [
       {
         "command": "orbit.expand",
-        "title": "Orbit: 展开头脑风暴板"
+        "title": "Spellcast: 展开头脑风暴板"
       },
       {
         "command": "orbit.scatter",
-        "title": "Orbit: 把选区丢上板"
+        "title": "Spellcast: 把选区丢上板"
       },
       {
         "command": "orbit.importFile",
-        "title": "Orbit: 把当前文件当对话导入"
+        "title": "Spellcast: 把当前文件当对话导入"
       },
       {
         "command": "orbit.openExternal",
-        "title": "Orbit: 在浏览器打开整块板"
+        "title": "Spellcast: 在浏览器打开整块板"
       }
     ],
     "configuration": {
-      "title": "Orbit",
+      "title": "Spellcast",
       "properties": {
         "orbit.environmentUrl": {
           "type": "string",

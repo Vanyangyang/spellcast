@@ -15,7 +15,7 @@ function tryCli(bin) {
 }
 
 if (tryCli("cursor") || tryCli("code")) {
-  console.log("已安装 Orbit 头脑风暴板。命令面板执行：Orbit: 展开头脑风暴板");
+  console.log("已安装 Spellcast 头脑风暴板。命令面板执行：Spellcast: 展开头脑风暴板");
   process.exit(0);
 }
 
@@ -24,4 +24,4 @@ const dest = join(home, ".cursor", "extensions", "orbit-board");
 mkdirSync(dirname(dest), { recursive: true });
 if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
 cpSync(ext, dest, { recursive: true });
-console.log(`已拷到 ${dest}。先在仓库根目录 npm start，重载窗口后执行：Orbit: 展开头脑风暴板`);
+console.log(`已拷到 ${dest}。先在仓库根目录 npm start，重载窗口后执行：Spellcast: 展开头脑风暴板`);

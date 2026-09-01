@@ -43,7 +43,7 @@ if (!(await up("http://127.0.0.1:47194/api/health"))) {
 
 console.log("");
 console.log("  头脑风暴板  →  http://127.0.0.1:47193  （浏览器预览，不会往系统桌面抛泡）");
-console.log("  桌面抛出     →  npm run desktop        （打开 Orbit 窗口，一颗泡一扇透明小窗）");
+console.log("  桌面抛出     →  npm run desktop        （打开 Spellcast 窗口，一颗泡一扇透明小窗）");
 console.log("");
 
 const stop = () => {

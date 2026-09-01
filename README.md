@@ -1,13 +1,13 @@
-# Orbit 头脑风暴板
+# Spellcast 头脑风暴板
 
 桌面头脑风暴板。普通使用只需要下载安装包，**不需要** Node、Rust 或 Visual Studio。
 
 ## 安装
 
 1. 打开 [Releases](https://github.com/Vanyangyang/spellcast/releases/latest)。
-2. 下载 Windows 安装包（`Orbit_*_x64-setup.exe`，NSIS）。
+2. 下载 Windows 安装包（`Spellcast_*_x64-setup.exe`，NSIS）。
 3. 运行安装包。构建未签名，SmartScreen 可能提示警告：选 **更多信息** → **仍要运行**。
-4. 从开始菜单打开 **Orbit**。
+4. 从开始菜单打开 **Spellcast**。
 
 同一页如果附带 `.dmg`，Mac 也可以装。
 
@@ -56,4 +56,4 @@ npm start
 npm run plugin
 ```
 
-命令面板 → **Orbit: 展开头脑风暴板**。
+命令面板 → **Spellcast: 展开头脑风暴板**。
