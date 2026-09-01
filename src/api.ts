@@ -8,8 +8,6 @@ import type {
   FormInfo,
   FragmentWeight,
   NodeKind,
-  ProviderInfo,
-  Settings,
   StageForm,
   Surface,
 } from "./types";
@@ -40,15 +38,6 @@ export async function fetchBoard(): Promise<BoardSnapshot> {
   return read(await fetch(`${API}/api/board`));
 }
 
-export async function fetchProviders(): Promise<ProviderInfo[]> {
-  if (inTauri()) {
-    const data = await invoke<{ providers: ProviderInfo[] }>("list_providers");
-    return data.providers;
-  }
-  const data = await read<{ providers: ProviderInfo[] }>(await fetch(`${API}/api/providers`));
-  return data.providers;
-}
-
 export async function fetchForms(): Promise<FormInfo[]> {
   if (inTauri()) {
     const data = await invoke<{ forms: FormInfo[] }>("list_forms");
@@ -60,17 +49,16 @@ export async function fetchForms(): Promise<FormInfo[]> {
 
 export async function sendChat(
   messages: ChatMessage[],
-  settings: Settings,
   focus?: string | null,
   surface: Surface = "focus",
   screenCount = 1,
 ): Promise<ChatResponse> {
   const req = {
     messages,
-    provider: settings.provider,
-    model: settings.model || null,
-    api_key: settings.apiKey || null,
-    base_url: settings.baseUrl || null,
+    provider: "preview",
+    model: null,
+    api_key: null,
+    base_url: null,
     focus_node_id: focus || null,
     locale: currentLocale(),
     surface,
@@ -149,22 +137,4 @@ export async function importTranscript(transcript: string): Promise<BoardSnapsho
       body: JSON.stringify({ transcript }),
     }),
   );
-}
-
-export function loadSettings(): Settings {
-  try {
-    const raw = localStorage.getItem("orbit.settings");
-    if (raw) return { ...emptySettings(), ...JSON.parse(raw) };
-  } catch {
-    /* ignore */
-  }
-  return emptySettings();
-}
-
-export function saveSettings(settings: Settings) {
-  localStorage.setItem("orbit.settings", JSON.stringify(settings));
-}
-
-function emptySettings(): Settings {
-  return { provider: "orbit", model: "", apiKey: "", baseUrl: "" };
 }

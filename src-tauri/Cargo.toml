@@ -2,10 +2,10 @@
 
 [package]
 name = "orbit"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
-description = "Orbit desktop shell — Windows and macOS"
+description = "Spellcast desktop shell — Windows and macOS"
 rust-version = "1.83"
 
 [lib]

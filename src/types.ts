@@ -67,27 +67,10 @@ export type ChatResponse = {
   model: string;
 };
 
-export type ProviderInfo = {
-  id: string;
-  label: string;
-  kind: string;
-  default_model: string;
-  default_base_url: string;
-  needs_key: boolean;
-  hint: string;
-};
-
 export type FormInfo = {
   id: StageForm;
   label: string;
   blurb: string;
-};
-
-export type Settings = {
-  provider: string;
-  model: string;
-  apiKey: string;
-  baseUrl: string;
 };
 
 export function kindLabel(kind: NodeKind): string {
