@@ -53,14 +53,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: v__VERSION__
-          releaseName: Orbit v__VERSION__
+          releaseName: Spellcast v__VERSION__
           releaseBody: |
             Download an installer from the assets below. You do not need Node, Rust, or Visual Studio.
 
-            **Windows:** `Orbit_*_x64-setup.exe` (NSIS). Run it, then open **Orbit** from the Start menu.
+            **Windows:** `Spellcast_*_x64-setup.exe` (NSIS). Run it, then open **Spellcast** from the Start menu.
             This build is unsigned, so SmartScreen may warn — More info → Run anyway.
 
-            **macOS:** if a `.dmg` is attached, open it and drag Orbit into Applications.
+            **macOS:** if a `.dmg` is attached, open it and drag Spellcast into Applications.
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: false

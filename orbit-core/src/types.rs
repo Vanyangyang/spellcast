@@ -534,7 +534,7 @@ pub fn catalog() -> Vec<ProviderInfo> {
     vec![
         ProviderInfo {
             id: "orbit".into(),
-            label: "Orbit 本地向导".into(),
+            label: "Spellcast 本地向导".into(),
             kind: "local".into(),
             default_model: "orbit-local".into(),
             default_base_url: String::new(),

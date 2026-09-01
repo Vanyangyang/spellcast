@@ -32,7 +32,7 @@ pub struct BubbleFlight {
 pub fn list_screens(app: &AppHandle) -> Result<Vec<DesktopScreen>, String> {
     let win = app
         .get_webview_window("main")
-        .ok_or_else(|| "Orbit 主窗口还没起来。".to_string())?;
+        .ok_or_else(|| "Spellcast 主窗口还没起来。".to_string())?;
     let monitors = win.available_monitors().map_err(|e| e.to_string())?;
     if monitors.is_empty() {
         return Err("没有读到显示器。".into());
@@ -132,7 +132,7 @@ pub fn spawn_bubble(app: &AppHandle, item: ThrownBubble) -> Result<(), String> {
     };
 
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("bubble.html".into()))
-        .title("Orbit")
+        .title("Spellcast")
         .inner_size(size, size)
         .position(x, start_y)
         .decorations(false)
