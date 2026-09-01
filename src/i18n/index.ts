@@ -67,13 +67,3 @@ export function applyDom(root: ParentNode = document) {
     if (key) el.setAttribute("aria-label", t(key));
   });
 }
-
-export function providerLabel(id: string, fallback: string): string {
-  const key = `provider.${id}` as MessageKey;
-  return key in catalogs.en ? t(key) : fallback;
-}
-
-export function providerHint(id: string, fallback: string): string {
-  const key = `providerHint.${id}` as MessageKey;
-  return key in catalogs.en ? t(key) : fallback;
-}

@@ -201,7 +201,7 @@ impl Session {
     pub fn import_transcript(&mut self, transcript: &str) -> Result<BoardSnapshot, OrbitError> {
         let text = transcript.trim();
         if text.is_empty() {
-            return Err(OrbitError::user("把任何模型的对话贴进来。"));
+            return Err(OrbitError::user("把别处已经在进行的对话贴进来。"));
         }
         let proposals = harvest_scraps(text);
         if proposals.is_empty() {
@@ -212,7 +212,7 @@ impl Session {
         self.board.nodes.extend(nodes);
         self.board.edges.extend(edges);
         self.board.form = form;
-        self.board.form_reason = "从已有对话里拣出碎点子，不再让它们埋在气泡里。".into();
+        self.board.form_reason = "从别处已经在进行的对话里拣出碎点子，摊到专注板上。".into();
         if self.board.topic.is_empty() {
             self.board.topic = crate::layout::clip(text, 24);
         }
@@ -375,9 +375,9 @@ mod tests {
             .chat(ChatRequest {
                 messages: vec![ChatMessage {
                     role: "user".into(),
-                    content: "做一块所有模型都能用的表达板".into(),
+                    content: "做一块用空间碎片呈现的专注板".into(),
                 }],
-                provider: "orbit".into(),
+                provider: "preview".into(),
                 ..empty_req()
             })
             .await
@@ -391,7 +391,7 @@ mod tests {
         let mut session = Session::default();
         let node = session.add_node(NodeDraft {
             title: "自己放下的".into(),
-            body: "不经过模型。".into(),
+            body: "自己放下。".into(),
             x: Some(3.0),
             z: Some(-2.0),
             ..Default::default()
@@ -416,7 +416,7 @@ mod tests {
     fn empty_req() -> ChatRequest {
         ChatRequest {
             messages: vec![],
-            provider: "orbit".into(),
+            provider: "preview".into(),
             model: None,
             api_key: None,
             base_url: None,
@@ -434,9 +434,9 @@ mod tests {
             .chat(ChatRequest {
                 messages: vec![ChatMessage {
                     role: "user".into(),
-                    content: "做一块所有模型都能用的表达板".into(),
+                    content: "做一块用空间碎片呈现的专注板".into(),
                 }],
-                provider: "orbit".into(),
+                provider: "preview".into(),
                 surface: "ambient".into(),
                 ..empty_req()
             })

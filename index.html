@@ -30,7 +30,8 @@
       <header class="top">
         <div class="brand">
           <em>Spellcast</em>
-          <span data-i18n="brand.board"></span>
+          <span class="chrome-ambient" data-i18n="brand.ambient"></span>
+          <span class="chrome-focus" data-i18n="brand.board"></span>
         </div>
         <p id="topic" class="topic chrome-focus"></p>
         <nav id="forms" class="forms chrome-focus" data-i18n-aria="forms.aria"></nav>
@@ -41,7 +42,6 @@
         <button type="button" id="mode-focus" class="primary chrome-ambient" data-i18n="mode.focus"></button>
         <button type="button" id="mode-desktop" class="ghost chrome-focus" data-i18n="mode.desktop"></button>
         <button type="button" id="add-btn" class="ghost chrome-focus" data-i18n="action.add"></button>
-        <button type="button" id="settings-btn" class="ghost" data-i18n="action.models"></button>
       </header>
 
       <aside id="whisper" class="whisper chrome-focus" data-i18n-aria="whisper.title">
@@ -68,6 +68,7 @@
 
       <footer class="composer chrome-focus">
         <p id="form-reason" class="reason"></p>
+        <p class="hint" data-i18n="composer.hint"></p>
         <form id="talk">
           <textarea id="input" rows="2" data-i18n-placeholder="composer.placeholder"></textarea>
           <div class="row">
@@ -77,34 +78,6 @@
           </div>
         </form>
       </footer>
-
-      <dialog id="settings">
-        <form method="dialog" id="settings-form">
-          <h2 data-i18n="settings.title"></h2>
-          <p data-i18n="settings.body"></p>
-          <label>
-            <span data-i18n="settings.source"></span>
-            <select id="provider"></select>
-          </label>
-          <p id="provider-hint" class="hint"></p>
-          <label>
-            <span data-i18n="settings.model"></span>
-            <input id="model" data-i18n-placeholder="settings.modelPh" />
-          </label>
-          <label>
-            <span data-i18n="settings.key"></span>
-            <input id="api-key" type="password" autocomplete="off" />
-          </label>
-          <label>
-            <span data-i18n="settings.base"></span>
-            <input id="base-url" data-i18n-placeholder="settings.basePh" />
-          </label>
-          <menu>
-            <button value="cancel" class="ghost" data-i18n="settings.close"></button>
-            <button value="save" class="primary" id="save-settings" data-i18n="settings.save"></button>
-          </menu>
-        </form>
-      </dialog>
 
       <dialog id="importer">
         <form method="dialog" id="import-form">
@@ -120,6 +93,7 @@
     </div>
 
     <footer id="ambient-dock" class="ambient-dock chrome-ambient">
+      <p class="ambient-kicker" data-i18n="ambient.kicker"></p>
       <p id="ambient-hint" class="ambient-hint" data-i18n="ambient.hint"></p>
       <form id="ambient-form" class="ambient-form">
         <input id="ambient-input" type="text" autocomplete="off" data-i18n-placeholder="ambient.throwPh" />

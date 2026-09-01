@@ -208,7 +208,7 @@ pub struct ChatRequest {
 }
 
 fn default_provider() -> String {
-    "orbit".into()
+    "preview".into()
 }
 
 fn default_locale() -> String {
@@ -487,10 +487,8 @@ pub struct NodePatch {
 pub enum OrbitError {
     #[error("{0}")]
     User(String),
-    #[error("模型请求失败：{0}")]
+    #[error("预览失败：{0}")]
     Provider(String),
-    #[error(transparent)]
-    Http(#[from] reqwest::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
@@ -531,89 +529,15 @@ pub fn forms() -> Vec<FormInfo> {
 }
 
 pub fn catalog() -> Vec<ProviderInfo> {
-    vec![
-        ProviderInfo {
-            id: "orbit".into(),
-            label: "Spellcast 本地向导".into(),
-            kind: "local".into(),
-            default_model: "orbit-local".into(),
-            default_base_url: String::new(),
-            needs_key: false,
-            hint: "不需要密钥。立刻选一种形式，把碎点子交到板上。".into(),
-        },
-        ProviderInfo {
-            id: "openai".into(),
-            label: "OpenAI".into(),
-            kind: "openai".into(),
-            default_model: "gpt-4.1-mini".into(),
-            default_base_url: "https://api.openai.com/v1".into(),
-            needs_key: true,
-            hint: "填写 OpenAI API Key。".into(),
-        },
-        ProviderInfo {
-            id: "anthropic".into(),
-            label: "Anthropic Claude".into(),
-            kind: "anthropic".into(),
-            default_model: "claude-sonnet-4-5".into(),
-            default_base_url: "https://api.anthropic.com".into(),
-            needs_key: true,
-            hint: "填写 Anthropic API Key。".into(),
-        },
-        ProviderInfo {
-            id: "gemini".into(),
-            label: "Google Gemini".into(),
-            kind: "gemini".into(),
-            default_model: "gemini-2.5-flash".into(),
-            default_base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
-            needs_key: true,
-            hint: "填写 Google AI Studio 密钥。".into(),
-        },
-        ProviderInfo {
-            id: "openrouter".into(),
-            label: "OpenRouter".into(),
-            kind: "openai".into(),
-            default_model: "anthropic/claude-sonnet-4.5".into(),
-            default_base_url: "https://openrouter.ai/api/v1".into(),
-            needs_key: true,
-            hint: "一把钥匙接多家模型。".into(),
-        },
-        ProviderInfo {
-            id: "deepseek".into(),
-            label: "DeepSeek".into(),
-            kind: "openai".into(),
-            default_model: "deepseek-chat".into(),
-            default_base_url: "https://api.deepseek.com/v1".into(),
-            needs_key: true,
-            hint: "填写 DeepSeek API Key。".into(),
-        },
-        ProviderInfo {
-            id: "groq".into(),
-            label: "Groq".into(),
-            kind: "openai".into(),
-            default_model: "llama-3.3-70b-versatile".into(),
-            default_base_url: "https://api.groq.com/openai/v1".into(),
-            needs_key: true,
-            hint: "填写 Groq API Key。".into(),
-        },
-        ProviderInfo {
-            id: "ollama".into(),
-            label: "Ollama 本地".into(),
-            kind: "openai".into(),
-            default_model: "llama3.1".into(),
-            default_base_url: "http://127.0.0.1:11434/v1".into(),
-            needs_key: false,
-            hint: "本机 Ollama。模型名填你已经 pull 的名字。".into(),
-        },
-        ProviderInfo {
-            id: "custom".into(),
-            label: "自定义 OpenAI 兼容".into(),
-            kind: "openai".into(),
-            default_model: "gpt-4o-mini".into(),
-            default_base_url: "http://127.0.0.1:1234/v1".into(),
-            needs_key: false,
-            hint: "LM Studio、vLLM、Together、Fireworks 等兼容接口。".into(),
-        },
-    ]
+    vec![ProviderInfo {
+        id: "preview".into(),
+        label: "本地预览".into(),
+        kind: "local".into(),
+        default_model: "preview".into(),
+        default_base_url: String::new(),
+        needs_key: false,
+        hint: "只用来预览板和桌面气泡，不是一个模型。".into(),
+    }]
 }
 
 pub fn provider_meta(id: &str) -> Option<ProviderInfo> {
@@ -631,10 +555,10 @@ pub fn system_prompt(locale: &str, surface: &str, screen_count: u32) -> String {
     )
 }
 
-pub const AMBIENT_THROWS: &str = r#"你现在对着一块一直开着的桌面说话。
+pub const AMBIENT_THROWS: &str = r#"桌面气泡是旁路：用户正在别处跟 AI 干活，这里只偶尔冒一颗辅助泡。
 
-nodes 是真正的工作，全部进板。用户进专注模式才看见整块板。
-throws 才是偶尔冒出的气泡。绝不是把回复摊成泡。
+nodes 是真正的工作，全部进专注板。用户进专注才看见整块板。
+throws 才是偶尔冒出的辅助泡。绝不是把回复摊成泡。
 
 - 大多数时候 throws 为 []。只有值得打断桌面的 1～2 粒才抛。最多 3 粒。
 - 禁止把所有 nodes 写成 throws。禁止按节点列表自动生成气泡。
@@ -651,9 +575,9 @@ throws 才是偶尔冒出的气泡。绝不是把回复摊成泡。
 
 pub const FOCUS_THROWS: &str = r#"用户已经在专注板里。throws 必须是 []。把想法交成 nodes，不要往桌面抛泡。"#;
 
-pub const SYSTEM_PROMPT: &str = r#"你不是聊天机器人。你在一块「表达板」上发言。
+pub const SYSTEM_PROMPT: &str = r#"你不是聊天机器人。Spellcast 是呈现面：专注板用空间碎片说话，桌面气泡只是干活时的辅助旁路。
 
-日常模型把一切塞进文字气泡和回复模板，用户很难发散，你也很难把还没成形的点子交出去。这里反过来：
+不要把想法收成一堵字。反过来：
 
 1. 先选一种形式 form：constellation（碎点子摊开）| spatial（空间/关系）| timeline（先后因果）| stack（方案并置）
 2. 把想法交成 nodes。允许不完整、半句话、互相打架。那不是缺陷。
