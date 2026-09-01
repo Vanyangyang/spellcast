@@ -1,53 +1,15 @@
 # Orbit 头脑风暴板
 
-这是一个**本机项目**：代码在你自己的文件夹里跑。云端会话改不了你的 Windows 硬盘。
+桌面头脑风暴板。普通使用只需要下载安装包，**不需要** Node、Rust 或 Visual Studio。
 
-## 拿到本机（Cursor）
+## 安装
 
-1. 在这个 Agent / New Project 页点 **Create repo**，存成仓库。
-2. 打开 [cursor.com/codebase](https://cursor.com/codebase)，进刚建的仓库，点绿色 **Code**，复制 HTTPS 地址。
-3. 本机 PowerShell / 终端：
+1. 打开 [Releases](https://github.com/Vanyangyang/spellcast/releases/latest)。
+2. 下载 Windows 安装包（`Orbit_*_x64-setup.exe`，NSIS）。
+3. 运行安装包。构建未签名，SmartScreen 可能提示警告：选 **更多信息** → **仍要运行**。
+4. 从开始菜单打开 **Orbit**。
 
-```bash
-git clone <刚才复制的地址>
-cd orbit
-```
-
-4. Cursor → **File → Open Folder** → 选这个文件夹。之后在这个本地窗口里改，才是本地项目。
-
-不要打开别的仓库（例如 VESPERIX）。必须打开**这份 Orbit 源码**的根目录（里面有 `package.json`）。
-
-## 本机先装
-
-- [Node.js 22+](https://nodejs.org/)
-- [Rust](https://rustup.rs/)
-- Windows：系统自带 WebView2（Win10/11 一般都有）
-- Mac：用系统 WKWebView
-
-## 启动
-
-```bash
-npm install
-npm run desktop
-```
-
-会打开 **Orbit** 桌面窗口。桌面级气泡是一扇扇透明小窗，浏览器预览里**不会**抛出来。
-
-只要板的网页预览：
-
-```bash
-npm start
-```
-
-打开 [http://127.0.0.1:47193](http://127.0.0.1:47193)。
-
-装 Cursor / VS Code 侧栏：
-
-```bash
-npm run plugin
-```
-
-命令面板 → **Orbit: 展开头脑风暴板**。
+同一页如果附带 `.dmg`，Mac 也可以装。
 
 ## 两种用法
 
@@ -68,3 +30,30 @@ npm run plugin
 - 下面「摊开」：让模型选形式、交碎片
 
 界面语言跟系统走（中文 / English / 日本語），右上角可改。板上的碎片原文不改。
+
+## 开发者
+
+从源码跑桌面窗口（需要本机 Node 22+ 和 Rust；Windows 还需要 WebView2，Win10/11 一般都有）：
+
+```bash
+git clone https://github.com/Vanyangyang/spellcast.git
+cd spellcast
+npm install
+npm run desktop
+```
+
+只要板的网页预览：
+
+```bash
+npm start
+```
+
+打开 [http://127.0.0.1:47193](http://127.0.0.1:47193)。
+
+装 Cursor / VS Code 侧栏：
+
+```bash
+npm run plugin
+```
+
+命令面板 → **Orbit: 展开头脑风暴板**。

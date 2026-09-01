@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Windows NSIS is required. macOS DMG is best-effort on a separate runner.
+# fail-fast is false so a Mac failure cannot block the Windows installer.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: "--bundles nsis"
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin --bundles dmg"
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Orbit v__VERSION__
+          releaseBody: |
+            Download an installer from the assets below. You do not need Node, Rust, or Visual Studio.
+
+            **Windows:** `Orbit_*_x64-setup.exe` (NSIS). Run it, then open **Orbit** from the Start menu.
+            This build is unsigned, so SmartScreen may warn — More info → Run anyway.
+
+            **macOS:** if a `.dmg` is attached, open it and drag Orbit into Applications.
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: false
+          retryAttempts: 2
+          args: ${{ matrix.args }}
