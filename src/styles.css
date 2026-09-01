@@ -629,11 +629,26 @@ body.mode-focus #desktop {
   gap: 10px;
 }
 
+.ambient-kicker {
+  margin: 0 8px;
+  text-align: center;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 11px;
+  color: var(--mute);
+}
+
 .ambient-hint {
   margin: 0 8px;
   font-size: 13px;
   color: var(--mute);
   text-align: center;
+  line-height: 1.5;
+}
+
+.composer .hint {
+  margin: 0 4px 10px;
+  font-size: 12px;
   line-height: 1.5;
 }
 

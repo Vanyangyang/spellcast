@@ -32,7 +32,7 @@ pub fn brainstorm(
     let nodes = expand(topic, &seeds, angle, focus_title.is_some());
 
     let reply = if last_user.is_empty() {
-        "丢一句还没想完的话。我会选一种形式，把碎点子交到板上——文字只是旁白。".into()
+        "写一句还没想完的话。专注板会选一种形式，把碎点子摊开——文字只是旁白。".into()
     } else if focus_title.is_some() {
         format!(
             "围着「{}」继续拆。新的碎点子已经放下，先看哪一粒扎手。",
@@ -40,7 +40,7 @@ pub fn brainstorm(
         )
     } else {
         format!(
-            "「{}」先不收成文章。我选了{}，把还没成形的都摊出来。",
+            "「{}」先不收成文章。用{}摊开，还没成形的都放在板上。",
             crate::layout::clip(topic, 18),
             crate::types::StageForm::infer(topic).label()
         )
@@ -273,11 +273,11 @@ fn generic_en(topic: &str, last_user: &str, focused: bool, surface: &str, screen
     let form = crate::types::StageForm::infer(topic);
     let short = crate::layout::clip(topic, 18);
     let reply = if last_user.is_empty() {
-        "Say something unfinished. I will pick a form and put scraps on the board.".into()
+        "Say something unfinished. Focus will pick a form and spread scraps on the board.".into()
     } else if focused {
         format!("Staying with “{short}”. New scraps are down. Touch the one that stings.")
     } else {
-        format!("“{short}” is not an essay yet. I picked {}, and laid out what is still unformed.", form.as_str())
+        format!("“{short}” is not an essay yet. Spread in {} — what is still unformed stays on the board.", form.as_str())
     };
     let mut nodes = vec![
         node("The claim", &format!("Pin it in one sentence: {topic}"), "insight", "anchor"),
@@ -316,7 +316,7 @@ fn generic_ja(topic: &str, last_user: &str, focused: bool, surface: &str, screen
     let form = crate::types::StageForm::infer(topic);
     let short = crate::layout::clip(topic, 18);
     let reply = if last_user.is_empty() {
-        "言いかけの一文を置いてください。形式を選んで、切れ端を板に渡します。".into()
+        "言いかけの一文を置いてください。集中板が形式を選び、切れ端を広げます。".into()
     } else if focused {
         format!("「{short}」のまわりで割ります。新しい切れ端を置きました。")
     } else {
