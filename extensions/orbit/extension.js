@@ -27,7 +27,7 @@ function boardHtml(webview, url, mode) {
     </style>
   </head>
   <body>
-    <iframe id="orbit" src="${src}" title="Spellcast 头脑风暴板"></iframe>
+    <iframe id="orbit" src="${src}" title="Spellcast 专注板"></iframe>
     <script>
       const vscode = acquireVsCodeApi();
       const frame = document.getElementById("orbit");
@@ -67,8 +67,8 @@ function launcherHtml(webview) {
   <body>
     <main>
       <em>Spellcast</em>
-      <p>插件只是入口。展开之后才是头脑风暴板——独立、可拖、可改。</p>
-      <button class="primary" id="expand">展开头脑风暴板</button>
+      <p>插件只是入口。展开之后是专注板：空间碎片，不是聊天窗。</p>
+      <button class="primary" id="expand">展开专注板</button>
       <button class="ghost" id="scatter">把选区丢上板</button>
       <button class="ghost" id="window">在浏览器里打开整块板</button>
     </main>
@@ -102,7 +102,7 @@ function attachBoard(webview, mode) {
 function expandBoard() {
   const panel = vscode.window.createWebviewPanel(
     "orbit.board",
-    "头脑风暴板",
+    "专注板",
     { viewColumn: vscode.ViewColumn.One, preserveFocus: false },
     { enableScripts: true, retainContextWhenHidden: true },
   );

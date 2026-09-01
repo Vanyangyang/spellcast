@@ -4,12 +4,9 @@ import {
   deleteNode,
   fetchBoard,
   fetchForms,
-  fetchProviders,
   importTranscript as importTranscriptApi,
-  loadSettings,
   patchNode,
   resetBoard,
-  saveSettings,
   sendChat,
   setForm as setFormApi,
 } from "./api";
@@ -20,24 +17,13 @@ import { renderConstellation } from "./forms/constellation";
 import { mountSpatial } from "./forms/spatial";
 import { renderStack } from "./forms/stack";
 import { renderTimeline } from "./forms/timeline";
-import {
-  applyDom,
-  currentLocale,
-  LOCALES,
-  onLocale,
-  providerHint as hintForProvider,
-  providerLabel,
-  setLocale,
-  t,
-} from "./i18n";
+import { applyDom, currentLocale, LOCALES, onLocale, setLocale, t } from "./i18n";
 import type { Locale } from "./i18n";
 import type {
   BoardSnapshot,
   FormInfo,
   FragmentWeight,
   NodeKind,
-  ProviderInfo,
-  Settings,
   StageForm,
   Surface,
   ThrownBubble,
@@ -54,10 +40,7 @@ const logEl = document.querySelector<HTMLOListElement>("#log")!;
 const inspector = document.querySelector<HTMLElement>("#inspector")!;
 const input = document.querySelector<HTMLTextAreaElement>("#input")!;
 const talk = document.querySelector<HTMLFormElement>("#talk")!;
-const settingsDlg = document.querySelector<HTMLDialogElement>("#settings")!;
 const importerDlg = document.querySelector<HTMLDialogElement>("#importer")!;
-const providerSel = document.querySelector<HTMLSelectElement>("#provider")!;
-const providerHint = document.querySelector<HTMLElement>("#provider-hint")!;
 
 let board: BoardSnapshot = {
   topic: "",
@@ -68,8 +51,6 @@ let board: BoardSnapshot = {
   messages: [],
 };
 let selected: string | null = null;
-let settings: Settings = loadSettings();
-let providers: ProviderInfo[] = [];
 let forms: FormInfo[] = [];
 let spatialHandle: ReturnType<typeof mountSpatial> | null = null;
 let focusNode: string | null = null;
@@ -139,21 +120,10 @@ async function setMode(next: Surface, opts?: { persist?: boolean }) {
 
 async function boot() {
   try {
-    [board, providers, forms] = await Promise.all([fetchBoard(), fetchProviders(), fetchForms()]);
+    [board, forms] = await Promise.all([fetchBoard(), fetchForms()]);
   } catch (err) {
     reasonEl.textContent = err instanceof Error ? err.message : t("error.backend");
     forms = FORMS.map((id) => ({ id, label: formLabel(id), blurb: "" }));
-    providers = [
-      {
-        id: "orbit",
-        label: t("provider.orbit"),
-        kind: "local",
-        default_model: "orbit-local",
-        default_base_url: "",
-        needs_key: false,
-        hint: t("providerHint.orbit"),
-      },
-    ];
   }
   applyMode();
   try {
@@ -187,7 +157,6 @@ async function boot() {
   applyDom();
   fillKindWeight();
   paintForms();
-  paintProviders();
   paint();
   syncAmbientHint();
   document.querySelector("#mode-focus")?.addEventListener("click", () => void setMode("focus"));
@@ -196,7 +165,6 @@ async function boot() {
     applyDom();
     fillKindWeight();
     paintForms();
-    paintProviders();
     paint();
     syncAmbientHint();
   });
@@ -235,27 +203,6 @@ function paintForms() {
       }
     });
   });
-}
-
-function paintProviders() {
-  providerSel.innerHTML = providers
-    .map(
-      (p) =>
-        `<option value="${p.id}" ${p.id === settings.provider ? "selected" : ""}>${providerLabel(p.id, p.label)}</option>`,
-    )
-    .join("");
-  syncProviderFields();
-}
-
-function syncProviderFields() {
-  const meta = providers.find((p) => p.id === providerSel.value);
-  providerHint.textContent = meta ? hintForProvider(meta.id, meta.hint) : "";
-  const model = document.querySelector<HTMLInputElement>("#model")!;
-  const key = document.querySelector<HTMLInputElement>("#api-key")!;
-  const base = document.querySelector<HTMLInputElement>("#base-url")!;
-  if (!model.value) model.placeholder = meta?.default_model || t("settings.modelPh");
-  if (!base.value) base.placeholder = meta?.default_base_url || t("settings.basePh");
-  key.parentElement!.style.display = meta && !meta.needs_key ? "none" : "";
 }
 
 function paint() {
@@ -470,29 +417,6 @@ document.querySelector("#clear-btn")!.addEventListener("click", async () => {
   }
 });
 
-document.querySelector("#settings-btn")!.addEventListener("click", () => {
-  document.querySelector<HTMLInputElement>("#model")!.value = settings.model;
-  document.querySelector<HTMLInputElement>("#api-key")!.value = settings.apiKey;
-  document.querySelector<HTMLInputElement>("#base-url")!.value = settings.baseUrl;
-  providerSel.value = settings.provider;
-  syncProviderFields();
-  settingsDlg.showModal();
-});
-
-providerSel.addEventListener("change", syncProviderFields);
-
-document.querySelector("#save-settings")!.addEventListener("click", (event) => {
-  event.preventDefault();
-  settings = {
-    provider: providerSel.value,
-    model: document.querySelector<HTMLInputElement>("#model")!.value.trim(),
-    apiKey: document.querySelector<HTMLInputElement>("#api-key")!.value.trim(),
-    baseUrl: document.querySelector<HTMLInputElement>("#base-url")!.value.trim(),
-  };
-  saveSettings(settings);
-  settingsDlg.close();
-});
-
 document.querySelector("#import-btn")!.addEventListener("click", () => {
   importerDlg.showModal();
 });
@@ -528,7 +452,7 @@ async function converse(text: string) {
     } catch {
       /* keep last count */
     }
-    const res = await sendChat([{ role: "user", content: text }], settings, focusNode, mode, screenCount);
+    const res = await sendChat([{ role: "user", content: text }], focusNode, mode, screenCount);
     board = await fetchBoard();
     input.value = "";
     ambientInput.value = "";

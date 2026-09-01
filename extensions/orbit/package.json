@@ -1,8 +1,8 @@
 {
   "name": "orbit-board",
-  "displayName": "Spellcast 头脑风暴板",
-  "description": "Agent 可安装。侧栏是入口，展开后是独立可操作的头脑风暴板。",
-  "version": "0.1.0",
+  "displayName": "Spellcast 专注板",
+  "description": "侧栏是入口。展开后是专注板：空间碎片的呈现面，不是聊天窗。",
+  "version": "0.1.1",
   "publisher": "orbit",
   "engines": {
     "vscode": "^1.90.0"
@@ -25,14 +25,14 @@
         {
           "type": "webview",
           "id": "orbit.environment",
-          "name": "头脑风暴板"
+          "name": "专注板"
         }
       ]
     },
     "commands": [
       {
         "command": "orbit.expand",
-        "title": "Spellcast: 展开头脑风暴板"
+        "title": "Spellcast: 展开专注板"
       },
       {
         "command": "orbit.scatter",
@@ -53,7 +53,7 @@
         "orbit.environmentUrl": {
           "type": "string",
           "default": "http://127.0.0.1:47193",
-          "description": "头脑风暴板地址。本机先跑 npm run dev 与 cargo run -p orbit-server。"
+          "description": "专注板地址。本机先跑 npm start（47193）与后端（47194）。"
         }
       }
     }
