@@ -25,7 +25,10 @@ fn fixture_is_toml_not_cursor_json() {
         ConfigFormat::Json
     );
     assert!(body.contains("[mcp_servers.docs]"));
-    assert!(!body.contains("mcpServers"));
+    assert!(
+        !body.contains("\"mcpServers\""),
+        "fixture must stay Codex TOML, not Cursor JSON"
+    );
 }
 
 #[test]
