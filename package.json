@@ -1,7 +1,7 @@
 {
   "name": "spellcast",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "start": "node scripts/start.mjs",
@@ -11,7 +11,8 @@
     "preview": "vite preview --host 127.0.0.1 --port 47193",
     "desktop": "tauri dev",
     "app": "tauri dev",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:config-safety": "node scripts/check-config-safety.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",

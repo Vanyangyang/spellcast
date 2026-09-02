@@ -2,7 +2,7 @@
   "name": "orbit-board",
   "displayName": "Spellcast 专注板",
   "description": "侧栏是入口。展开后是专注板：空间碎片的呈现面，不是聊天窗。",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "orbit",
   "engines": {
     "vscode": "^1.90.0"

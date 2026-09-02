@@ -32,6 +32,7 @@ async fn main() {
         session: Mutex::new(Session::default()),
     });
 
+    // Board UI only. No /mcp — Spellcast is not an MCP server for Codex or Cursor.
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/providers", get(providers))
