@@ -1,0 +1,20 @@
+# Codex user config — TOML. Not Cursor MCP JSON.
+# Spellcast must never overwrite this file with mcpServers JSON.
+model = "gpt-5"
+model_reasoning_effort = "high"
+
+[projects."C:\\work\\spellcast"]
+trust_level = "trusted"
+
+[plugins]
+enabled = true
+
+[marketplaces.official]
+url = "https://example.invalid/marketplace"
+
+[hooks]
+notify = "echo done"
+
+[mcp_servers.docs]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem"]

@@ -20,6 +20,7 @@ if (tryCli("cursor") || tryCli("code")) {
 }
 
 const home = process.env.USERPROFILE || process.env.HOME || "";
+// Extension files only. Never write ~/.codex/** or Cursor mcp.json.
 const dest = join(home, ".cursor", "extensions", "orbit-board");
 mkdirSync(dirname(dest), { recursive: true });
 if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });

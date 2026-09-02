@@ -2,6 +2,8 @@
 
 Spellcast 不是聊天 App，也不是「自带模型」的客户端。它不接密钥，也不让别人的 agent 来调一个接口。
 
+它**不是** MCP server。不要把 Cursor 的 `mcpServers` JSON 写进 Codex 的 `~/.codex/config.toml`（那是 TOML，`[mcp_servers.name]` 表）。Spellcast 也不会去改那份文件。
+
 - **桌面气泡（ambient）**：你在别处跟 AI 干活时的辅助旁路。偶尔冒一颗透明小窗，最多三扇，一屏一颗。不是新对话。
 - **专注板（focus）**：真正的呈现面。模型该把想法摊成空间碎片，而不是一堵字。专注板不是又一个输入框。
 
@@ -63,3 +65,5 @@ npm run plugin
 ```
 
 命令面板 → **Spellcast: 展开专注板**。
+
+插件只装侧栏，不会注册 MCP，也不会写 `~/.codex/**`。

@@ -21,6 +21,7 @@ Spellcast 不是聊天 App，也不是 LLM 客户端，也不提供「让别的 
 - 一粒泡只落一块屏的工作区，不复制到所有屏，不骑在两屏接缝上。
 - 界面上不准出现「接到任意模型」、API Key、Base URL、`orbit-local`，也不准做成「把 agent 指到这个 HTTP/MCP」的引导。
 - 本地预览只用来试板和泡，不当成「模型」。
+- **不准写 `~/.codex/**`。** Codex `config.toml` 是 TOML。Cursor MCP 是 JSON `mcpServers`。两者不能互换。2026-09-02 有一次把 Cursor JSON 整文件盖进 `~/.codex/config.toml`，用户配置全没了。默认不要注册 MCP。`orbit-core::config_safety` 是唯一允许的写助手：拒 `.codex`、拒 TOML / 非 JSON、只允许 merge Cursor `mcp.json` 的一个 key。产品路径必须继续走 `register_spellcast_mcp` 的 disabled。
 
 ## 栈
 
@@ -53,11 +54,13 @@ npm run desktop
 - 不要为了「Preview 能看见」做成页内 CSS 球。
 - 不要做成接模型 / 填密钥 / 填 Base URL 的设置页。
 - 不要做成「这里是我们的 HTTP/MCP，把你的 agent 指过来」的产品。
+- 不要给 orbit-server 加 `/mcp`，不要把 Spellcast 写进 Codex 或 Cursor 的 MCP 配置。
 - 不要取消已经在跑的 v0.1.0 Release 构建。
 
 ## 测试
 
 ```powershell
 cargo test -p orbit-core
+node scripts/check-config-safety.mjs
 npx tsc --noEmit
 ```
