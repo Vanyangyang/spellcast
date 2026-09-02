@@ -1,5 +1,5 @@
 # Codex user config — TOML. Not Cursor MCP JSON.
-# Spellcast must never overwrite this file with mcpServers JSON.
+# Spellcast must never overwrite this file with Cursor MCP JSON.
 model = "gpt-5"
 model_reasoning_effort = "high"
 
