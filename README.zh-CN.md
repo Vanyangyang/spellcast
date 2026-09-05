@@ -44,6 +44,8 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 使用期间需要保持桌面应用运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。连接设置支持 Cursor、Codex、Windsurf、Claude Code 和通用 MCP 客户端；具体运行体验取决于宿主的工具与任务生命周期支持。
 
+版本页也提供 Apple Silicon 和 Intel macOS 构建，它们已通过 CI 打包；[当前原生交互验证仅覆盖 Windows](docs/releases/0.2.0.md)。
+
 ## 本地开发
 
 ```sh

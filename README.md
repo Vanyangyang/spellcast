@@ -44,6 +44,8 @@ Kept ideas and replies survive restart. Durable memory is separate: save only wh
 
 The desktop app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. Connection setup supports Cursor, Codex, Windsurf, Claude Code, and generic MCP clients; runtime behavior still depends on the host's tool and lifecycle support.
 
+Apple Silicon and Intel macOS builds are also available in the release. They passed CI packaging; [runtime verification is currently Windows-only](docs/releases/0.2.0.md).
+
 ## Develop locally
 
 ```sh
