@@ -7,6 +7,12 @@ on:
         description: Existing release tag to rebuild
         type: string
         required: true
+      target:
+        description: Platform to rebuild
+        type: choice
+        required: true
+        default: all
+        options: [all, windows, macos-arm64, macos-x64]
   push:
     tags:
       - "v*"
@@ -19,15 +25,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: windows-latest
-            args: --bundles nsis
-          - platform: macos-latest
-            args: --target aarch64-apple-darwin --bundles dmg
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin --bundles dmg
+        target: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.target != 'all') && format('["{0}"]', inputs.target) || '["windows","macos-arm64","macos-x64"]') }}
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ startsWith(matrix.target, 'macos') && 'macos-latest' || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,4 +54,4 @@ jobs:
           releaseName: Spellcast ${{ inputs.tag || github.ref_name }}
           generateReleaseNotes: true
           releaseDraft: true
-          args: ${{ matrix.args }}
+          args: ${{ matrix.target == 'macos-arm64' && '--target aarch64-apple-darwin --bundles dmg' || matrix.target == 'macos-x64' && '--target x86_64-apple-darwin --bundles dmg' || '--bundles nsis' }}
