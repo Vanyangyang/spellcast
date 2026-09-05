@@ -9,6 +9,9 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 47193,
     strictPort: true,
+    warmup: {
+      clientFiles: ["./src/main.ts", "./src/bubble.ts"],
+    },
   },
   preview: {
     host: "127.0.0.1",
@@ -20,7 +23,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(root, "index.html"),
-        host: resolve(root, "host.html"),
         bubble: resolve(root, "bubble.html"),
       },
     },

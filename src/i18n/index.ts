@@ -3,7 +3,7 @@ import { catalogs, LOCALES, type Locale, type MessageKey } from "./messages";
 export type { Locale, MessageKey };
 export { LOCALES };
 
-const STORAGE = "orbit.locale";
+const STORAGE = "spellcast.locale";
 
 function detect(): Locale {
   try {

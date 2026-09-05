@@ -34,7 +34,7 @@ if (!existsSync(join(root, "node_modules"))) {
 
 let api = null;
 if (!(await up("http://127.0.0.1:47194/api/health"))) {
-  api = run("cargo", ["run", "-p", "orbit-server"]);
+  api = run("cargo", ["run", "-p", "spellcast-server"]);
   for (let i = 0; i < 80; i++) {
     if (await up("http://127.0.0.1:47194/api/health")) break;
     await new Promise((r) => setTimeout(r, 250));
@@ -42,8 +42,8 @@ if (!(await up("http://127.0.0.1:47194/api/health"))) {
 }
 
 console.log("");
-console.log("  专注板      →  http://127.0.0.1:47193  （浏览器预览，不会往系统桌面抛泡）");
-console.log("  桌面气泡     →  npm run desktop        （打开 Spellcast 窗口，一颗泡一扇透明小窗）");
+console.log("  板的网页预览  →  http://127.0.0.1:47193");
+console.log("  真正的桌面    →  npm run desktop             （Spellcast 窗口 + 桌面泡）");
 console.log("");
 
 const stop = () => {

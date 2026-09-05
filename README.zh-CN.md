@@ -1,69 +1,71 @@
-<p align="center">
-  <img src="docs/assets/spellcast-hero.svg" alt="Spellcast：给 AI 一个发挥创造力的 Everything 板。" width="100%">
-</p>
-<p align="center"><strong>桌面上的旁念，板上展开的想法。</strong></p>
-<p align="center"><a href="README.md">English</a> · 简体中文 · <a href="https://github.com/Vanyangyang/spellcast/releases">下载发行版</a></p>
-
-想听听你的 Astra 对项目有什么吐槽？
-想让它提醒你那些忙着忙着就忘掉的事？
-想接住一次意料之外的灵光一闪？
-
-试试 **Spellcast**。
-
-让 Astra 的吐槽、提醒和奇思妙想，冒成你真实桌面上的气泡。喜欢哪个，就把它收进板里，接着展开。
-
-进入板模式后，Agent 可以摆开方案、画出关系、展开分镜、推演过程，用适合这个想法的形式回复你。
+# Spellcast
 
 **给 AI 一个发挥创造力的 Everything 板。**
 
-> Everything 板升级正在开发。现有 **v0.1.1** 安装包是较早的桌面预览；新的板上表达与实际演示会随下一版一起发布。
+想听听你的 Astra 对项目有什么吐槽？想让它帮你记起忙着忙着忘掉的事？想接住一次意料之外的灵光一闪？
 
-## 从一句旁念，走向一块可以继续创作的板
+试试 **Spellcast**。让这些念头冒成真实桌面上的气泡；喜欢哪个，就收进板里，用文字、对比、关系图和分镜继续展开。
 
-**冒出来。** 你继续做原来的事，值得留意的旁念以透明桌面气泡出现。可以忽略、拖动，或留下。
+[English](README.md) · 简体中文 · [下载 Windows 版](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0)
 
-**收进来。** 点亮星星，把气泡里的内容放进板，之后再回来。
+[![观看 Spellcast 61 秒演示](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)
 
-**展开它。** 进入板模式，Agent 用板上的内容和结构呈现回复。比较不同方向，理清关系，逐步推演一个想法。
+**[观看桌面演示](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)**：实际 Windows 应用操作，以设计一段雨声解谜为演示场景，展示从采纳想法到反馈更新的流程。
 
-**变成你的东西。** 你可以整理、改写和反馈。哪些只是创作中的材料，哪些需要明确记住，由你决定。
+## 一个念头，如何长成可以继续创作的东西
 
-## 两个空间，一条连续的体验
+1. **冒出来。** 值得留意的吐槽、提醒和创意岔路，以稀疏的桌面气泡出现。可以忽略、拖动或打开。
+2. **收进来。** 点亮星标，把内容放进板，同时保留它来自哪个任务。
+3. **展开它。** 请 Agent 继续发展这个想法。板成为完整回复的呈现面，由内容决定适合的表达形式。
+4. **变成你的。** 选方向、改内容、移动关系、补充约束，反馈回到负责这条想法的原任务。
 
-| 真实桌面上的气泡 | 主动进入的 Everything 板 |
+| 表达形式 | 可以怎样继续 |
 | --- | --- |
-| 质疑、提醒、联想和创意岔路 | 有结构、可继续展开的回复 |
-| 看一眼，也可以不理会 | 选择方向，比较与推演 |
-| 留下值得回来的想法 | 把想法变成可以继续做的东西 |
+| 文字 | 阅读完整说明，修改内容，针对一块追问 |
+| 方案对照 | 用相同标准比较方向，明确选中一个方案 |
+| 关系图 | 阅读带标签的连线，查看节点详情，拖动、平移与缩放 |
+| 分镜 | 按顺序探索动作、反馈和说明，也可以调整顺序 |
 
-Spellcast 在你的电脑上运行。Agent 留在你平时使用的客户端中，通过适配与这块舞台连接。Astra 很适合成为这里的创意伙伴；产品也面向其他兼容的客户端和模型。
+一条回复可以混合这些形式。Agent 能只更新其中一块；遇到版本冲突时会拒绝覆盖，保留草稿供继续处理。
 
-## 体验当前桌面预览
+## Agent 留在你原本使用的地方
 
-到 [Releases](https://github.com/Vanyangyang/spellcast/releases) 下载现有构建；每一版的说明会列出对应能力与可用平台。
+Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不需要填写模型 API Key。Agent 继续使用原来的宿主和模型。
 
-从源码开发：
+反馈会留在队列中，直到原任务读取并确认处理。**它不会自动唤醒已经停止的宿主任务。** 随软件分发的 Skill 会告诉 Agent 何时查看反馈、什么时候值得抛气泡，以及何时直接在板上回复。
 
-    git clone https://github.com/Vanyangyang/spellcast.git
-    cd spellcast
-    npm install
-    npm run desktop
+采纳的想法和板上回复可以跨重启保留。长期记忆是另一项明确操作：你决定记住什么，在 **记忆** 中查看、搜索和逐条遗忘。收藏气泡不会自动建立长期记忆。
 
-源码构建需要 Node.js 22+、Rust 和相应平台的 Tauri 构建环境。Windows 需要 Visual Studio C++ 构建工具及 Windows SDK。
+## 开始使用
 
-**npm start** 提供板的浏览器预览；真实桌面气泡需要运行桌面应用。
+1. 从 [Releases](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0) 下载并运行 **Spellcast 0.2.0 Windows x64**。
+2. 打开 **设置**，选中正在使用的宿主并查看 MCP 配置。支持的写入器只合并 Spellcast 条目，修改前备份原文件；其他客户端提供配置片段。
+3. 安装内置 **Skill**，重载宿主中的 Agent，再请它使用 Spellcast。
 
-## 下一版正在完成
+使用期间需要保持桌面应用运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。连接设置支持 Cursor、Codex、Windsurf、Claude Code 和通用 MCP 客户端；具体运行体验取决于宿主的工具与任务生命周期支持。
 
-- 混合内容、方案对照、有语义的关系图、分镜等板上回复。
-- 切换表达形式后仍跟随同一想法的上下文与反馈。
-- 明确、可查看的记忆，以及回到原 Agent 的反馈路径。
-- 从真实桌面气泡到 Everything 板的完整操作演示。
+## 本地开发
 
-表现形式可以有想象力；选择、修改和保存的行为应当清楚。
+```sh
+git clone https://github.com/Vanyangyang/spellcast.git
+cd spellcast
+npm ci
+npm run desktop
+```
+
+需要 Node.js 22+、仓库配置的 Rust 工具链及 Tauri 平台构建环境。Windows 需要 Visual Studio C++ 构建工具、Windows SDK 和 WebView2。
+
+`npm start` 打开板的浏览器预览；真实桌面气泡需要运行 `npm run desktop` 或已安装的应用。
+
+```sh
+npm run build
+cargo test --workspace
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+npm run tauri -- build --bundles nsis
+```
 
 ## Astra 如何参与
 
-Astra 正在帮助我们检查产品理解、追踪现有实现、研究适合 AI 的视觉表达，并把这套体验做成可以运行的产品。
+Astra 帮助检查产品理解，构建并整合气泡 → 板 → 反馈更新的流程，验证交互，并制作这段演示。关系图使用 [AntV X6](https://github.com/antvis/X6)，桌面外壳使用 [Tauri](https://github.com/tauri-apps/tauri)。
 
-正式演示会录制实际产品操作。当前预览与正在开发的能力在上文分别说明。
+[Agent 行为说明](skills/spellcast/SKILL.md) · [0.2.0 版本说明与验证记录](docs/releases/0.2.0.md) · [MIT 许可证](LICENSE)

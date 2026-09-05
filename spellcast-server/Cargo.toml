@@ -1,0 +1,13 @@
+[package]
+name = "spellcast-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless Spellcast bridge for the browser preview"
+
+[dependencies]
+spellcast-bridge = { path = "../spellcast-bridge" }
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "signal"] }
+axum = { version = "0.7.9", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

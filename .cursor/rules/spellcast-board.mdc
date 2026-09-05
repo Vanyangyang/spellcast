@@ -1,0 +1,9 @@
+---
+description: Spellcast 怎么启动与打开
+---
+
+启动桌面：仓库根目录 `npm run desktop`。
+
+只看板的网页预览：`npm start`，打开 http://127.0.0.1:47193。不要让用户开两个终端。
+
+Spellcast 桌面程序提供 `http://127.0.0.1:47194/mcp`。客户端配置只能通过桌面设置里的格式专属写入器合并；不要手写、覆盖或混用 Cursor JSON、Codex TOML 与 Windsurf JSON。编辑器扩展只负责打开板和显示本地状态。

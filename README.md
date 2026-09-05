@@ -1,68 +1,71 @@
-<p align="center">
-  <img src="docs/assets/spellcast-hero.svg" alt="Spellcast — a stage of its own. Desktop bubbles become ideas you can explore on an everything board." width="100%">
-</p>
+# Spellcast
 
-<p align="center"><strong>Desktop asides. An everything board. Room for your AI to be creative.</strong></p>
-<p align="center">English · <a href="README.zh-CN.md">简体中文</a> · <a href="https://github.com/Vanyangyang/spellcast/releases">Releases</a></p>
+**An everything board for AI.**
 
-What would Astra say about your project if it had a little room to speak?
+Want Astra to roast your project? Remember what you meant to come back to? Give you an idea you were not expecting?
 
-A useful objection. Something you meant to come back to. An idea you were not expecting.
+Spellcast gives those thoughts a place on your real desktop. Keep a bubble, bring it onto the board, and let your agent develop it with text, comparisons, relationships, and storyboards.
 
-**Spellcast gives those thoughts a place on your real desktop.** Keep a bubble and it becomes part of your board. Enter board mode and your agent can develop the idea using a form that fits: a comparison, a relationship, a sequence, or a whole arrangement of ideas.
+[English](README.md) · [简体中文](README.zh-CN.md) · [Download for Windows](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0)
 
-> The Everything board update is in development. Existing **v0.1.1** downloads are an earlier desktop preview; the new board expressions and demo will ship together in the next release.
+[![Watch the 61-second Spellcast demo](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)
+
+**[Watch the desktop demo](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)** — a real Windows app, a staged creative example, and a complete idea-to-feedback walkthrough.
 
 ## From a spark to something you can work with
 
-**1. Let a thought surface.**
-A transparent desktop bubble carries a worthwhile aside while you work. You can leave it alone, move it, or keep it.
+1. **A thought surfaces.** A sparse desktop bubble carries an objection, a reminder, or a creative detour. Leave it alone, drag it, or open it.
+2. **Keep the idea.** The star saves its words onto your board, with the originating task attached.
+3. **Give it room.** Ask the agent to develop it. The board becomes the reply surface, with a composition that fits the idea.
+4. **Make it yours.** Choose a direction, edit a block, move a relationship, or add a constraint. Your feedback returns to the task that owns it.
 
-**2. Keep the idea.**
-The star brings its words onto the board, ready to return to.
-
-**3. Give the idea room.**
-In board mode, the agent can use the board itself to present its reply. Explore a direction, compare alternatives, and continue from the part that interests you.
-
-**4. Make it yours.**
-Arrange and edit the material. Leave feedback where it belongs. Decide what should remain a working idea and what you explicitly want remembered.
-
-## Two places to think
-
-| On your desktop | On your board |
+| Expression | What you can do |
 | --- | --- |
-| A doubt, a reminder, a creative detour | A reply with structure and room to grow |
-| Small enough to leave alone | Focused enough to explore |
-| Keep the thoughts you want to return to | Shape the ideas you want to develop |
+| Text | Read complete explanations, edit them, and ask about a specific block |
+| Comparison | Inspect alternatives against the same criteria and choose one |
+| Relationship graph | Follow labeled connections, inspect nodes, drag, pan, and zoom |
+| Storyboard | Explore ordered steps, their actions and feedback, and reorder them |
 
-Spellcast runs on your computer. Your agent stays in the tool you use to work with it. Astra is a great creative partner for this experience; the stage is designed to work with compatible agents across clients and models.
+Replies can mix these forms. Agents can update one block without replacing everything else. Conflicting edits are rejected so your draft can be reconciled instead of silently overwritten.
 
-## Try the current desktop preview
+## Your agent stays where it already works
 
-Download an available build from [Releases](https://github.com/Vanyangyang/spellcast/releases). The release notes describe that build's capabilities and available operating systems.
+Spellcast is a local desktop app, connected through MCP. It does not run a model or require a model API key. Your agent continues to use its existing host and model.
 
-For development:
+Feedback remains queued until the originating task reads and acknowledges it. **An inactive host is not automatically awakened.** The bundled Skill teaches the agent when to check feedback, when a bubble is worth showing, and when to reply on the board.
 
-    git clone https://github.com/Vanyangyang/spellcast.git
-    cd spellcast
-    npm install
-    npm run desktop
+Kept ideas and replies survive restart. Durable memory is separate: save only what you choose, inspect it in **Memory**, search it, and forget individual entries. Keeping a bubble does not automatically create a memory.
 
-Building from source needs Node.js 22+, Rust, and your platform's Tauri prerequisites. On Windows, install the Visual Studio C++ build tools and Windows SDK.
+## Get started
 
-**npm start** opens a browser preview of the board; desktop bubbles require the desktop app.
+1. Download and run **Spellcast 0.2.0 for Windows x64** from [Releases](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0).
+2. Open **Settings**, choose your host, and review its MCP configuration. Supported writers merge only Spellcast's entry and back up the original file. Other hosts get a configuration snippet.
+3. Install the bundled **Skill**, reload your host's agent, and ask it to use Spellcast.
 
-## What we are building next
+The desktop app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. Connection setup supports Cursor, Codex, Windsurf, Claude Code, and generic MCP clients; runtime behavior still depends on the host's tool and lifecycle support.
 
-- Rich board replies: mixed content, aligned comparisons, meaningful relationships, and storyboards.
-- Context that stays with the idea as you switch expression or add feedback.
-- Explicit, inspectable memory and a dependable path back to the agent that owns the conversation.
-- A complete bubble-to-board demo recorded from the working product.
+## Develop locally
 
-The visual language can be playful. The behavior should stay clear: your words, selections, and edits remain yours.
+```sh
+git clone https://github.com/Vanyangyang/spellcast.git
+cd spellcast
+npm ci
+npm run desktop
+```
+
+Use Node.js 22+, the repository's Rust toolchain, and the platform's Tauri prerequisites. Windows builds require Visual Studio C++ build tools, Windows SDK, and WebView2.
+
+`npm start` opens a browser preview of the board. OS bubbles require `npm run desktop` or the installed app.
+
+```sh
+npm run build
+cargo test --workspace
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+npm run tauri -- build --bundles nsis
+```
 
 ## Built with Astra
 
-Astra is helping turn the original idea into a working product: reviewing the product assumptions, tracing the implementation, researching ways for AI to express ideas visually, and building the next experience.
+Astra helped challenge the product assumptions, build and integrate the bubble → board → feedback loop, test the interactions, and produce this demo. The graph canvas uses [AntV X6](https://github.com/antvis/X6); the desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
 
-The launch demo will show the actual interaction from desktop bubble to board. Until it is ready, the preview and the development direction are described separately here.
+[Agent behavior](skills/spellcast/SKILL.md) · [0.2.0 release notes and verification](docs/releases/0.2.0.md) · [MIT license](LICENSE)

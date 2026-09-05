@@ -1,0 +1,53 @@
+{
+  "name": "spellcast-board",
+  "displayName": "Spellcast",
+  "description": "在 Cursor 旁打开 Spellcast 的桌面与头脑风暴板。",
+  "version": "0.2.0",
+  "publisher": "spellcast",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "spellcast",
+          "title": "Spellcast",
+          "icon": "media/spellcast.svg"
+        }
+      ]
+    },
+    "views": {
+      "spellcast": [
+        {
+          "type": "webview",
+          "id": "spellcast.environment",
+          "name": "Spellcast"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "spellcast.board",
+        "title": "Spellcast: 打开 Spellcast 的板"
+      },
+      {
+        "command": "spellcast.expand",
+        "title": "Spellcast: 展开头脑风暴板"
+      }
+    ],
+    "configuration": {
+      "title": "Spellcast",
+      "properties": {
+        "spellcast.bridgeUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:47194",
+          "description": "Spellcast 桌面程序的本机 API 地址。"
+        }
+      }
+    }
+  }
+}

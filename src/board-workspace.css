@@ -1,0 +1,47 @@
+/* The reply region and the loose-idea canvas share the same native board window. */
+:root { --board-top: 88px; --board-bottom: 172px; }
+.top { flex-wrap: wrap; background: linear-gradient(#07080cf5, #07080ce8); }
+.top .topic { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-views { display: flex; gap: 6px; align-items: center; }
+.board-views button { padding: 7px 12px; font: 500 12px var(--font); }
+.board-views [aria-pressed="true"] { color: var(--lilac); background: #d4b3ff18; border-color: #d4b3ff70; }
+#reply-stage { position: absolute; inset: var(--board-top) 22px var(--board-bottom); min-height: 0; z-index: 2; }
+#reply-stage[hidden], [hidden] { display: none !important; }
+body.view-replies #whisper, body.view-replies #inspector,
+body.view-replies #forms, body.view-replies #add-btn,
+body.view-replies #clear-btn, body.view-replies .top .topic,
+body.mode-focus #bubbles-pause { display: none !important; }
+.composer { z-index: 5; background: #14141df5; }
+.composer .reason { max-height: 3.5em; overflow: hidden; text-overflow: ellipsis; margin-top: 0; }
+.composer #recipient-label { color: var(--mute); font-size: 11px; }
+.composer #recipient { margin: 5px 0 10px; width: 100%; padding: 6px 9px; border: 1px solid var(--line); background: #171922; color: var(--paper); border-radius: 8px; font: 12px var(--font); }
+#feedback-count { color: var(--lilac); margin-left: 4px; font-size: 11px; }
+#feedback-open { white-space: nowrap; }
+#bubbles-pause[aria-pressed="true"] { color: #f0c36a; border-color: #f0c36a80; }
+.board-dialog { width: min(660px, calc(100vw - 40px)); max-height: calc(100vh - 60px); overflow: auto; border-radius: 20px; padding: 24px; background: #12131b; color: var(--paper); font: 14px/1.65 var(--font); }
+.board-dialog::backdrop { background: #040509b3; backdrop-filter: blur(7px); }
+.board-dialog > header, .saved-item > header { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+.board-dialog h2 { font: 500 26px/1.3 var(--font); margin: 0; }
+.board-dialog p { color: var(--mute); margin: 14px 0; }
+.board-dialog form { margin: 24px 0; display: grid; gap: 9px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+.board-dialog label { font-size: 12px; color: var(--mute); display: block; }
+.board-dialog input, .board-dialog textarea { width: 100%; box-sizing: border-box; color: var(--paper); background: #ffffff05; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; font: 14px/1.6 var(--font); }
+.board-dialog textarea { min-height: 105px; resize: vertical; }
+.board-dialog form button { justify-self: start; }
+.board-dialog .results-help { font-size: 11px; color: var(--mute); }
+.saved-item { margin-top: 14px; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: #ffffff03; overflow-wrap: anywhere; }
+.saved-item p { color: var(--paper); white-space: pre-wrap; margin: 8px 0; max-height: none; }
+.saved-item small { color: var(--mute); font-size: 11px; }
+.saved-item strong { font-weight: 500; }
+.saved-item button { flex-shrink: 0; }
+.saved-item > button { display: block; margin-top: 10px; }
+#app-notice { position: fixed; z-index: 40; bottom: 20px; left: 50%; transform: translateX(-50%); max-width: min(680px, calc(100vw - 40px)); padding: 14px 20px; border-radius: 12px; background: #2c2036; border: 1px solid #d4b3ff70; color: var(--paper); font: 14px/1.5 var(--font); overflow-wrap: anywhere; box-shadow: 0 8px 28px #0008; }
+@media (max-width: 850px) {
+  .top { padding: 12px; gap: 8px; }
+  .brand span { display: none; }
+  .top .topic { display: none; }
+  #reply-stage { left: 10px; right: 10px; }
+  .board-views { flex-basis: 100%; order: 2; }
+  .top #forms { order: 3; flex-wrap: wrap; }
+  .board-dialog { padding: 18px; width: calc(100vw - 24px); }
+}

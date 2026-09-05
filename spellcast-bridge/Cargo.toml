@@ -1,0 +1,21 @@
+[package]
+name = "spellcast-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared Spellcast state with a local REST adapter for the desktop and web preview"
+
+[dependencies]
+spellcast-core = { path = "../spellcast-core" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time", "net"] }
+axum = { version = "0.7.9", features = ["json", "query"] }
+tower-http = { version = "0.6.2", features = ["cors"] }
+tracing = "0.1"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+rmcp = { version = "3.2.0", features = ["server", "macros", "transport-streamable-http-server", "schemars"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

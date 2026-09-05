@@ -1,8 +1,8 @@
-/node_modules
+﻿/node_modules
 /dist
 /target
-/orbit-core/target
-/orbit-server/target
+/spellcast-core/target
+/spellcast-server/target
 /src-tauri/target
 /src-tauri/gen
 *.db
@@ -10,5 +10,8 @@
 .env.local
 .DS_Store
 data/session.json
+/data/*.sqlite3*
+/artifacts
+/.playwright-mcp
 .vscode
 .idea

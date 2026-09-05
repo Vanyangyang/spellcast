@@ -1,11 +1,11 @@
 {
   "name": "spellcast",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "start": "node scripts/start.mjs",
-    "plugin": "node scripts/install-orbit-plugin.mjs",
+    "plugin": "node scripts/install-spellcast-plugin.mjs",
     "dev": "vite --host 127.0.0.1 --port 47193",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 47193",
@@ -14,8 +14,10 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@antv/x6": "3.1.8",
     "@tauri-apps/api": "^2.2.0",
-    "three": "^0.170.0"
+    "three": "^0.170.0",
+    "tslib": "2.8.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.7",

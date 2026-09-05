@@ -17,12 +17,13 @@
       <div id="stage">
         <canvas id="spatial" hidden></canvas>
         <div id="plane"></div>
-        <div id="empty" class="empty">
+        <div id="reply-stage" hidden></div>
+        <div id="empty" class="empty chrome-focus">
           <p class="eyebrow" data-i18n="empty.eyebrow"></p>
           <h1 data-i18n="empty.title"></h1>
           <p data-i18n="empty.body"></p>
           <div class="empty-actions">
-            <button type="button" id="empty-add" class="primary" data-i18n="empty.add"></button>
+            <button type="button" id="empty-add" class="ghost" data-i18n="empty.add"></button>
           </div>
         </div>
       </div>
@@ -30,18 +31,26 @@
       <header class="top">
         <div class="brand">
           <em>Spellcast</em>
-          <span class="chrome-ambient" data-i18n="brand.ambient"></span>
-          <span class="chrome-focus" data-i18n="brand.board"></span>
+          <span data-i18n="brand.board"></span>
         </div>
         <p id="topic" class="topic chrome-focus"></p>
+        <nav class="board-views chrome-focus" aria-label="Board content">
+          <button type="button" id="view-replies" class="ghost" data-board-text="replies"></button>
+          <button type="button" id="view-ideas" class="ghost" data-board-text="ideas"></button>
+        </nav>
         <nav id="forms" class="forms chrome-focus" data-i18n-aria="forms.aria"></nav>
         <label class="locale-wrap">
           <span class="visually-hidden" data-i18n="action.language"></span>
           <select id="locale"></select>
         </label>
+        <button type="button" id="settings-open" class="ghost" data-i18n="settings.open"></button>
+        <button type="button" id="memory-open" class="ghost" data-board-text="memory"></button>
+        <button type="button" id="feedback-open" class="ghost"><span data-board-text="feedback"></span><span id="feedback-count" hidden></span></button>
+        <button type="button" id="bubbles-pause" class="ghost" aria-pressed="false" data-board-text="pause"></button>
         <button type="button" id="mode-focus" class="primary chrome-ambient" data-i18n="mode.focus"></button>
         <button type="button" id="mode-desktop" class="ghost chrome-focus" data-i18n="mode.desktop"></button>
         <button type="button" id="add-btn" class="ghost chrome-focus" data-i18n="action.add"></button>
+        <button type="button" id="clear-btn" class="ghost chrome-focus" data-i18n="action.clear"></button>
       </header>
 
       <aside id="whisper" class="whisper chrome-focus" data-i18n-aria="whisper.title">
@@ -54,56 +63,127 @@
 
       <aside id="inspector" class="inspector chrome-focus" hidden>
         <p class="eyebrow" data-i18n="inspector.title"></p>
-        <input id="ins-title" maxlength="22" />
+        <input id="ins-title" maxlength="160" />
         <textarea id="ins-body" rows="4"></textarea>
         <div class="ins-row">
           <select id="ins-kind"></select>
           <select id="ins-weight"></select>
         </div>
         <div class="ins-row">
-          <button type="button" id="focus-btn" class="primary" data-i18n="inspector.focus"></button>
+          <button type="button" id="ask-btn" class="primary" data-i18n="inspector.ask"></button>
           <button type="button" id="delete-btn" class="ghost" data-i18n="inspector.delete"></button>
         </div>
       </aside>
 
       <footer class="composer chrome-focus">
         <p id="form-reason" class="reason"></p>
-        <p class="hint" data-i18n="composer.hint"></p>
+        <label id="recipient-label" for="recipient" data-board-text="recipient" hidden></label>
+        <select id="recipient" hidden></select>
         <form id="talk">
           <textarea id="input" rows="2" data-i18n-placeholder="composer.placeholder"></textarea>
           <div class="row">
-            <button type="button" id="import-btn" class="ghost" data-i18n="action.import"></button>
-            <button type="button" id="clear-btn" class="ghost" data-i18n="action.clear"></button>
-            <button type="submit" class="primary" id="send" data-i18n="action.send"></button>
+            <button type="submit" class="primary" id="send" data-i18n="action.say"></button>
           </div>
         </form>
       </footer>
-
-      <dialog id="importer">
-        <form method="dialog" id="import-form">
-          <h2 data-i18n="import.title"></h2>
-          <p data-i18n="import.body"></p>
-          <textarea id="transcript" rows="10" placeholder="User: …"></textarea>
-          <menu>
-            <button value="cancel" class="ghost" data-i18n="import.cancel"></button>
-            <button value="ok" class="primary" id="do-import" data-i18n="import.ok"></button>
-          </menu>
-        </form>
-      </dialog>
     </div>
 
-    <footer id="ambient-dock" class="ambient-dock chrome-ambient">
-      <p class="ambient-kicker" data-i18n="ambient.kicker"></p>
-      <p id="ambient-hint" class="ambient-hint" data-i18n="ambient.hint"></p>
-      <form id="ambient-form" class="ambient-form">
-        <input id="ambient-input" type="text" autocomplete="off" data-i18n-placeholder="ambient.throwPh" />
-        <button class="primary" type="submit" data-i18n="ambient.throw"></button>
-      </form>
-    </footer>
+    <section id="agent" class="agent chrome-ambient">
+      <p class="eyebrow" data-i18n="agent.eyebrow"></p>
+      <h1 data-i18n="agent.title"></h1>
+      <p class="agent-body" data-i18n="agent.body"></p>
+
+      <div class="agent-status">
+        <span id="agent-dot" class="agent-dot"></span>
+        <span id="agent-seen" data-i18n="agent.none"></span>
+      </div>
+
+      <div class="agent-url">
+        <label for="agent-mcp-url" data-i18n="agent.url"></label>
+        <div class="config-line">
+          <input id="agent-mcp-url" value="http://127.0.0.1:47194/mcp" spellcheck="false" />
+          <button type="button" id="agent-copy-url" class="ghost" data-i18n="agent.copy"></button>
+        </div>
+      </div>
+
+      <div id="agent-clients" class="agent-clients" data-i18n-aria="agent.connect">
+        <button type="button" data-client="cursor">Cursor</button>
+        <button type="button" data-client="claude-code">Claude Code</button>
+        <button type="button" data-client="codex">Codex</button>
+        <button type="button" data-client="windsurf">Windsurf</button>
+        <button type="button" data-client="generic" data-i18n="agent.client.other"></button>
+      </div>
+
+      <div id="agent-result" class="agent-result" hidden>
+        <p id="agent-path" class="config-path"></p>
+        <pre id="agent-snippet"></pre>
+        <p id="agent-note" class="hint"></p>
+        <p id="agent-skill-path" class="config-path"></p>
+        <div class="config-actions">
+          <button type="button" id="agent-write" class="primary" data-i18n="settings.write"></button>
+          <button type="button" id="agent-install-skill" class="ghost" data-i18n="settings.installSkill"></button>
+        </div>
+      </div>
+
+      <div class="agent-activity">
+        <span class="eyebrow" data-i18n="agent.activity"></span>
+        <ol id="activity"></ol>
+        <p id="activity-empty" class="hint" data-i18n="agent.quiet"></p>
+      </div>
+    </section>
+
+    <div id="settings" class="settings" hidden>
+      <section class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header class="settings-head">
+          <p class="eyebrow" data-i18n="settings.eyebrow"></p>
+          <button type="button" id="settings-close" class="ghost" data-i18n="settings.close"></button>
+        </header>
+        <h2 id="settings-title" data-i18n="settings.title"></h2>
+        <p class="settings-body" data-i18n="settings.body"></p>
+
+        <div class="agent-status">
+          <span id="settings-agent-dot" class="agent-dot"></span>
+          <span id="settings-agent-seen" data-i18n="agent.none"></span>
+        </div>
+
+        <label for="settings-mcp-url" data-i18n="agent.url"></label>
+        <div class="config-line">
+          <input id="settings-mcp-url" value="http://127.0.0.1:47194/mcp" spellcheck="false" />
+          <button type="button" id="settings-copy-url" class="ghost" data-i18n="agent.copy"></button>
+        </div>
+
+        <label data-i18n="agent.connect"></label>
+        <div id="settings-clients" class="agent-clients">
+          <button type="button" data-client="cursor">Cursor</button>
+          <button type="button" data-client="claude-code">Claude Code</button>
+          <button type="button" data-client="codex">Codex</button>
+          <button type="button" data-client="windsurf">Windsurf</button>
+          <button type="button" data-client="generic" data-i18n="agent.client.other"></button>
+        </div>
+
+        <div id="settings-file" class="settings-file">
+          <label for="settings-path" data-i18n="settings.file"></label>
+          <input id="settings-path" readonly spellcheck="false" />
+          <button type="button" id="settings-write-file" class="primary" data-i18n="settings.write"></button>
+        </div>
+        <div id="settings-skill" class="settings-skill">
+          <label for="settings-skill-path" data-i18n="settings.skill"></label>
+          <input id="settings-skill-path" readonly spellcheck="false" />
+          <button type="button" id="settings-install-skill" class="ghost" data-i18n="settings.installSkill"></button>
+        </div>
+        <pre id="settings-snippet" class="settings-snippet"></pre>
+        <p id="settings-note" class="hint" data-i18n="settings.previewNote"></p>
+      </section>
+    </div>
 
     <div id="peek" class="peek" hidden>
       <div class="peek-sheet">
-        <p class="eyebrow" data-i18n="peek.kicker"></p>
+        <div class="peek-head">
+          <p class="eyebrow" data-i18n="peek.kicker"></p>
+          <button type="button" id="peek-keep" class="keep" data-i18n-aria="peek.keep">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.4l-5.9 3.3 1.3-6.6L2.5 9.5l6.6-.8z"/></svg>
+          </button>
+        </div>
         <h2 id="peek-title"></h2>
         <p id="peek-body"></p>
         <textarea id="peek-note" rows="3" data-i18n-placeholder="peek.replyPh"></textarea>
@@ -114,6 +194,22 @@
         </div>
       </div>
     </div>
+    <dialog id="memory-dialog" class="board-dialog" aria-labelledby="memory-heading">
+      <header><h2 id="memory-heading" data-board-text="memoryTitle"></h2><button type="button" class="ghost" data-close data-board-text="close"></button></header>
+      <p data-board-text="memoryHelp"></p>
+      <form id="memory-form">
+        <label for="memory-name" data-board-text="memoryName"></label><input id="memory-name" maxlength="80" autocomplete="off" />
+        <label for="memory-text" data-board-text="memoryText"></label><textarea id="memory-text" maxlength="4000" required></textarea>
+        <button type="submit" class="primary" data-board-text="save"></button><span id="memory-status" role="status"></span>
+      </form>
+      <label for="memory-search" data-board-text="search"></label><input id="memory-search" autocomplete="off" />
+      <p class="results-help" data-board-text="recent"></p><div id="memory-list"></div>
+    </dialog>
+    <dialog id="feedback-dialog" class="board-dialog" aria-labelledby="feedback-heading">
+      <header><h2 id="feedback-heading" data-board-text="feedback"></h2><button type="button" class="ghost" data-close data-board-text="close"></button></header>
+      <p data-board-text="feedbackHelp"></p><div id="feedback-list"></div>
+    </dialog>
+    <div id="app-notice" role="status" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
