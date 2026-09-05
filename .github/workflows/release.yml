@@ -1,6 +1,12 @@
 name: Release desktop app
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild
+        type: string
+        required: true
   push:
     tags:
       - "v*"
@@ -24,13 +30,18 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Install macOS targets for the active repository toolchain
+        if: runner.os == 'macOS'
+        run: |
+          rustup show active-toolchain
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -39,8 +50,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Spellcast ${{ github.ref_name }}
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: Spellcast ${{ inputs.tag || github.ref_name }}
           generateReleaseNotes: true
           releaseDraft: true
           args: ${{ matrix.args }}
