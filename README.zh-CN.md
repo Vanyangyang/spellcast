@@ -4,8 +4,8 @@
 <p align="center"><strong>桌面上的旁念，板上展开的想法。</strong></p>
 <p align="center"><a href="README.md">English</a> · 简体中文 · <a href="https://github.com/Vanyangyang/spellcast/releases">下载发行版</a></p>
 
-想听听你的 Astra 对项目有什么吐槽？  
-想让它提醒你那些忙着忙着就忘掉的事？  
+想听听你的 Astra 对项目有什么吐槽？
+想让它提醒你那些忙着忙着就忘掉的事？
 想接住一次意料之外的灵光一闪？
 
 试试 **Spellcast**。

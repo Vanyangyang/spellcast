@@ -15,16 +15,16 @@ A useful objection. Something you meant to come back to. An idea you were not ex
 
 ## From a spark to something you can work with
 
-**1. Let a thought surface.**  
+**1. Let a thought surface.**
 A transparent desktop bubble carries a worthwhile aside while you work. You can leave it alone, move it, or keep it.
 
-**2. Keep the idea.**  
+**2. Keep the idea.**
 The star brings its words onto the board, ready to return to.
 
-**3. Give the idea room.**  
+**3. Give the idea room.**
 In board mode, the agent can use the board itself to present its reply. Explore a direction, compare alternatives, and continue from the part that interests you.
 
-**4. Make it yours.**  
+**4. Make it yours.**
 Arrange and edit the material. Leave feedback where it belongs. Decide what should remain a working idea and what you explicitly want remembered.
 
 ## Two places to think
