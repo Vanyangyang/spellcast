@@ -1,65 +1,68 @@
-# Spellcast
+<p align="center">
+  <img src="docs/assets/spellcast-hero.svg" alt="Spellcast — a stage of its own. Desktop bubbles become ideas you can explore on an everything board." width="100%">
+</p>
 
-Spellcast 不是聊天 App，也不是「自带模型」的客户端。它不接密钥，也不让别人的 agent 来调一个接口。
+<p align="center"><strong>Desktop asides. An everything board. Room for your AI to be creative.</strong></p>
+<p align="center">English · <a href="README.zh-CN.md">简体中文</a> · <a href="https://github.com/Vanyangyang/spellcast/releases">Releases</a></p>
 
-- **桌面气泡（ambient）**：你在别处跟 AI 干活时的辅助旁路。偶尔冒一颗透明小窗，最多三扇，一屏一颗。不是新对话。
-- **专注板（focus）**：真正的呈现面。模型该把想法摊成空间碎片，而不是一堵字。专注板不是又一个输入框。
+What would Astra say about your project if it had a little room to speak?
 
-普通使用只需要下载安装包，**不需要** Node、Rust 或 Visual Studio。
+A useful objection. Something you meant to come back to. An idea you were not expecting.
 
-## 安装
+**Spellcast gives those thoughts a place on your real desktop.** Keep a bubble and it becomes part of your board. Enter board mode and your agent can develop the idea using a form that fits: a comparison, a relationship, a sequence, or a whole arrangement of ideas.
 
-1. 打开 [Releases](https://github.com/Vanyangyang/spellcast/releases/latest)。
-2. 下载 Windows 安装包（`Spellcast_*_x64-setup.exe`，NSIS）。
-3. 运行安装包。构建未签名，SmartScreen 可能提示警告：选 **更多信息** → **仍要运行**。
-4. 从开始菜单打开 **Spellcast**。
+> The Everything board update is in development. Existing **v0.1.1** downloads are an earlier desktop preview; the new board expressions and demo will ship together in the next release.
 
-同一页如果附带 `.dmg`，Mac 也可以装。
+## From a spark to something you can work with
 
-## 两种用法
+**1. Let a thought surface.**  
+A transparent desktop bubble carries a worthwhile aside while you work. You can leave it alone, move it, or keep it.
 
-- **桌面气泡**：一直开着。你在 Cursor、别的 agent、别处的对话里干活时，这里只偶尔抛一颗辅助泡——抛哪块屏、多大、露出多少、点开后怎样。不是把整段回复摊成泡。没人管的泡会升到这块屏的顶端，渐隐，悄悄破掉。
-- **专注板**：要看整块呈现时再进去。碎片、形式、空间关系才是正文。插件里「展开专注板」默认进这里。
+**2. Keep the idea.**  
+The star brings its words onto the board, ready to return to.
 
-多屏（Windows / Mac 同一套）：
+**3. Give the idea room.**  
+In board mode, the agent can use the board itself to present its reply. Explore a direction, compare alternatives, and continue from the part that interests you.
 
-- 每颗泡是一扇透明小窗，只落在**一块屏的工作区**里（避开 Windows 任务栏、Mac 菜单栏和 Dock）。
-- 一粒泡不会复制到所有屏，也不会骑在两块屏的接缝上。
-- 落点可以是 `active`（你正在看的）、`primary`（主屏）或 `side`（旁边一块，少打扰）。
+**4. Make it yours.**  
+Arrange and edit the material. Leave feedback where it belongs. Decide what should remain a working idea and what you explicitly want remembered.
 
-## 板上
+## Two places to think
 
-- `新碎片` 或 `N`：放下
-- 拖开、右边改字
-- `Delete`：拿掉
-- 下面「摊开」：把一句摊成空间碎片（本地预览，不是发给某个模型）
-- 「拣进对话」：把别处已经在进行的对话贴进来，拣出碎片
+| On your desktop | On your board |
+| --- | --- |
+| A doubt, a reminder, a creative detour | A reply with structure and room to grow |
+| Small enough to leave alone | Focused enough to explore |
+| Keep the thoughts you want to return to | Shape the ideas you want to develop |
 
-界面语言跟系统走（中文 / English / 日本語），右上角可改。板上的碎片原文不改。
+Spellcast runs on your computer. Your agent stays in the tool you use to work with it. Astra is a great creative partner for this experience; the stage is designed to work with compatible agents across clients and models.
 
-## 开发者
+## Try the current desktop preview
 
-从源码跑桌面窗口（需要本机 Node 22+ 和 Rust；Windows 还需要 WebView2，Win10/11 一般都有）：
+Download an available build from [Releases](https://github.com/Vanyangyang/spellcast/releases). The release notes describe that build's capabilities and available operating systems.
 
-```bash
-git clone https://github.com/Vanyangyang/spellcast.git
-cd spellcast
-npm install
-npm run desktop
-```
+For development:
 
-只要板的网页预览（看不见系统桌面泡）：
+    git clone https://github.com/Vanyangyang/spellcast.git
+    cd spellcast
+    npm install
+    npm run desktop
 
-```bash
-npm start
-```
+Building from source needs Node.js 22+, Rust, and your platform's Tauri prerequisites. On Windows, install the Visual Studio C++ build tools and Windows SDK.
 
-打开 [http://127.0.0.1:47193](http://127.0.0.1:47193)。后端在 **47194**。
+**npm start** opens a browser preview of the board; desktop bubbles require the desktop app.
 
-装 Cursor / VS Code 侧栏：
+## What we are building next
 
-```bash
-npm run plugin
-```
+- Rich board replies: mixed content, aligned comparisons, meaningful relationships, and storyboards.
+- Context that stays with the idea as you switch expression or add feedback.
+- Explicit, inspectable memory and a dependable path back to the agent that owns the conversation.
+- A complete bubble-to-board demo recorded from the working product.
 
-命令面板 → **Spellcast: 展开专注板**。
+The visual language can be playful. The behavior should stay clear: your words, selections, and edits remain yours.
+
+## Built with Astra
+
+Astra is helping turn the original idea into a working product: reviewing the product assumptions, tracing the implementation, researching ways for AI to express ideas visually, and building the next experience.
+
+The launch demo will show the actual interaction from desktop bubble to board. Until it is ready, the preview and the development direction are described separately here.
