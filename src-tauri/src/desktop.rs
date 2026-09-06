@@ -4,6 +4,75 @@ use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
 };
 
+/// Where a bubble window ended up after the user let go, in physical pixels.
+/// `moved` is false for a press that never left the OS drag threshold: a click.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DragOutcome {
+    pub x: i32,
+    pub y: i32,
+    pub moved: bool,
+}
+
+/// Resolve only after the native move gesture ends, so animation cannot fight the drag.
+#[tauri::command]
+pub async fn drag_bubble(window: tauri::WebviewWindow) -> Result<DragOutcome, String> {
+    if !window.label().starts_with("bubble-") {
+        return Err("Only bubble windows can use this command.".into());
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let moving = window.clone();
+    window
+        .run_on_main_thread(move || {
+            // Window getters run inline on the main thread in tauri-runtime-wry,
+            // so reading the position here cannot wait on the blocked event loop.
+            let result = (|| {
+                let before = moving.outer_position().map_err(|err| err.to_string())?;
+                finish_bubble_drag(&moving)?;
+                let after = moving.outer_position().map_err(|err| err.to_string())?;
+                Ok(DragOutcome {
+                    x: after.x,
+                    y: after.y,
+                    moved: after != before,
+                })
+            })();
+            let _ = tx.send(result);
+        })
+        .map_err(|err| err.to_string())?;
+    rx.await.map_err(|err| err.to_string())?
+}
+
+#[cfg(windows)]
+fn finish_bubble_drag(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows_sys::Win32::{
+        Foundation::POINT,
+        UI::{
+            Input::KeyboardAndMouse::{GetAsyncKeyState, ReleaseCapture, VK_LBUTTON},
+            WindowsAndMessaging::{GetCursorPos, SendMessageW, HTCAPTION, WM_NCLBUTTONDOWN},
+        },
+    };
+    let hwnd = window.hwnd().map_err(|err| err.to_string())?.0;
+    // SendMessage enters the OS move loop synchronously. Tauri's start_dragging
+    // posts this message and returns before release, which is too early here.
+    unsafe {
+        if GetAsyncKeyState(VK_LBUTTON as i32) >= 0 {
+            return Ok(());
+        }
+        let mut cursor = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut cursor) == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let position = ((cursor.y as u16 as u32) << 16) | cursor.x as u16 as u32;
+        ReleaseCapture();
+        SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, position as isize);
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn finish_bubble_drag(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window.start_dragging().map_err(|err| err.to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopScreen {

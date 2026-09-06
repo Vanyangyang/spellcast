@@ -365,6 +365,7 @@ pub fn run() {
             configure_client,
             install_client_skill,
             list_desktop_screens,
+            desktop::drag_bubble,
             close_bubbles
         ])
         .run(tauri::generate_context!())

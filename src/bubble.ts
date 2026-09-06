@@ -115,27 +115,47 @@ async function boot() {
   await applyGeometry(geo.startY);
   requestAnimationFrame(() => {
     orb.classList.add("is-in");
-    requestAnimationFrame(() => { void emit("spellcast-ready", flight.item.id).catch(() => undefined); });
   });
 
   const life = Math.max(8000, flight.item.linger_ms || 16000);
-  let started = performance.now();
+  let elapsed = 0;
+  let lastTick = performance.now();
   let gone = false;
   let held = false;
-  let heldAt = 0;
-  let heldFor = 0;
   let lastY = Number.NaN;
   let progress = 0;
   let dragging = false;
+  let kept = false;
+  let anchored = false;
+  let changingKeep = false;
+  let openingBoard = false;
+  let lastClickAt = 0;
+  let resumeAt = 0;
+
+  const releaseInteraction = () => {
+    held = false;
+    orb.classList.remove("is-held");
+  };
+
+  const restartFlight = (y: number) => {
+    geo = { ...geo, startY: y };
+    progress = 0;
+    elapsed = 0;
+    lastTick = performance.now();
+    lastY = Number.NaN;
+  };
 
   // A late font swap or a wrapped line can still change the size; follow it.
   const watcher = new ResizeObserver(() => {
     if (gone) return;
     const next = measure(orb, flight, geo);
     if (next.w === geo.w && next.h === geo.h) return;
+    const y = kept ? geo.startY + (geo.endY - geo.startY) * progress
+      : next.startY + (next.endY - next.startY) * progress;
     geo = next;
+    if (kept) restartFlight(y);
     lastY = Number.NaN;
-    void applyGeometry(Math.round(geo.startY + (geo.endY - geo.startY) * progress));
+    void applyGeometry(Math.round(y));
   });
   watcher.observe(orb);
 
@@ -154,23 +174,25 @@ async function boot() {
   orb.addEventListener("pointerenter", () => {
     if (gone || held) return;
     held = true;
-    heldAt = performance.now();
     orb.classList.add("is-held");
   });
   orb.addEventListener("pointerleave", () => {
     if (!held) return;
-    heldFor += performance.now() - heldAt;
     held = false;
     orb.classList.remove("is-held");
   });
 
   const tick = async () => {
     if (gone) return;
-    if (held || dragging) {
+    const now = performance.now();
+    const delta = Math.max(0, now - Math.max(lastTick, resumeAt));
+    lastTick = now;
+    if (held || dragging || (kept && anchored) || changingKeep || openingBoard || now < resumeAt) {
       requestAnimationFrame(() => void tick());
       return;
     }
-    const t = Math.min(1, (performance.now() - started - heldFor) / life);
+    elapsed += delta;
+    const t = Math.min(1, elapsed / life);
     const eased = t * t * (3 - 2 * t);
     progress = eased;
     const y = Math.round(geo.startY + (geo.endY - geo.startY) * eased);
@@ -182,7 +204,7 @@ async function boot() {
         return;
       }
     }
-    if (t >= 1) {
+    if (t >= 1 && !kept) {
       die(true);
       return;
     }
@@ -190,40 +212,48 @@ async function boot() {
   };
   requestAnimationFrame(() => void tick());
 
-  const poke = async (event: Event) => {
+  const openBoard = async (event: Event) => {
     event.preventDefault();
-    if (gone) return;
-    die(false);
+    if (gone || changingKeep || openingBoard) return;
+    openingBoard = true;
     try {
-      await emit("spellcast-poke", flight.item);
+      const { node } = await invoke<{ node: { id: string } }>("keep_bubble", { bubble: flight.item });
+      flight.item = { ...flight.item, node_id: node.id };
+      kept = true;
+      paintKeep();
+      await emit("spellcast-poke", { ...flight.item, on_poke: "focus" });
+      die(false);
     } catch {
-      /* main may already be gone */
+      // Keep the thought available when the board cannot be reached.
+    } finally {
+      openingBoard = false;
     }
   };
 
-  // The star keeps the bubble's words on the board without popping it. It does not count
-  // as a poke, and the bubble lingers a beat longer so the fill can be seen.
+  // Kept thoughts finish floating upward, then remain at the top of the desktop.
   const star = orb.querySelector<HTMLButtonElement>(".keep");
-  let kept = false;
-  let changingKeep = false;
-  const keep = async (event: Event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (gone || changingKeep) return;
-    changingKeep = true;
-    kept = !kept;
+  const paintKeep = () => {
     star?.classList.toggle("is-kept", kept);
     star?.setAttribute("aria-pressed", String(kept));
     star?.setAttribute("aria-label", t(kept ? "peek.unkeep" : "peek.keep"));
-    heldFor += 2600;
+  };
+  const keep = async (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (gone || changingKeep || openingBoard || dragging) return;
+    changingKeep = true;
+    kept = !kept;
+    lastClickAt = 0;
+    paintKeep();
     try {
       const result = await invoke<{ node?: { id: string } }>(kept ? "keep_bubble" : "unkeep_bubble", { bubble: flight.item });
-      const item = kept && result.node ? { ...flight.item, node_id: result.node.id } : flight.item;
-      await emit("spellcast-favorite-changed", { item, kept });
+      flight.item = { ...flight.item, node_id: kept ? result.node?.id ?? flight.item.node_id : null };
+      if (!kept) anchored = false;
+      releaseInteraction();
+      await emit("spellcast-favorite-changed", { item: flight.item, kept }).catch(() => undefined);
     } catch {
       kept = !kept;
-      star?.classList.toggle("is-kept", kept);
-      star?.setAttribute("aria-pressed", String(kept));
+      paintKeep();
     } finally {
       changingKeep = false;
     }
@@ -231,20 +261,27 @@ async function boot() {
   star?.addEventListener("pointerdown", (event) => event.stopPropagation());
   star?.addEventListener("click", (event) => void keep(event));
 
-  // Behave like a normal draggable window: press-drag moves it, press-release pops it.
+  // A single press may start a drag; two stationary clicks open this thought on the board.
   orb.addEventListener("pointerdown", async (event) => {
-    if (gone || dragging || event.button !== 0) return;
+    if (gone || dragging || changingKeep || openingBoard || event.button !== 0) return;
     event.preventDefault();
     dragging = true;
     orb.classList.add("is-dragging");
     try {
-      const before = await win.outerPosition();
-      await win.startDragging();
-      const after = await win.outerPosition();
-      if (Math.hypot(after.x - before.x, after.y - before.y) < 3) {
-        void poke(event);
+      // Begin the native move while the mouse is still down, without an IPC read first.
+      // The command resolves only after the OS move loop ends, i.e. when the mouse is released.
+      const after = await invoke<{ x: number; y: number; moved: boolean }>("drag_bubble");
+      if (!after.moved) {
+        const now = performance.now();
+        if (lastClickAt > 0 && now - lastClickAt <= 500) {
+          lastClickAt = 0;
+          void openBoard(event);
+        } else {
+          lastClickAt = now;
+        }
         return;
       }
+      lastClickAt = 0;
 
       const monitor = await currentMonitor();
       const scale = monitor?.scaleFactor ?? (await win.scaleFactor());
@@ -262,21 +299,25 @@ async function boot() {
       if (work) flight.work = work;
       flight.x = x;
       geo = { ...geo, x, startY: y, endY: work ? work.y + (flight.pad ?? 20) : y };
-      progress = 0;
-      started = performance.now();
-      heldFor = 0;
-      if (held) heldAt = started;
-      lastY = Number.NaN;
+      restartFlight(y);
+      anchored = kept;
+      resumeAt = kept ? 0 : performance.now() + 5000;
+      releaseInteraction();
+      // A frame queued just before the press is delivered after the move loop ends;
+      // pin the drop point so that stale frame cannot snap the window back.
+      await win.setPosition(new PhysicalPosition(after.x, after.y));
     } catch {
-      void poke(event);
+      lastClickAt = 0;
     } finally {
       dragging = false;
       orb.classList.remove("is-dragging");
     }
   });
   orb.addEventListener("click", (event) => {
-    if (event.detail === 0) void poke(event); // keyboard activation
+    if (event.detail === 0) void openBoard(event); // keyboard activation
   });
+  orb.addEventListener("dblclick", (event) => void openBoard(event));
+  requestAnimationFrame(() => { void emit("spellcast-ready", flight.item.id).catch(() => undefined); });
 }
 
 void boot();

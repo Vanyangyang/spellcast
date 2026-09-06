@@ -904,12 +904,17 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-function handlePoke(item: ThrownBubble) {
+async function handlePoke(item: ThrownBubble) {
   note("act.poke", { title: item.title });
   peekItem = item;
   if (item.on_poke === "focus") {
     if (item.node_id) selected = item.node_id;
-    void setMode("focus");
+    boardView = "ideas";
+    awaitingOrigin = null;
+    recipient.value = "";
+    closePeek();
+    await refreshBoard();
+    await setMode("focus");
     return;
   }
   if (item.on_poke === "pin") {

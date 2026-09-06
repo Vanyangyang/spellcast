@@ -26,7 +26,7 @@ Never use a bubble for progress narration, tool announcements, status updates, g
 
 ## Reply on the board
 
-Starring a bubble adopts it onto the board. A `kept` event supplies its `node_id`; it is not automatically a request for an expanded reply. When the user asks to explore it, use `spellcast_reply` with that `origin_node_id`, your task's `source_id`, a readable `source_label`, and complete content. Mix the forms that help the thought:
+Starring a bubble adopts it onto the board without opening the board. It continues floating upward, then stays at the top instead of expiring. Dragging a kept bubble anchors it at the released position and ends its upward flight. Dragging an unkept bubble pauses it for five seconds, then it resumes floating and eventually expires. Double-clicking a bubble keeps it if necessary and opens the board with that thought selected. A `kept` event supplies its `node_id`; it is not automatically a request for an expanded reply. When the user asks to explore it, use `spellcast_reply` with that `origin_node_id`, your task's `source_id`, a readable `source_label`, and complete content. Mix the forms that help the thought:
 
 - `text`: framing, a concrete insight, explanation, or decision.
 - `comparison`: alternatives with the same criteria and aligned values; give options stable IDs.

@@ -2,15 +2,18 @@
 
 **An everything board for AI.**
 
+> **Spellcast is in early development.** Early demo · Experimental preview.
+> What you see here is a preview build for trying the idea, not a finished product. Stay tuned for the full release.
+
 Want Astra to roast your project? Remember what you meant to come back to? Give you an idea you were not expecting?
 
 Your agent keeps working on your task. Its asides appear as bubbles on the display you are currently using, above your work without bringing the agent window forward. Keep a thought, bring it onto the board, and develop it with text, comparisons, relationships, and storyboards.
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Download for Windows](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.1)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Preview builds](https://github.com/Vanyangyang/spellcast/releases)
 
-[![Watch the Spellcast desktop demo](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.1/spellcast-demo.mp4)
+[![Watch the Spellcast desktop demo](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases)
 
-**[Watch the desktop demo](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.1/spellcast-demo.mp4)** — task-related bubbles while you keep working, then adoption, board replies, and feedback. Recorded in the real Windows app and edited for pacing.
+**[Watch the desktop demo](https://github.com/Vanyangyang/spellcast/releases)** — task-related bubbles while you keep working, then adoption, board replies, and feedback. Recorded in the real Windows app and edited for pacing.
 
 ## From a spark to something you can work with
 
@@ -40,13 +43,13 @@ Kept ideas and replies survive restart. Durable memory is separate: save only wh
 
 ## Get started
 
-1. Download and run **Spellcast 0.2.1 for Windows x64** from [Releases](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.1).
+1. Download and run the latest **Windows x64 preview build** from [Releases](https://github.com/Vanyangyang/spellcast/releases), or build from source (below).
 2. Open **Settings**, choose your host, and review its MCP configuration. Supported writers merge only Spellcast's entry and back up the original file. Other hosts get a configuration snippet.
 3. Install the bundled **Skill**, reload your host's agent, and ask it to use Spellcast.
 
 The desktop app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. Connection setup supports Cursor, Codex, Windsurf, Claude Code, and generic MCP clients; runtime behavior still depends on the host's tool and lifecycle support.
 
-Apple Silicon and Intel macOS builds are also available in the release. They passed CI packaging; [runtime verification is currently Windows-only](docs/releases/0.2.1.md).
+Apple Silicon and Intel macOS builds are produced by the same release workflow. They passed CI packaging; [runtime verification is currently Windows-only](docs/releases/0.2.1.md).
 
 ## Develop locally
 
