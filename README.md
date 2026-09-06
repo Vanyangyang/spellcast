@@ -9,11 +9,17 @@ Want Astra to roast your project? Remember what you meant to come back to? Give 
 
 Your agent keeps working on your task. Its asides appear as bubbles on the display you are currently using, above your work without bringing the agent window forward. Keep a thought, bring it onto the board, and develop it with text, comparisons, relationships, and storyboards.
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Preview builds](https://github.com/Vanyangyang/spellcast/releases)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows / macOS)](https://github.com/Vanyangyang/spellcast/releases/latest)
 
-[![Watch the Spellcast desktop demo](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases)
+[![Watch the Spellcast desktop demo](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)
 
-**[Watch the desktop demo](https://github.com/Vanyangyang/spellcast/releases)** — task-related bubbles while you keep working, then adoption, board replies, and feedback. Recorded in the real Windows app and edited for pacing.
+**[Watch the desktop demo](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)** — task-related bubbles while you keep working, then adoption, board replies, and feedback. Recorded in the real Windows app and edited for pacing. A new recording with the current bubble interactions is in progress.
+
+## Where the preview stands
+
+- **Published build:** [0.2.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. Windows is the only platform verified by hand; the macOS builds only passed CI packaging.
+- **In `main`, not yet in a build:** bubbles follow the display of your foreground window; a kept bubble stays where you drop it, an unkept one pauses five seconds after a drag and then keeps rising; double-clicking a bubble opens exactly that thought on the board. Real-input acceptance of these is tracked in [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md).
+- **Expect rough edges.** Layout, copy, and the agent Skill are still changing between previews. Feedback and issues are welcome.
 
 ## From a spark to something you can work with
 
@@ -43,7 +49,7 @@ Kept ideas and replies survive restart. Durable memory is separate: save only wh
 
 ## Get started
 
-1. Download and run the latest **Windows x64 preview build** from [Releases](https://github.com/Vanyangyang/spellcast/releases), or build from source (below).
+1. Download and run the latest **Windows x64 preview build** from [Releases](https://github.com/Vanyangyang/spellcast/releases/latest), or build from source (below) to get everything in `main`.
 2. Open **Settings**, choose your host, and review its MCP configuration. Supported writers merge only Spellcast's entry and back up the original file. Other hosts get a configuration snippet.
 3. Install the bundled **Skill**, reload your host's agent, and ask it to use Spellcast.
 
@@ -75,4 +81,4 @@ npm run tauri -- build --bundles nsis
 
 Astra helped challenge the product assumptions, build and integrate the bubble → board → feedback loop, test the interactions, and produce this demo. The graph canvas uses [AntV X6](https://github.com/antvis/X6); the desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
 
-[Agent behavior](skills/spellcast/SKILL.md) · [0.2.1 release notes and verification](docs/releases/0.2.1.md) · [MIT license](LICENSE)
+[Agent behavior](skills/spellcast/SKILL.md) · [Release notes and verification](docs/releases/) · [MIT license](LICENSE)
