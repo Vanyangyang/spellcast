@@ -11,9 +11,9 @@
 
 [English](README.md) · 简体中文 · [下载体验版（Windows / macOS）](https://github.com/Vanyangyang/spellcast/releases/latest)
 
-[![观看 Spellcast 日历演示](docs/assets/spellcast-calendar-demo-cover.png)](https://github.com/Vanyangyang/spellcast/raw/main/docs/assets/spellcast-calendar-demo.mp4)
+[![观看 Spellcast 日历演示](docs/assets/spellcast-calendar-demo-cover.png)](https://github.com/Vanyangyang/spellcast/blob/main/docs/assets/spellcast-calendar-demo.mp4)
 
-**[观看日历演示（84 秒）](https://github.com/Vanyangyang/spellcast/raw/main/docs/assets/spellcast-calendar-demo.mp4)**：一段 Codex CLI 会话排好了一周日程；做好的周历留在屏幕上时，独立观察者冒出一条旁念气泡，随后又来两条。想留的点星，不想留的任它飘走，双击直接在板上打开这条想法，再切换板的四种形态。画面来自真实 Windows 桌面和真实鼠标操作；剪掉了等待、部分上飘加速，没有任何合成。片尾预告下一步：Agent 把收藏的想法在板上展开成完整回答。
+**[观看日历演示（84 秒）](https://github.com/Vanyangyang/spellcast/blob/main/docs/assets/spellcast-calendar-demo.mp4)**：一段 Codex CLI 会话排好了一周日程；做好的周历留在屏幕上时，独立观察者冒出一条旁念气泡，随后又来两条。想留的点星，不想留的任它飘走，双击直接在板上打开这条想法，再切换板的四种形态。画面来自真实 Windows 桌面和真实鼠标操作；剪掉了等待、部分上飘加速，没有任何合成。片尾预告下一步：Agent 把收藏的想法在板上展开成完整回答。
 
 更早的记事本版演示仍在 [releases/v0.2.0](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)。
 
