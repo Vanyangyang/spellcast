@@ -4,17 +4,17 @@
 
 想听听你的 Astra 对项目有什么吐槽？想让它帮你记起忙着忙着忘掉的事？想接住一次意料之外的灵光一闪？
 
-试试 **Spellcast**。让这些念头冒成真实桌面上的气泡；喜欢哪个，就收进板里，用文字、对比、关系图和分镜继续展开。
+试试 **Spellcast**。Agent 继续处理你的任务，与任务相关的吐槽、提醒和灵感，会从你当前操作的显示器上冒出来，不必切回 Agent 窗口。喜欢哪个，就收进板里，用文字、对比、关系图和分镜继续展开。
 
-[English](README.md) · 简体中文 · [下载 Windows 版](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0)
+[English](README.md) · 简体中文 · [下载 Windows 版](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.1)
 
-[![观看 Spellcast 61 秒演示](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)
+[![观看 Spellcast 桌面演示](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.1/spellcast-demo.mp4)
 
-**[观看桌面演示](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)**：实际 Windows 应用操作，以设计一段雨声解谜为演示场景，展示从采纳想法到反馈更新的流程。
+**[观看桌面演示](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.1/spellcast-demo.mp4)**：你继续工作，与任务相关的气泡从桌面冒出，再采纳入板、展开并反馈。画面来自实际 Windows 应用，剪辑缩短了等待。
 
 ## 一个念头，如何长成可以继续创作的东西
 
-1. **冒出来。** 值得留意的吐槽、提醒和创意岔路，以稀疏的桌面气泡出现。可以忽略、拖动或打开。
+1. **在你工作时冒出来。** 想法来自 Agent 正在处理的任务，显示位置跟随你当前的前台窗口。值得留意的吐槽、提醒和创意岔路，以稀疏的气泡出现。可以忽略、拖动或打开。
 2. **收进来。** 点亮星标，把内容放进板，同时保留它来自哪个任务。
 3. **展开它。** 请 Agent 继续发展这个想法。板成为完整回复的呈现面，由内容决定适合的表达形式。
 4. **变成你的。** 选方向、改内容、移动关系、补充约束，反馈回到负责这条想法的原任务。
@@ -28,6 +28,8 @@
 
 一条回复可以混合这些形式。Agent 能只更新其中一块；遇到版本冲突时会拒绝覆盖，保留草稿供继续处理。
 
+切去其他应用后，桌面气泡会恢复投放，板保留原来的模式和内容。手动暂停则会持续生效。
+
 ## Agent 留在你原本使用的地方
 
 Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不需要填写模型 API Key。Agent 继续使用原来的宿主和模型。
@@ -38,13 +40,13 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 ## 开始使用
 
-1. 从 [Releases](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0) 下载并运行 **Spellcast 0.2.0 Windows x64**。
+1. 从 [Releases](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.1) 下载并运行 **Spellcast 0.2.1 Windows x64**。
 2. 打开 **设置**，选中正在使用的宿主并查看 MCP 配置。支持的写入器只合并 Spellcast 条目，修改前备份原文件；其他客户端提供配置片段。
 3. 安装内置 **Skill**，重载宿主中的 Agent，再请它使用 Spellcast。
 
 使用期间需要保持桌面应用运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。连接设置支持 Cursor、Codex、Windsurf、Claude Code 和通用 MCP 客户端；具体运行体验取决于宿主的工具与任务生命周期支持。
 
-版本页也提供 Apple Silicon 和 Intel macOS 构建，它们已通过 CI 打包；[当前原生交互验证仅覆盖 Windows](docs/releases/0.2.0.md)。
+版本页也提供 Apple Silicon 和 Intel macOS 构建，它们已通过 CI 打包；[当前原生交互验证仅覆盖 Windows](docs/releases/0.2.1.md)。
 
 ## 本地开发
 
@@ -70,4 +72,4 @@ npm run tauri -- build --bundles nsis
 
 Astra 帮助检查产品理解，构建并整合气泡 → 板 → 反馈更新的流程，验证交互，并制作这段演示。关系图使用 [AntV X6](https://github.com/antvis/X6)，桌面外壳使用 [Tauri](https://github.com/tauri-apps/tauri)。
 
-[Agent 行为说明](skills/spellcast/SKILL.md) · [0.2.0 版本说明与验证记录](docs/releases/0.2.0.md) · [MIT 许可证](LICENSE)
+[Agent 行为说明](skills/spellcast/SKILL.md) · [0.2.1 版本说明与验证记录](docs/releases/0.2.1.md) · [MIT 许可证](LICENSE)

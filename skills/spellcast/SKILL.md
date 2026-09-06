@@ -9,14 +9,14 @@ Spellcast gives the user's existing Agent two surfaces: sparse desktop bubbles a
 
 ## Start with the current surface
 
-Read `spellcast_board` and use one stable `source_id` per host task, such as `codex:task-uuid`. Keep it across turns and pass it when sending bubbles, replies, and listening. A model name alone is not a task identifier. If the tools are unavailable, report the connection gap; a successful direct HTTP test is not host tool registration.
+Read `spellcast_board`: `surface` is the selected presentation mode, while `board_focused` reports actual window focus. Use one stable `source_id` per host task, such as `codex:task-uuid`. Keep it across turns and pass it when sending bubbles, replies, and listening. A model name alone is not a task identifier. If the tools are unavailable, report the connection gap; a successful direct HTTP test is not host tool registration.
 
-When the board is in focus and the user is working there, make the board the reply surface. A short link or acknowledgement in the host chat is enough; do not duplicate the entire reply. In ambient mode, keep the host conversation coherent on its own and throw only worthwhile side thoughts.
+When the board is in focus and the user is working there, make the board the reply surface. A short link or acknowledgement in the host chat is enough; do not duplicate the entire reply. Keep the host conversation coherent on its own during ordinary task work and throw only worthwhile side thoughts. The Agent's current task supplies the context; the user's foreground application determines which display receives the bubble. Spellcast does not need to read that application's content.
 
 ## Throw sparingly
 
 - Use `spellcast_bubble` only for a thought worth the user's attention that does not belong in the main reply: a complaint or friction, doubt, outside suggestion, reminder, risk, aside, or creative spark.
-- Default to no bubble. Prefer one; the app admits at most two active bubbles and suppresses recent duplicate thoughts, paused delivery, and delivery while the board is in focus.
+- Default to no bubble. Prefer one; the app admits at most two active bubbles and suppresses recent duplicate thoughts, paused delivery, and delivery while the board window actually has focus. The selected board mode remains intact when the user switches to another app; it does not pause desktop bubbles. Explicit pause always does.
 - Make `tease` the complete thought, at most 120 characters and readable without chat context. Put optional detail in `body`.
 - Choose `kind` honestly. Use `question` only for something that can wait.
 - If the result is `not_shown`, `expired`, or `dismissed`, stay quiet in the main conversation and do not rethrow the same thought.

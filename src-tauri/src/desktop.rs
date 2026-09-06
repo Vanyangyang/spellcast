@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use spellcast_core::types::{BubbleShape, BubbleSize, ScreenAim, ThrownBubble};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,6 +31,7 @@ pub struct WorkArea {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BubbleFlight {
     pub item: ThrownBubble,
+    pub scale: f64,
     pub x: f64,
     #[serde(rename = "startY")]
     pub start_y: f64,
@@ -43,21 +44,33 @@ pub struct BubbleFlight {
 
 /// One bubble is one tiny always-on-top window. Not a full-screen overlay.
 pub fn list_screens(app: &AppHandle) -> Result<Vec<DesktopScreen>, String> {
-    let win = app
-        .get_webview_window("main")
-        .ok_or_else(|| "Spellcast 主窗口还没起来。".to_string())?;
-    let monitors = win.available_monitors().map_err(|e| e.to_string())?;
+    let monitors = app.available_monitors().map_err(|e| e.to_string())?;
     if monitors.is_empty() {
         return Err("没有读到显示器。".into());
     }
-    let primary = win.primary_monitor().ok().flatten();
-    let current = win.current_monitor().ok().flatten();
-    let primary_name = primary
-        .as_ref()
-        .and_then(|m| m.name().map(|s| s.to_string()));
-    let current_name = current
-        .as_ref()
-        .and_then(|m| m.name().map(|s| s.to_string()));
+    let primary = app.primary_monitor().ok().flatten();
+    // Look up the user's foreground screen at delivery time. The board may be
+    // hidden on another display. During a focus transition, fall back to the
+    // pointer's screen, then the primary display; never to the board's position.
+    let current = foreground_screen_point()
+        .and_then(|(x, y)| app.monitor_from_point(x, y).ok().flatten())
+        .or_else(|| {
+            let pointer = app.cursor_position().ok()?;
+            // Tao's macOS monitor lookup takes Quartz points; its cursor API
+            // reports physical pixels scaled against the primary display.
+            let scale = if cfg!(target_os = "macos") {
+                primary.as_ref().map_or(1.0, |m| m.scale_factor())
+            } else {
+                1.0
+            };
+            app.monitor_from_point(pointer.x / scale, pointer.y / scale)
+                .ok()
+                .flatten()
+        })
+        .or_else(|| primary.clone());
+    let same_monitor = |a: &tauri::Monitor, b: &tauri::Monitor| {
+        a.position() == b.position() && a.size() == b.size()
+    };
 
     Ok(monitors
         .iter()
@@ -76,12 +89,60 @@ pub fn list_screens(app: &AppHandle) -> Result<Vec<DesktopScreen>, String> {
                 work_y,
                 work_w,
                 work_h,
-                is_primary: primary_name.as_deref() == Some(name.as_str())
-                    || (index == 0 && primary_name.is_none()),
-                is_active: current_name.as_deref() == Some(name.as_str()),
+                is_primary: primary.as_ref().is_some_and(|m| same_monitor(monitor, m))
+                    || (index == 0 && primary.is_none()),
+                is_active: current.as_ref().is_some_and(|m| same_monitor(monitor, m))
+                    || (index == 0 && current.is_none()),
             }
         })
         .collect())
+}
+
+#[cfg(windows)]
+fn foreground_screen_point() -> Option<(f64, f64)> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    // Read only the foreground handle and its monitor bounds, not app content.
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return None;
+        }
+        let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return None;
+        }
+        Some((
+            (f64::from(info.rcMonitor.left) + f64::from(info.rcMonitor.right)) / 2.0,
+            (f64::from(info.rcMonitor.top) + f64::from(info.rcMonitor.bottom)) / 2.0,
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn foreground_screen_point() -> Option<(f64, f64)> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSScreen;
+    let mtm = MainThreadMarker::new()?;
+    let screen = NSScreen::mainScreen(mtm)?;
+    let primary = NSScreen::screens(mtm).firstObject()?;
+    let frame = screen.frame();
+    let top = primary.frame().origin.y + primary.frame().size.height;
+    Some((
+        frame.origin.x + frame.size.width / 2.0,
+        top - (frame.origin.y + frame.size.height / 2.0),
+    ))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn foreground_screen_point() -> Option<(f64, f64)> {
+    None
 }
 
 fn work_area_logical(monitor: &tauri::Monitor) -> (f64, f64, f64, f64, f64) {
@@ -206,6 +267,7 @@ pub fn spawn_bubble(app: &AppHandle, item: ThrownBubble) -> Result<(), String> {
 
     let flight = BubbleFlight {
         item,
+        scale: screen.scale,
         x,
         start_y,
         end_y,
@@ -232,12 +294,23 @@ pub fn spawn_bubble(app: &AppHandle, item: ThrownBubble) -> Result<(), String> {
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
-        .visible(true)
+        .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
 
-    let _ = win.set_size(LogicalSize::new(width, height));
-    let _ = win.set_position(LogicalPosition::new(x, start_y));
+    // Physical coordinates avoid choosing the wrong display when adjacent
+    // monitors have different scale factors. Place before showing the window.
+    if let Err(err) = win
+        .set_position(PhysicalPosition::new(
+            (x * screen.scale).round() as i32,
+            (start_y * screen.scale).round() as i32,
+        ))
+        .and_then(|_| win.set_size(LogicalSize::new(width, height)))
+        .and_then(|_| win.show())
+    {
+        let _ = win.close();
+        return Err(err.to_string());
+    }
     // Belt and braces for a page that is already listening.
     let _ = win.emit("spellcast-flight", &flight);
     Ok(())
@@ -295,4 +368,69 @@ fn js_random() -> f64 {
         .map(|d| d.subsec_nanos())
         .unwrap_or(1);
     (f64::from(nanos % 10_000) / 10_000.0).clamp(0.0, 0.999)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Opt-in numeric evidence for a real desktop check. Reads window/monitor
+    /// geometry only; it never activates, moves, or reads text from a window.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires an interactive Windows desktop"]
+    fn live_foreground_monitor() {
+        use windows_sys::Win32::Foundation::RECT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowRect};
+        let active = unsafe { GetForegroundWindow() };
+        let mut rect = RECT::default();
+        let read = unsafe { GetWindowRect(active, &mut rect) } != 0;
+        let sample = std::env::var("SPELLCAST_DIAG_WINDOW_ID")
+            .ok().and_then(|v| v.parse::<usize>().ok());
+        let mut sample_rect = RECT::default();
+        let sample_read = sample.is_some_and(|id| unsafe {
+            GetWindowRect(id as _, &mut sample_rect) != 0
+        });
+        println!("{}", serde_json::json!({
+            "foreground_window": active as usize,
+            "foreground_rect": read.then_some([rect.left, rect.top, rect.right, rect.bottom]),
+            "foreground_monitor_point": foreground_screen_point(),
+            "sample_window": sample,
+            "sample_rect": sample_read.then_some([sample_rect.left, sample_rect.top, sample_rect.right, sample_rect.bottom]),
+        }));
+        assert!(!active.is_null(), "No foreground window in this desktop session");
+        assert!(foreground_screen_point().is_some());
+    }
+
+    #[test]
+    fn active_screen_wins_over_primary_even_when_display_names_match() {
+        let screens = [
+            DesktopScreen {
+                index: 0,
+                name: "Same model".into(),
+                scale: 1.0,
+                work_x: 0.0,
+                work_y: 0.0,
+                work_w: 1920.0,
+                work_h: 1040.0,
+                is_primary: true,
+                is_active: false,
+            },
+            DesktopScreen {
+                index: 1,
+                name: "Same model".into(),
+                scale: 1.5,
+                work_x: -1706.0,
+                work_y: 0.0,
+                work_w: 1706.0,
+                work_h: 920.0,
+                is_primary: false,
+                is_active: true,
+            },
+        ];
+        assert_eq!(pick_screen(&screens, ScreenAim::default()).index, 1);
+        assert_eq!(pick_screen(&screens, ScreenAim::Primary).index, 0);
+        assert_eq!(pick_screen(&screens, ScreenAim::Side).index, 0);
+        assert_eq!(pick_screen(&screens[1..], ScreenAim::Side).index, 1);
+    }
 }

@@ -1,5 +1,4 @@
 import { KIND_TONE } from "./forms/shared";
-import { kindLabel } from "./types";
 import { t } from "./i18n";
 import type { BubbleShape, ThrownBubble } from "./types";
 
@@ -13,7 +12,7 @@ export function bubbleMarkup(item: ThrownBubble): string {
   const body = item.body.trim();
   const showTitle = title && title !== tease && !tease.startsWith(title.replace(/…$/, ""));
   const showBody = body && body !== tease;
-  const kind = `<em class="kind">${escapeHtml(kindLabel(item.kind))}</em>`;
+  const kind = `<em class="kind">${escapeHtml(t(`bubble.kind.${item.kind}`))}</em>`;
 
   switch (item.shape) {
     case "orb":

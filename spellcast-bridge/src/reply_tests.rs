@@ -204,6 +204,9 @@ async fn ambient_admission_respects_focus_pause_duplicates_and_active_limit() {
     assert_eq!(send(&bridge, "A third thought").await.outcome, "not_shown");
     bridge.expired(&first.bubble.id).unwrap();
     assert_eq!(send(&bridge, "A third thought").await.outcome, "accepted");
+    surface
+        .board_focused
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     bridge.set_surface("focus");
     assert_eq!(
         send(&bridge, "Focus blocks this").await.outcome,
@@ -218,4 +221,46 @@ async fn ambient_admission_respects_focus_pause_duplicates_and_active_limit() {
     bridge.set_paused(false).unwrap();
     assert_eq!(send(&bridge, "Available again").await.outcome, "accepted");
     assert_eq!(surface.thrown.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn switching_to_another_app_resumes_bubbles_without_leaving_board_mode() {
+    use std::sync::atomic::Ordering;
+    let (bridge, surface) = crate::tests::bridge();
+    bridge
+        .add_node(NodeDraft {
+            title: "Keep this thought".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let before = serde_json::to_value(bridge.board()).unwrap();
+    surface.board_focused.store(true, Ordering::SeqCst);
+    bridge.set_surface("focus");
+    let send = || BubbleRequest {
+        tease: "A task-related thought".into(),
+        ..Default::default()
+    };
+    assert_eq!(bridge.bubble(send()).await.unwrap().outcome, "not_shown");
+
+    // Alt-Tab does not change the user's selected board layout or content.
+    surface.board_focused.store(false, Ordering::SeqCst);
+    let status = bridge.status();
+    assert_eq!(status.surface, "focus");
+    assert!(!status.board_focused);
+    assert_eq!(bridge.bubble(send()).await.unwrap().outcome, "accepted");
+    assert_eq!(serde_json::to_value(bridge.board()).unwrap(), before);
+
+    surface.board_focused.store(true, Ordering::SeqCst);
+    assert!(bridge.board_in_focus());
+    assert_eq!(
+        bridge
+            .bubble(BubbleRequest {
+                tease: "Another thought".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .outcome,
+        "not_shown"
+    );
 }

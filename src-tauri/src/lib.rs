@@ -34,7 +34,8 @@ impl Surface for Desktop {
                     app.run_on_main_thread(move || {
                         if let Some(state) = app2.try_state::<AppState>() {
                             let status = state.bridge.status();
-                            if status.paused || status.surface == "focus" {
+                            if status.paused || (status.surface == "focus" && status.board_focused)
+                            {
                                 let _ = state.bridge.user_event(AgentEvent::new("not_shown")
                                 .bubble(item.id.clone()).source(item.source_id.clone())
                                 .text("Desktop bubbles are paused while the board is in focus."));
@@ -111,6 +112,14 @@ impl Surface for Desktop {
             .map(|s| s.len() as u32)
             .unwrap_or(1)
             .max(1)
+    }
+
+    fn board_is_focused(&self) -> bool {
+        self.app.get_webview_window("main").is_some_and(|win| {
+            win.is_focused().unwrap_or(false)
+                && win.is_visible().unwrap_or(false)
+                && !win.is_minimized().unwrap_or(false)
+        })
     }
 }
 
@@ -272,6 +281,15 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
+                if let Some(state) = window.app_handle().try_state::<AppState>() {
+                    if state.bridge.board_in_focus() {
+                        state.bridge.close_bubbles();
+                    }
+                }
+            }
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             // Shared bridge state keeps board, feedback, and explicit memory in one transaction.

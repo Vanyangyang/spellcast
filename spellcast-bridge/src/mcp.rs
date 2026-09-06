@@ -24,7 +24,7 @@ pub const PROTOCOL_VERSION: &str = "2025-03-26";
 
 pub const INSTRUCTIONS: &str = r#"Spellcast is the user's local desktop stage and everything board. The model stays in its existing host.
 
-In ambient mode use spellcast_bubble sparingly for a worthwhile aside. A kept bubble becomes a board fragment. Use one stable source_id for the originating task, and reuse it when listening.
+Use spellcast_bubble sparingly for a worthwhile aside from the Agent's current task. It appears on the user's foreground display without bringing the host or board forward. Selected board mode and actual window focus are separate: surface=focus is not a pause when board_focused=false. A kept bubble becomes a board fragment. Use one stable source_id for the originating task, and reuse it when listening.
 
 When the user enters board mode or asks to develop a kept idea, the board can carry the full reply. Use spellcast_reply with text, comparison, graph, and sequence blocks, and origin_node_id when developing an adopted fragment. Use spellcast_present for loose fragments. Never reduce the user's requested board reply to a progress notification.
 
@@ -367,6 +367,7 @@ impl SpellcastMcp {
             "throws": result.throws,
             "opened": result.open,
             "surface": self.bridge.status().surface,
+            "board_focused": self.bridge.status().board_focused,
         }))
     }
 
@@ -422,6 +423,7 @@ impl SpellcastMcp {
             "last_seq": last_seq,
             "pending_sequences": self.bridge.pending_feedback(params.source_id.as_deref()).iter().map(|e| e.seq).collect::<Vec<_>>(),
             "surface": self.bridge.status().surface,
+            "board_focused": self.bridge.status().board_focused,
         }))
     }
 
@@ -452,7 +454,11 @@ impl SpellcastMcp {
     ) -> Result<CallToolResult, ErrorData> {
         self.identify(&context);
         self.bridge.hello_quiet();
-        Self::result(self.bridge.board())
+        let status = self.bridge.status();
+        let mut board = json!(self.bridge.board());
+        board["surface"] = json!(status.surface);
+        board["board_focused"] = json!(status.board_focused);
+        Self::result(board)
     }
 
     #[tool(

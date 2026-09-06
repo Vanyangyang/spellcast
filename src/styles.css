@@ -948,7 +948,7 @@ body.bubble-page {
 }
 
 .bubble {
-  --ink-glass: rgba(12, 15, 22, 0.9);
+  --ink-glass: rgba(18, 22, 31, 0.96);
   --type: 1;
   position: relative;
   appearance: none;
@@ -964,7 +964,7 @@ body.bubble-page {
   touch-action: none;
   display: grid;
   gap: 6px;
-  transform: scale(0.6) translateY(10px);
+  transform: scale(0.94) translateY(8px);
   opacity: 0;
   transition:
     transform 460ms cubic-bezier(0.2, 0.9, 0.3, 1.15),
@@ -1063,21 +1063,55 @@ body.bubble-page {
 
 .bubble > .keep {
   position: absolute;
-  top: -13px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(244, 241, 234, 0.65);
+  filter: none;
   z-index: 3;
-  opacity: 0.85;
-}
-
-.bubble > .keep:hover {
-  transform: translateX(-50%) scale(1.12);
   opacity: 1;
 }
 
-.bubble.shape-sticky > .keep {
-  color: rgba(23, 21, 26, 0.48);
+.bubble > .keep:hover {
+  transform: scale(1.08);
+  background: rgba(255, 255, 255, 0.12);
 }
+
+.bubble.shape-sticky > .keep {
+  top: 10px;
+  right: 25px;
+  background: rgba(23, 21, 26, 0.04);
+  color: rgba(23, 21, 26, 0.6);
+}
+
+.bubble > .keep:focus-visible {
+  outline: 2px solid var(--tone);
+  outline-offset: 2px;
+}
+
+.bubble.shape-pill > .keep {
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+}
+
+.bubble.shape-pill > .keep:hover {
+  transform: translateY(-50%) scale(1.08);
+}
+
+.bubble.shape-orb > .keep {
+  top: auto;
+  right: 50%;
+  bottom: 4px;
+  width: 22px;
+  height: 22px;
+  transform: translateX(50%);
+}
+
+.bubble.shape-orb > .keep:hover { transform: translateX(50%) scale(1.08); }
 
 .bubble.shape-sticky > .keep.is-kept {
   color: #c99511;
@@ -1107,12 +1141,17 @@ body.bubble-page {
 .bubble .kind {
   font-style: normal;
   font-size: calc(10px * var(--type));
-  letter-spacing: 0.14em;
+  letter-spacing: 0.09em;
+  padding-right: 30px;
+  min-height: 20px;
+  line-height: 20px;
   text-transform: uppercase;
   color: var(--tone);
 }
 
 .bubble .title {
+  padding-right: 28px;
+  min-height: 20px;
   font-family: var(--display);
   font-weight: 600;
   font-size: calc(19px * var(--type));
@@ -1120,9 +1159,11 @@ body.bubble-page {
 }
 
 .bubble .tease {
-  font-family: var(--display);
-  font-size: calc(18px * var(--type));
-  line-height: 1.3;
+  font-family: var(--font);
+  font-size: calc(15px * var(--type));
+  font-weight: 400;
+  line-height: 1.5;
+  text-wrap: pretty;
   overflow-wrap: anywhere;
 }
 
@@ -1142,6 +1183,7 @@ body.bubble-page {
   min-width: calc(76px * var(--type));
   max-width: 150px;
   padding: calc(16px * var(--type));
+  padding-bottom: calc(16px * var(--type) + 18px);
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--tone) 50%, transparent);
   background:
@@ -1173,7 +1215,7 @@ body.bubble-page {
   align-items: center;
   gap: 10px;
   max-width: 480px;
-  padding: calc(11px * var(--type)) calc(18px * var(--type)) calc(11px * var(--type)) calc(14px * var(--type));
+  padding: calc(11px * var(--type)) calc(45px * var(--type)) calc(11px * var(--type)) calc(14px * var(--type));
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--tone) 42%, transparent);
   background:
@@ -1181,7 +1223,7 @@ body.bubble-page {
     var(--ink-glass);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 10px 26px rgba(0, 0, 0, 0.32);
+    0 8px 22px rgba(0, 0, 0, 0.18);
 }
 
 .bubble.shape-pill .dot {
@@ -1193,8 +1235,8 @@ body.bubble-page {
 }
 
 .bubble.shape-pill .tease {
-  font-size: calc(16px * var(--type));
-  line-height: 1.35;
+  font-size: calc(14px * var(--type));
+  line-height: 1.45;
 }
 
 /* Card: a glass card with a heading. Title, the line, and a quiet body. */
@@ -1209,7 +1251,7 @@ body.bubble-page {
     var(--ink-glass);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    0 14px 34px rgba(0, 0, 0, 0.36);
+    0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
 .bubble.shape-card header {
@@ -1219,7 +1261,7 @@ body.bubble-page {
 
 /* Sticky: a paper note, warm and slightly askew, with a folded corner. Light on dark. */
 .bubble.shape-sticky {
-  --paper-tone: color-mix(in srgb, var(--tone) 26%, #f6efd9);
+  --paper-tone: color-mix(in srgb, var(--tone) 10%, #fff2d6);
   max-width: 300px;
   padding: calc(16px * var(--type)) calc(18px * var(--type)) calc(18px * var(--type));
   border-radius: 4px 4px 4px 14px;
@@ -1229,8 +1271,8 @@ body.bubble-page {
     var(--paper-tone);
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.5) inset,
-    0 16px 30px rgba(0, 0, 0, 0.36);
-  rotate: -1.6deg;
+    0 8px 24px rgba(0, 0, 0, 0.2);
+  rotate: -0.7deg;
 }
 
 .bubble.shape-sticky.is-held,
@@ -1269,7 +1311,7 @@ body.bubble-page {
     var(--ink-glass);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    0 14px 34px rgba(0, 0, 0, 0.36);
+    0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
 /* A rotated square whose lower half peeks out below the balloon; the upper half is hidden by the balloon's own fill. */

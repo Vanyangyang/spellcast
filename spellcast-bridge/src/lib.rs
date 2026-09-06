@@ -53,6 +53,11 @@ pub trait Surface: Send + Sync + 'static {
     fn screen_count(&self) -> u32 {
         1
     }
+    /// Whether the board window currently receives keyboard input. This is
+    /// separate from the selected board/ambient presentation mode.
+    fn board_is_focused(&self) -> bool {
+        false
+    }
 }
 
 /// A surface for environments without a desktop (tests, `npm start` preview).
@@ -84,8 +89,10 @@ pub struct RecentSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Status {
-    /// ambient | focus — where the user is looking right now.
+    /// ambient | focus — the user's selected presentation mode.
     pub surface: String,
+    #[serde(default)]
+    pub board_focused: bool,
     pub port: u16,
     pub client: Option<String>,
     pub last_call_ms: u64,
@@ -217,6 +224,7 @@ impl Bridge {
             store: store.map(Mutex::new),
             status: Mutex::new(Status {
                 surface: "ambient".into(),
+                board_focused: false,
                 port,
                 client: None,
                 last_call_ms: 0,
@@ -254,7 +262,13 @@ impl Bridge {
     pub fn status(&self) -> Status {
         let mut status = self.status.lock().unwrap().clone();
         status.paused = self.state.lock().unwrap().paused;
+        status.board_focused = self.surface.board_is_focused();
         status
+    }
+
+    pub fn board_in_focus(&self) -> bool {
+        let board_mode = self.status.lock().unwrap().surface == "focus";
+        board_mode && self.surface.board_is_focused()
     }
 
     pub fn set_paused(&self, paused: bool) -> Result<Status, SpellcastError> {
@@ -274,7 +288,7 @@ impl Bridge {
     }
 
     fn dispatch(&self, bubbles: &[ThrownBubble]) -> Result<usize, String> {
-        if self.state.lock().unwrap().paused || self.status.lock().unwrap().surface == "focus" {
+        if self.state.lock().unwrap().paused || self.board_in_focus() {
             return Ok(0);
         }
         let now = now_ms();
@@ -403,7 +417,7 @@ impl Bridge {
                 "ambient".into()
             };
         }
-        if focus {
+        if focus && self.surface.board_is_focused() {
             self.close_bubbles();
         }
         self.status()
@@ -437,10 +451,14 @@ impl Bridge {
             self.identify_source(source, None)?;
         }
         self.hello_quiet();
-        let surface = self.status.lock().unwrap().surface.clone();
+        let surface = if self.board_in_focus() {
+            "focus"
+        } else {
+            "ambient"
+        };
         let result = self.update(|state| {
             let replace = payload.replace;
-            let result = state.session.present(payload, &surface)?;
+            let result = state.session.present(payload, surface)?;
             if replace {
                 state.kept.clear();
             }
@@ -1101,7 +1119,7 @@ fn settle(events: &[AgentEvent]) -> Option<(String, Option<String>)> {
 mod tests {
     use super::*;
     use spellcast_core::types::{ProposedNode, ProposedThrow};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     static NEXT_DB: AtomicUsize = AtomicUsize::new(0);
@@ -1117,6 +1135,7 @@ mod tests {
     #[derive(Default)]
     pub(super) struct Recording {
         pub(super) thrown: Mutex<Vec<ThrownBubble>>,
+        pub(super) board_focused: AtomicBool,
         focused: AtomicUsize,
     }
 
@@ -1131,6 +1150,10 @@ mod tests {
         fn close_bubbles(&self) {}
         fn focus(&self) {
             self.focused.fetch_add(1, Ordering::SeqCst);
+            self.board_focused.store(true, Ordering::SeqCst);
+        }
+        fn board_is_focused(&self) -> bool {
+            self.board_focused.load(Ordering::SeqCst)
         }
     }
 

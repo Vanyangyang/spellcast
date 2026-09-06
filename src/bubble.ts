@@ -1,6 +1,6 @@
 import "./styles.css";
 import { invoke } from "@tauri-apps/api/core";
-import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
+import { PhysicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { emit, listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
 import { applyBubbleEl } from "./bubble-view";
@@ -11,6 +11,7 @@ type WorkArea = { x: number; y: number; w: number; h: number };
 
 type Flight = {
   item: ThrownBubble;
+  scale?: number;
   x: number;
   startY: number;
   endY: number;
@@ -101,10 +102,12 @@ async function boot() {
   await fontsSettled();
 
   let geo = measure(orb, flight, null);
+  let displayScale = flight.scale ?? (await win.scaleFactor());
+  const positionAt = (y: number) => new PhysicalPosition(Math.round(geo.x * displayScale), Math.round(y * displayScale));
   const applyGeometry = async (y: number) => {
     try {
       await win.setSize(new LogicalSize(geo.w, geo.h));
-      await win.setPosition(new LogicalPosition(geo.x, y));
+      await win.setPosition(positionAt(y));
     } catch {
       /* window may already be closing */
     }
@@ -174,7 +177,7 @@ async function boot() {
     if (y !== lastY) {
       lastY = y;
       try {
-        await win.setPosition(new LogicalPosition(geo.x, y));
+        await win.setPosition(positionAt(y));
       } catch {
         return;
       }
@@ -245,6 +248,7 @@ async function boot() {
 
       const monitor = await currentMonitor();
       const scale = monitor?.scaleFactor ?? (await win.scaleFactor());
+      displayScale = scale;
       const x = after.x / scale;
       const y = after.y / scale;
       const work = monitor

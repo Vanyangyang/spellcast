@@ -94,6 +94,7 @@ export type RecentAgent = {
 
 export type BridgeStatus = {
   surface: Surface;
+  board_focused?: boolean;
   port: number;
   client?: string | null;
   last_call_ms: number;

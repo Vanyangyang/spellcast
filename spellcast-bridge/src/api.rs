@@ -116,6 +116,7 @@ async fn health(State(b): State<Shared>) -> Json<Value> {
         "version": crate::VERSION,
         "port": st.port,
         "surface": st.surface,
+        "board_focused": st.board_focused,
         "mcp": format!("http://127.0.0.1:{}/mcp", st.port),
         "client": st.client,
         "last_call_ms": st.last_call_ms,
