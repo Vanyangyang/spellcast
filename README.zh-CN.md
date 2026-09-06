@@ -9,7 +9,7 @@
 
 试试 **Spellcast**。Agent 继续处理你的任务，与任务相关的吐槽、提醒和灵感，会从你当前操作的显示器上冒出来，不必切回 Agent 窗口。喜欢哪个，就收进板里，用文字、对比、关系图和分镜继续展开。
 
-[English](README.md) · 简体中文 · [下载体验版（Windows / macOS）](https://github.com/Vanyangyang/spellcast/releases/latest)
+[English](README.md) · 简体中文 · [下载体验版（仅 Windows 经过测试）](https://github.com/Vanyangyang/spellcast/releases/latest)
 
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
 ## 体验版现在到哪了
 
-- **已发布的构建：** [0.3.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.3.0)，含 Windows x64 安装包和 Apple Silicon、Intel 两个 `.dmg`。只有 Windows 经过人工验证，macOS 构建仅通过 CI 打包。
+- **已发布的构建：** [0.3.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.3.0)，含 Windows x64 安装包和 Apple Silicon、Intel 两个 `.dmg`。**只有 Windows 经过测试。** macOS 构建只是 CI 打包出来的未签名产物，没有人实际运行过，不保证可用。
 - **已在 `main`、尚未出包：** 气泡跟随你前台窗口所在的显示器；收藏后的气泡拖到哪就停在哪，未收藏的拖动后停 5 秒再继续上飘；双击气泡直接在板上打开这条想法。立即上飘、点星后顶部常驻、收藏后拖动原地驻留、不理会则消散、双击进板并选中该节点，均已用真实鼠标通过；未收藏拖动后停 5 秒再恢复、取消收藏后恢复，仍未测。详见 [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md)。
 - **会有毛边。** 版式、文案和 Agent Skill 在各个体验版之间还会变，欢迎反馈和提 issue。
 
@@ -57,7 +57,7 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 使用期间需要保持桌面应用运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。连接设置支持 Cursor、Codex、Windsurf、Claude Code 和通用 MCP 客户端；具体运行体验取决于宿主的工具与任务生命周期支持。
 
-发布流程也会产出 Apple Silicon 和 Intel macOS 构建；[当前原生交互验证仅覆盖 Windows](docs/releases/0.3.0.md)。
+发布流程也会产出 Apple Silicon 和 Intel macOS 构建，但[只有 Windows 经过测试](docs/releases/0.3.0.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。
 
 ## 本地开发
 

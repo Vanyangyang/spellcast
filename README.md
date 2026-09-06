@@ -9,7 +9,7 @@ Want Astra to roast your project? Remember what you meant to come back to? Give 
 
 Your agent keeps working on your task. Its asides appear as bubbles on the display you are currently using, above your work without bringing the agent window forward. Keep a thought, bring it onto the board, and develop it with text, comparisons, relationships, and storyboards.
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows / macOS)](https://github.com/Vanyangyang/spellcast/releases/latest)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows only tested)](https://github.com/Vanyangyang/spellcast/releases/latest)
 
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
@@ -17,7 +17,7 @@ Real Windows desktop, real mouse input, waits trimmed, nothing synthesized.
 
 ## Where the preview stands
 
-- **Published build:** [0.3.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.3.0) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. Windows is the only platform verified by hand; the macOS builds only passed CI packaging.
+- **Published build:** [0.3.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.3.0) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. **Windows is the only tested platform.** The macOS builds are unsigned CI packaging output that nobody has run; they are not guaranteed to work.
 - **In `main`, not yet in a build:** bubbles follow the display of your foreground window; a kept bubble stays where you drop it, an unkept one pauses five seconds after a drag and then keeps rising; double-clicking a bubble opens exactly that thought on the board. Immediate rise, star → stays at the top, drag a kept bubble → stays put, ignore → fades, double-click → board with that node selected have passed with real mouse input; the five-second pause after dragging an unkept bubble and un-starring are still untested. Details in [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md).
 - **Expect rough edges.** Layout, copy, and the agent Skill are still changing between previews. Feedback and issues are welcome.
 
@@ -57,7 +57,7 @@ Kept ideas and replies survive restart. Durable memory is separate: save only wh
 
 The desktop app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. Connection setup supports Cursor, Codex, Windsurf, Claude Code, and generic MCP clients; runtime behavior still depends on the host's tool and lifecycle support.
 
-The release workflow also produces Apple Silicon and Intel macOS builds; [runtime verification is currently Windows-only](docs/releases/0.3.0.md).
+The release workflow also produces Apple Silicon and Intel macOS builds, but [only Windows has been tested](docs/releases/0.3.0.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures.
 
 ## Develop locally
 
