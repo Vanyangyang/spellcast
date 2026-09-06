@@ -11,7 +11,7 @@ Your agent keeps working on your task. Its asides appear as bubbles on the displ
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows / macOS)](https://github.com/Vanyangyang/spellcast/releases/latest)
 
-[![Watch the Spellcast calendar demo](docs/assets/spellcast-calendar-demo-cover.png)](https://github.com/Vanyangyang/spellcast/blob/main/docs/assets/spellcast-calendar-demo.mp4)
+https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
 **[Watch the calendar demo (84 s)](https://github.com/Vanyangyang/spellcast/blob/main/docs/assets/spellcast-calendar-demo.mp4)** — a Codex CLI session planned a week; while the finished calendar is on screen, an independent observer drops one aside as a bubble, two more follow. Star what is worth keeping, let the rest drift away, double-click to open that thought on the board, then switch the board between its four forms. Recorded from the real Windows desktop with real mouse input; waits are cut and some rises are sped up, nothing is synthesized. Ends with a teaser for the next step: the agent developing a kept thought into a full board reply.
 
