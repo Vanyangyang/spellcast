@@ -1,5 +1,24 @@
 # Spellcast 气泡交互收尾与验收
 
+## 状态更新（2026-09-06 16:30，交回 Codex）
+
+下面正文是原始任务书。截至本次更新，已完成与未完成如下；细节见 `docs/reviews/2026-09-06-bubble-acceptance-record.md`。
+
+已完成：
+
+- 候选拖动修正已评估并修好：`drag_bubble` 返回 `{x, y, moved}`，前端拖动后补一次 `setPosition(after)`。`npm run build`、`cargo build --release` 通过；组件检查 11/11 通过（含挂起拖动、静止单击/两次按下、按星不拖动三项新检查）。
+- 新 exe 已重建并以 `SPELLCAST_PORT=47194`、`SPELLCAST_STATE_FILE=data\native-codex-calendar-final.sqlite3` 运行，PID `53180`。数据库与 2 张用户卡片原样保留。旧 PID 52260 已正常关闭；重启断开了原 Codex CLI 的 MCP 会话，CLI 需按原计划重开。
+- 代码已合入 GitHub `main`（`Vanyangyang/spellcast`，现已公开，`89edaf0`）。两份 README 顶部有"孵化中 / Early demo · Experimental preview"声明，新增"体验版现在到哪了"一节，下载与演示链接指向公开的 v0.2.0。`v0.2.1` 仍为 draft，标签未动，本次未出包。
+- 本地 `main` 与 `github/main` 已同源。工作区仍有三个故意未提交的文件：`src/board-replies.ts`、`src/board-replies.css`（无引用）、`docs/HANDOFF-WEB-CHAT-2026-09-06.md`（已取消方案）。`origin`（origin.cursor.com）远程停在旧历史，未强推。
+
+未完成，请 Codex 接手：
+
+1. 真实 Windows 鼠标验收：收藏后继续上飘并顶部常驻、收藏后拖动固定、未收藏拖动停 5 秒后恢复并消失、取消收藏恢复、双击进入该条想法并核对面板选中节点 ID。只有"新气泡立即上飘"有原生只读采样证据。上一轮的合成输入全部被系统拒绝（`SendInput` 结构体尺寸错误，错误 87），没有任何输入送达；修正后的驱动在仓库外 `%USERPROFILE%\.playwright-mcp\spellcast-native\native.ps1`、`scenario.ps1`，未运行。用户在场时优先手动验证。
+2. 验收通过后再决定是否打 `v0.2.2` 走现有 release workflow 出包，并把 README 里"已在 `main`、尚未出包"一段改掉。
+3. 最终英文 Codex CLI 演示与片尾（见文末"留给原 Codex 任务的最终演示"）。GitHub About 描述尚未体现体验版状态，只能在网页改。
+
+---
+
 请在本地完成以下功能与验证。最终 Codex CLI 演示由原 Codex 任务在用户返回后制作，本次不录最终演示、不发布版本。
 
 ## 用户已经确定的行为
