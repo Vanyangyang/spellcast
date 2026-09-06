@@ -13,7 +13,7 @@
 
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
-真实 Windows 桌面、真实鼠标操作，只剪掉了等待，没有任何合成。
+演示里我正在用 Codex CLI 开发一个日历应用。Spellcast 把一些我没想到的点子以桌面气泡弹出来；我给其中一个点星、拖动，再带到 everything 板上头脑风暴、继续发展。真实 Windows 桌面、真实鼠标操作，只剪掉了等待，没有任何合成。
 
 ## 体验版现在到哪了
 

@@ -13,7 +13,7 @@ Your agent keeps working on your task. Its asides appear as bubbles on the displ
 
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
-Real Windows desktop, real mouse input, waits trimmed, nothing synthesized.
+In the demo I am building a calendar app with Codex CLI. Spellcast pops up ideas I had not thought of as desktop bubbles; I star one, drag it, and take it to the everything board to brainstorm and develop it. Real Windows desktop, real mouse input, waits trimmed, nothing synthesized.
 
 ## Where the preview stands
 
