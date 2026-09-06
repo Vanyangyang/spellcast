@@ -13,9 +13,7 @@
 
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
-一段 Codex CLI 会话排好了一周日程；做好的周历留在屏幕上时，独立观察者冒出一条旁念气泡，随后又来两条。想留的点星，不想留的任它飘走，双击直接在板上打开这条想法，再切换板的四种形态。画面来自真实 Windows 桌面和真实鼠标操作；剪掉了等待、部分上飘加速，没有任何合成。片尾预告下一步：Agent 把收藏的想法在板上展开成完整回答。
-
-更早的记事本版演示仍在 [releases/v0.2.0](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)。
+真实 Windows 桌面、真实鼠标操作，只剪掉了等待，没有任何合成。
 
 ## 体验版现在到哪了
 
