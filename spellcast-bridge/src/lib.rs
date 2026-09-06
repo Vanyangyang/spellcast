@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod mcp;
+pub mod observer;
 #[cfg(test)]
 mod reply_tests;
 mod store;
@@ -199,6 +200,7 @@ pub struct Bridge {
     notify: Notify,
     surface: Box<dyn Surface>,
     admission: Mutex<Admission>,
+    observers: Mutex<observer::Observers>,
 }
 
 impl Bridge {
@@ -236,6 +238,7 @@ impl Bridge {
             notify: Notify::new(),
             surface: Box::new(surface),
             admission: Mutex::new(Admission::default()),
+            observers: Mutex::new(observer::Observers::default()),
         }
     }
 
@@ -477,36 +480,13 @@ impl Bridge {
     }
 
     pub async fn bubble(&self, req: BubbleRequest) -> Result<BubbleOutcome, SpellcastError> {
-        if let Some(source) = &req.source_id {
-            self.identify_source(source, None)?;
-        }
-        self.hello_quiet();
         let wait = req.wait.unwrap_or(0).min(120);
-        let (bubble, since) = {
-            let state = self.state.lock().unwrap();
-            (state.session.bubble(req)?, state.inbox.last_seq())
-        };
-        let shown = match self.dispatch(std::slice::from_ref(&bubble)) {
-            Ok(n) => n > 0,
-            Err(err) => {
-                return Ok(BubbleOutcome {
-                    bubble,
-                    outcome: "not_shown".into(),
-                    text: Some(err),
-                    events: vec![],
-                    last_seq: since,
-                });
-            }
-        };
-        if !shown || wait == 0 {
-            return Ok(BubbleOutcome {
-                bubble,
-                outcome: if shown { "accepted" } else { "not_shown" }.into(),
-                text: None,
-                events: vec![],
-                last_seq: since,
-            });
+        let result = self.bubble_now(req)?;
+        if result.outcome != "accepted" || wait == 0 {
+            return Ok(result);
         }
+        let bubble = result.bubble;
+        let since = result.last_seq;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(wait));
         loop {
             let notified = self.notify.notified();
@@ -538,6 +518,36 @@ impl Bridge {
                 });
             }
         }
+    }
+
+    fn bubble_now(&self, req: BubbleRequest) -> Result<BubbleOutcome, SpellcastError> {
+        if let Some(source) = &req.source_id {
+            self.identify_source(source, None)?;
+        }
+        self.hello_quiet();
+        let (bubble, since) = {
+            let state = self.state.lock().unwrap();
+            (state.session.bubble(req)?, state.inbox.last_seq())
+        };
+        let shown = match self.dispatch(std::slice::from_ref(&bubble)) {
+            Ok(n) => n > 0,
+            Err(err) => {
+                return Ok(BubbleOutcome {
+                    bubble,
+                    outcome: "not_shown".into(),
+                    text: Some(err),
+                    events: vec![],
+                    last_seq: since,
+                });
+            }
+        };
+        Ok(BubbleOutcome {
+            bubble,
+            outcome: if shown { "accepted" } else { "not_shown" }.into(),
+            text: None,
+            events: vec![],
+            last_seq: since,
+        })
     }
 
     pub async fn listen(&self, since: u64, wait: u32) -> (Vec<AgentEvent>, u64) {

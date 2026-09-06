@@ -18,6 +18,7 @@ use serde_json::json;
 use spellcast_core::types::{BubbleRequest, PresentPayload, ProposedNode, ProposedThrow};
 use spellcast_core::{ReplyPatchRequest, ReplyRequest};
 
+use crate::observer::{CheckpointRequest, ObserverCompletion};
 use crate::{Bridge, TRUSTED_ORIGINS, VERSION};
 
 pub const PROTOCOL_VERSION: &str = "2025-03-26";
@@ -25,6 +26,8 @@ pub const PROTOCOL_VERSION: &str = "2025-03-26";
 pub const INSTRUCTIONS: &str = r#"Spellcast is the user's local desktop stage and everything board. The model stays in its existing host.
 
 Use spellcast_bubble sparingly for a worthwhile aside from the Agent's current task. It appears on the user's foreground display without bringing the host or board forward. Selected board mode and actual window focus are separate: surface=focus is not a pause when board_focused=false. A kept bubble becomes a board fragment. Use one stable source_id for the originating task, and reuse it when listening.
+
+When the user enables independent asides for a task, call spellcast_checkpoint at a materially new natural checkpoint with a short project snapshot, not conversation history. Only status=ready permits one fresh host-native subagent with no history fork. Forward only its brief and the observer instructions from the Spellcast skill. The child decides whether there is a worthwhile aside, then calls spellcast_observer_complete directly with a thought or null. It returns only the delivery status to its parent. The parent continues its work without waiting or reading the child's analysis. Do not author a test bubble, force a quota, use timer polling, or silently replace an unavailable subagent with inline reasoning. Cancel via snapshot=null on stop/task end/project switch. The server gates and validates tickets; the host must actually spawn the child. Spellcast does not itself run a model.
 
 When the user enters board mode or asks to develop a kept idea, the board can carry the full reply. Use spellcast_reply with text, comparison, graph, and sequence blocks, and origin_node_id when developing an adopted fragment. Use spellcast_present for loose fragments. Never reduce the user's requested board reply to a progress notification.
 
@@ -345,6 +348,36 @@ impl SpellcastMcp {
             .await
             .map_err(Self::error)?;
         Self::result(result)
+    }
+
+    #[tool(
+        name = "spellcast_checkpoint",
+        description = "For an enabled independent observer: offer a short current-project checkpoint. A ready result contains the only brief to give a fresh host subagent without history. Other results mean do not spawn. snapshot=null cancels this source's pending observer. This tool does not spawn a model."
+    )]
+    async fn checkpoint(
+        &self,
+        Parameters(params): Parameters<CheckpointRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.identify(&context);
+        Self::result(self.bridge.checkpoint(params).map_err(Self::error)?)
+    }
+
+    #[tool(
+        name = "spellcast_observer_complete",
+        description = "An isolated observer submits its single decision directly. thought=null means silence. A thought must be grounded in the supplied project snapshot, not progress or the main answer. The ticket enforces original source, freshness and one completion; return only the compact status to the parent."
+    )]
+    async fn observer_complete(
+        &self,
+        Parameters(params): Parameters<ObserverCompletion>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.identify(&context);
+        Self::result(
+            self.bridge
+                .complete_observation(params)
+                .map_err(Self::error)?,
+        )
     }
 
     #[tool(
