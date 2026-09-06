@@ -9,7 +9,7 @@ Want Astra to roast your project? Remember what you meant to come back to? Give 
 
 Your agent keeps working on your task. Its asides appear as bubbles on the display you are currently using, above your work without bringing the agent window forward. Keep a thought, bring it onto the board, and develop it with text, comparisons, relationships, and storyboards.
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows / macOS)](https://github.com/Vanyangyang/spellcast/releases/latest)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Build from source](#develop-locally)
 
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
@@ -17,7 +17,7 @@ Real Windows desktop, real mouse input, waits trimmed, nothing synthesized.
 
 ## Where the preview stands
 
-- **Published build:** [0.2.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. Windows is the only platform verified by hand; the macOS builds only passed CI packaging.
+- **No published build right now.** The earlier MIT-licensed previews (0.1.x–0.2.1) have been withdrawn; the next build will ship under AGPL-3.0 from `main`. Until then, build from source.
 - **In `main`, not yet in a build:** bubbles follow the display of your foreground window; a kept bubble stays where you drop it, an unkept one pauses five seconds after a drag and then keeps rising; double-clicking a bubble opens exactly that thought on the board. Immediate rise, star → stays at the top, drag a kept bubble → stays put, ignore → fades, double-click → board with that node selected have passed with real mouse input; the five-second pause after dragging an unkept bubble and un-starring are still untested. Details in [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md).
 - **Expect rough edges.** Layout, copy, and the agent Skill are still changing between previews. Feedback and issues are welcome.
 
@@ -45,19 +45,19 @@ Spellcast is a local desktop app, connected through MCP. It does not run a model
 
 Feedback remains queued until the originating task reads and acknowledges it. **An inactive host is not automatically awakened.** The bundled Skill teaches the agent when to check feedback, when a bubble is worth showing, and when to reply on the board.
 
-The development build adds **independent asides**. Enable them for a task, and the host offers a short project snapshot at a meaningful checkpoint. A fresh subagent with no conversation-history fork decides whether there is anything worth saying; silence is valid. It submits directly to Spellcast and returns only a compact status to the main task. Checkpoint tickets limit repetition and reject expired or superseded work. This needs a host with isolated subagents and native MCP access; it does not install a background model service. See the [observer implementation and verification](docs/reviews/2026-09-06-independent-observer.md) for the current evidence boundary. Existing release downloads do not include this feature yet.
+The development build adds **independent asides**. Enable them for a task, and the host offers a short project snapshot at a meaningful checkpoint. A fresh subagent with no conversation-history fork decides whether there is anything worth saying; silence is valid. It submits directly to Spellcast and returns only a compact status to the main task. Checkpoint tickets limit repetition and reject expired or superseded work. This needs a host with isolated subagents and native MCP access; it does not install a background model service. See the [observer implementation and verification](docs/reviews/2026-09-06-independent-observer.md) for the current evidence boundary. No published build includes this feature yet.
 
 Kept ideas and replies survive restart. Durable memory is separate: save only what you choose, inspect it in **Memory**, search it, and forget individual entries. Keeping a bubble does not automatically create a memory.
 
 ## Get started
 
-1. Download and run the latest **Windows x64 preview build** from [Releases](https://github.com/Vanyangyang/spellcast/releases/latest), or build from source (below) to get everything in `main`.
+1. Build and run the desktop app from source (below); `main` is the only distribution at the moment.
 2. Open **Settings**, choose your host, and review its MCP configuration. Supported writers merge only Spellcast's entry and back up the original file. Other hosts get a configuration snippet.
 3. Install the bundled **Skill**, reload your host's agent, and ask it to use Spellcast.
 
 The desktop app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. Connection setup supports Cursor, Codex, Windsurf, Claude Code, and generic MCP clients; runtime behavior still depends on the host's tool and lifecycle support.
 
-Apple Silicon and Intel macOS builds are produced by the same release workflow. They passed CI packaging; [runtime verification is currently Windows-only](docs/releases/0.2.1.md).
+The release workflow also produces Apple Silicon and Intel macOS builds; [runtime verification is currently Windows-only](docs/releases/0.2.1.md).
 
 ## Develop locally
 
@@ -83,4 +83,8 @@ npm run tauri -- build --bundles nsis
 
 Astra helped challenge the product assumptions, build and integrate the bubble → board → feedback loop, test the interactions, and produce this demo. The graph canvas uses [AntV X6](https://github.com/antvis/X6); the desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
 
-[Agent behavior](skills/spellcast/SKILL.md) · [Release notes and verification](docs/releases/) · [MIT license](LICENSE)
+[Agent behavior](skills/spellcast/SKILL.md) · [Release notes and verification](docs/releases/) · [AGPL-3.0 license](LICENSE)
+
+## License
+
+Spellcast is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) as of September 6, 2026. Versions published before that date were MIT-licensed and have been withdrawn from Releases; copies already obtained keep their original MIT terms.
