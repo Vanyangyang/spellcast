@@ -11,14 +11,16 @@ Your agent keeps working on your task. Its asides appear as bubbles on the displ
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows / macOS)](https://github.com/Vanyangyang/spellcast/releases/latest)
 
-[![Watch the Spellcast desktop demo](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)
+[![Watch the Spellcast calendar demo](docs/assets/spellcast-calendar-demo-cover.png)](https://github.com/Vanyangyang/spellcast/raw/main/docs/assets/spellcast-calendar-demo.mp4)
 
-**[Watch the desktop demo](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)** — task-related bubbles while you keep working, then adoption, board replies, and feedback. Recorded in the real Windows app and edited for pacing. A new recording with the current bubble interactions is in progress.
+**[Watch the calendar demo (84 s)](https://github.com/Vanyangyang/spellcast/raw/main/docs/assets/spellcast-calendar-demo.mp4)** — a Codex CLI session planned a week; while the finished calendar is on screen, an independent observer drops one aside as a bubble, two more follow. Star what is worth keeping, let the rest drift away, double-click to open that thought on the board, then switch the board between its four forms. Recorded from the real Windows desktop with real mouse input; waits are cut and some rises are sped up, nothing is synthesized. Ends with a teaser for the next step: the agent developing a kept thought into a full board reply.
+
+The earlier notepad demo is still at [releases/v0.2.0](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4).
 
 ## Where the preview stands
 
 - **Published build:** [0.2.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. Windows is the only platform verified by hand; the macOS builds only passed CI packaging.
-- **In `main`, not yet in a build:** bubbles follow the display of your foreground window; a kept bubble stays where you drop it, an unkept one pauses five seconds after a drag and then keeps rising; double-clicking a bubble opens exactly that thought on the board. Real-input acceptance of these is tracked in [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md).
+- **In `main`, not yet in a build:** bubbles follow the display of your foreground window; a kept bubble stays where you drop it, an unkept one pauses five seconds after a drag and then keeps rising; double-clicking a bubble opens exactly that thought on the board. Immediate rise, star → stays at the top, drag a kept bubble → stays put, ignore → fades, double-click → board with that node selected have passed with real mouse input; the five-second pause after dragging an unkept bubble and un-starring are still untested. Details in [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md).
 - **Expect rough edges.** Layout, copy, and the agent Skill are still changing between previews. Feedback and issues are welcome.
 
 ## From a spark to something you can work with
@@ -44,6 +46,8 @@ Switch to another application and desktop bubbles resume while the board keeps i
 Spellcast is a local desktop app, connected through MCP. It does not run a model or require a model API key. Your agent continues to use its existing host and model.
 
 Feedback remains queued until the originating task reads and acknowledges it. **An inactive host is not automatically awakened.** The bundled Skill teaches the agent when to check feedback, when a bubble is worth showing, and when to reply on the board.
+
+The development build adds **independent asides**. Enable them for a task, and the host offers a short project snapshot at a meaningful checkpoint. A fresh subagent with no conversation-history fork decides whether there is anything worth saying; silence is valid. It submits directly to Spellcast and returns only a compact status to the main task. Checkpoint tickets limit repetition and reject expired or superseded work. This needs a host with isolated subagents and native MCP access; it does not install a background model service. See the [observer implementation and verification](docs/reviews/2026-09-06-independent-observer.md) for the current evidence boundary. Existing release downloads do not include this feature yet.
 
 Kept ideas and replies survive restart. Durable memory is separate: save only what you choose, inspect it in **Memory**, search it, and forget individual entries. Keeping a bubble does not automatically create a memory.
 

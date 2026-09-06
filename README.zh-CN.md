@@ -11,14 +11,16 @@
 
 [English](README.md) · 简体中文 · [下载体验版（Windows / macOS）](https://github.com/Vanyangyang/spellcast/releases/latest)
 
-[![观看 Spellcast 桌面演示](docs/assets/spellcast-demo-cover.png)](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)
+[![观看 Spellcast 日历演示](docs/assets/spellcast-calendar-demo-cover.png)](https://github.com/Vanyangyang/spellcast/raw/main/docs/assets/spellcast-calendar-demo.mp4)
 
-**[观看桌面演示](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)**：你继续工作，与任务相关的气泡从桌面冒出，再采纳入板、展开并反馈。画面来自实际 Windows 应用，剪辑缩短了等待。包含最新气泡交互的新演示正在录制。
+**[观看日历演示（84 秒）](https://github.com/Vanyangyang/spellcast/raw/main/docs/assets/spellcast-calendar-demo.mp4)**：一段 Codex CLI 会话排好了一周日程；做好的周历留在屏幕上时，独立观察者冒出一条旁念气泡，随后又来两条。想留的点星，不想留的任它飘走，双击直接在板上打开这条想法，再切换板的四种形态。画面来自真实 Windows 桌面和真实鼠标操作；剪掉了等待、部分上飘加速，没有任何合成。片尾预告下一步：Agent 把收藏的想法在板上展开成完整回答。
+
+更早的记事本版演示仍在 [releases/v0.2.0](https://github.com/Vanyangyang/spellcast/releases/download/v0.2.0/spellcast-demo.mp4)。
 
 ## 体验版现在到哪了
 
 - **已发布的构建：** [0.2.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.2.0)，含 Windows x64 安装包和 Apple Silicon、Intel 两个 `.dmg`。只有 Windows 经过人工验证，macOS 构建仅通过 CI 打包。
-- **已在 `main`、尚未出包：** 气泡跟随你前台窗口所在的显示器；收藏后的气泡拖到哪就停在哪，未收藏的拖动后停 5 秒再继续上飘；双击气泡直接在板上打开这条想法。真实输入验收记录见 [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md)。
+- **已在 `main`、尚未出包：** 气泡跟随你前台窗口所在的显示器；收藏后的气泡拖到哪就停在哪，未收藏的拖动后停 5 秒再继续上飘；双击气泡直接在板上打开这条想法。立即上飘、点星后顶部常驻、收藏后拖动原地驻留、不理会则消散、双击进板并选中该节点，均已用真实鼠标通过；未收藏拖动后停 5 秒再恢复、取消收藏后恢复，仍未测。详见 [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md)。
 - **会有毛边。** 版式、文案和 Agent Skill 在各个体验版之间还会变，欢迎反馈和提 issue。
 
 ## 一个念头，如何长成可以继续创作的东西
@@ -44,6 +46,8 @@
 Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不需要填写模型 API Key。Agent 继续使用原来的宿主和模型。
 
 反馈会留在队列中，直到原任务读取并确认处理。**它不会自动唤醒已经停止的宿主任务。** 随软件分发的 Skill 会告诉 Agent 何时查看反馈、什么时候值得抛气泡，以及何时直接在板上回复。
+
+开发构建新增了**独立旁念**：为当前任务启用后，宿主在有实质进展的检查点提供短项目快照，由不继承对话历史的子代理独立判断是否值得冒泡；保持安静也是正常结果。子代理直接向 Spellcast 提交决定，只给主任务返回简短状态。检查点凭证限制重复，并拒绝过期或已被新进展替代的内容。这需要宿主支持隔离子代理和原生 MCP，不会另装后台模型服务。当前验证范围见[独立观察机制记录](docs/reviews/2026-09-06-independent-observer.md)；已有发布包尚不包含此功能。
 
 采纳的想法和板上回复可以跨重启保留。长期记忆是另一项明确操作：你决定记住什么，在 **记忆** 中查看、搜索和逐条遗忘。收藏气泡不会自动建立长期记忆。
 

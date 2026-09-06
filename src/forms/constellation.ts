@@ -18,7 +18,9 @@ export function renderConstellation(
     .map((n) => {
       const left = mapRange(n.x, box.minX, box.maxX, 8, 86);
       const top = mapRange(n.z, box.minZ, box.maxZ, 10, 78);
-      return `<div class="pin" data-pin="${n.id}" style="left:${left}%;top:${top}%">${cardHtml(n, n.id === selected)}</div>`;
+      // The outermost fragments map to 8% / 86%; on a narrow plane that lands a 240px card
+      // half outside the window. Keep the whole card inside so a focused thought is readable.
+      return `<div class="pin" data-pin="${n.id}" style="left:clamp(132px, ${left}%, calc(100% - 132px));top:${top}%">${cardHtml(n, n.id === selected)}</div>`;
     })
     .join("");
 

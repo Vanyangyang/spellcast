@@ -1,5 +1,12 @@
 # 气泡交互收尾验收记录（2026-09-06）
 
+## Codex 接回后的核对（16:35）
+
+- 当前 HEAD `75f5fe0`；仅保留交接指出的三个未跟踪旧文件。实际应用 PID `53180`，`/api/health` 正常，原有两张卡片 ID 未变。
+- 创建了一条 `diag:codex-native-acceptance-20260906` 诊断气泡。Computer Use 能读取气泡截图，但激活及点击先后返回 `failed to activate captured window`；没有成功的点击、拖动或双击证据。已停止输入并请用户切回普通桌面或手动验收，未运行交接中的自制 SendInput 脚本。
+- 最新原生交互验收仍未完成，不能将下述组件通过记录升级为原生通过。
+- 已准备并检查全英文 6 秒片尾：`artifacts/launch-0.2.1/calendar-demo/preview-end-card.mp4`。新 CLI 预检启动脚本在 `G:\Demos\Calendar\start-codex-final.ps1`，尚未启动。旧 CLI PID `39088` 保留。
+
 对应交接：`docs/HANDOFF-BUBBLE-ACCEPTANCE-2026-09-06.md`。本次不录演示、不发布。
 
 ## 修改文件
@@ -58,3 +65,31 @@
 - 组件检查结果：本文件"构建与组件检查"一节（Playwright 返回 `checks: 11, passed: true`）。
 - 原生只读采样与截图：`%USERPROFILE%\.playwright-mcp\spellcast-native\scenario-A.json`、`shot-154538-414.png`、`shot-154540-248.png`（气泡渲染正常、星星位于 right-41/top+41）。
 - 输入驱动脚本（已修正结构体、未运行）：`%USERPROFILE%\.playwright-mcp\spellcast-native\native.ps1`、`scenario.ps1`。
+
+## 原生鼠标验收与演示实拍（20:06–20:37，Cursor 宿主）
+
+Codex 无额度，本轮由 Cursor 会话作宿主。屏幕上的 Codex CLI 终端是当天做日历的真实会话（`gpt-5.6-sol`），入镜时只展示其历史输出，未再输入。三条实拍原始文件均保留在 `artifacts/launch-0.2.1/calendar-demo/`，录制脚本 `CAPTURE-TAKE.ps1` 在 `*.mkv.start.json` 里记下起录毫秒，下表时间即 `/api/events` 的 `at_ms` 对齐到镜头的秒数。用户亲手操作鼠标，未用合成输入。
+
+### Take 1 `final-live-20260906-200654.mkv`（148 s）
+
+- `spellcast_checkpoint(cursor:calendar-demo-20260906, calendar-week-2026-09-07-final-review-desktop)` → `ready`；隔离子代理（无历史）调用 `spellcast_observer_complete` 返回 `accepted`。
+- seq 28 `ready`（+87.0 s）→ 立即上飘；seq 29 `kept`（+101.7 s，node `077c88ab…`）→ 继续上飘、到顶常驻；+108–114 s 拖到终端右侧松手后原地驻留；seq 30 `kept` + seq 31 `poke on_poke=focus`（+117.6 s）→ 主窗口进入想法视图并选中该节点。
+- 发现问题：Scatter 布局把最左碎片放在 8% 处、卡片 240px 居中，窄窗口下被左边缘裁掉。修复 `src/forms/constellation.ts`（`left` 夹在 `132px … calc(100% - 132px)`），`npm run build` + `cargo build --release`，PID 37540 经 `WM_CLOSE` 正常退出后以同端口、同数据库重启为 PID 61600。
+- 重启前 seq 32 `cleared` 为用户在板上亲手按 Clear；本轮未由代理清空或删除任何节点。
+
+### Take 2 `final-live-20260906-202852.mkv`（188.8 s）
+
+- 第二次 checkpoint（`…-post-review-zero-slack`，变化为用户保留了零余量顾虑）→ `ready` → 子代理 `accepted`。seq 33 `ready`（+66.9 s）未被触碰，seq 35 `expired`（+84.9 s）：未收藏气泡上飘后自然消散。
+- 用户明确要求同镜头出现多条，主任务按技能允许的方式直接 `spellcast_bubble` 两条与日历项目相关的旁念（seq 34、37）；两条均被收藏（seq 36、38），并排常驻顶部。seq 39 `kept` + seq 40 `poke`（+150.3 s，node `a3a32d89…`）→ 双击进板、选中该条；修复后卡片完整可见。本条未做拖动。
+- 三条气泡来源：1 条独立观察者、2 条用户要求下的直接旁念，成片字幕只写 "an independent observer" 于第一条。
+
+### Take 3 `final-live-20260906-203547.mkv`（81 s）
+
+- 板上四种形态切换：Scatter（0–27 s）→ Space（28 s）→ Sequence（37 s）→ Side by side（46 s 起）。
+
+### 结论
+
+- 原生通过：新气泡立即上飘；收藏后继续上飘并顶部常驻；收藏后拖动原地驻留（Take 1）；未收藏不理会则消散（Take 2）；双击进板并选中对应 `node_id`（两条）。
+- 仍未测：未收藏拖动后停 5 s 再恢复；取消收藏后恢复上飘。
+- 成片 `spellcast-calendar-demo.mp4`（`BUILD-DEMO.ps1`，83.7 s，1920×1080）：只剪等待、部分加速、裁掉任务栏、加字幕与两张黑底卡（片头、下一功能预告）+ 6 s 片尾；无合成气泡。副本发布在 `docs/assets/spellcast-calendar-demo.mp4`。
+- 未打新 tag、未出包。v0.2.1 安装包不含以上交互与观察机制。
