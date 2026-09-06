@@ -4,9 +4,9 @@ members = ["spellcast-core", "spellcast-bridge", "spellcast-server"]
 exclude = ["src-tauri"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 rust-version = "1.88"
 
 [workspace.dependencies]

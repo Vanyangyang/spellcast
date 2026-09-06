@@ -1,6 +1,6 @@
 # Spellcast implementation handoff
 
-Current release: **0.2.1**. Start with [README](README.md), [release evidence](docs/releases/0.2.1.md), and the canonical [Spellcast Skill](skills/spellcast/SKILL.md).
+Current release: **0.3.0**. Start with [README](README.md), [release evidence](docs/releases/0.3.0.md), and the canonical [Spellcast Skill](skills/spellcast/SKILL.md).
 
 Spellcast has two connected surfaces: sparse OS bubbles, and an Everything board where the existing host agent can compose complete replies. Adopting a bubble saves it onto the board. An explicit request to develop it leads to a structured board reply. User feedback stays attached to its source task and content block. Spellcast does not run a model or automatically wake an idle host.
 

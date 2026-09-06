@@ -2,7 +2,7 @@
 
 [package]
 name = "spellcast"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Spellcast desktop shell — Windows and macOS"

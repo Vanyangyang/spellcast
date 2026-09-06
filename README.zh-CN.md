@@ -9,7 +9,7 @@
 
 试试 **Spellcast**。Agent 继续处理你的任务，与任务相关的吐槽、提醒和灵感，会从你当前操作的显示器上冒出来，不必切回 Agent 窗口。喜欢哪个，就收进板里，用文字、对比、关系图和分镜继续展开。
 
-[English](README.md) · 简体中文 · [从源码构建](#本地开发)
+[English](README.md) · 简体中文 · [下载体验版（Windows / macOS）](https://github.com/Vanyangyang/spellcast/releases/latest)
 
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
 ## 体验版现在到哪了
 
-- **目前没有已发布的构建。** 早先的 MIT 体验版（0.1.x–0.2.1）已撤下；下一版会从 `main` 以 AGPL-3.0 发布。在此之前请从源码构建。
+- **已发布的构建：** [0.3.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.3.0)，含 Windows x64 安装包和 Apple Silicon、Intel 两个 `.dmg`。只有 Windows 经过人工验证，macOS 构建仅通过 CI 打包。
 - **已在 `main`、尚未出包：** 气泡跟随你前台窗口所在的显示器；收藏后的气泡拖到哪就停在哪，未收藏的拖动后停 5 秒再继续上飘；双击气泡直接在板上打开这条想法。立即上飘、点星后顶部常驻、收藏后拖动原地驻留、不理会则消散、双击进板并选中该节点，均已用真实鼠标通过；未收藏拖动后停 5 秒再恢复、取消收藏后恢复，仍未测。详见 [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md)。
 - **会有毛边。** 版式、文案和 Agent Skill 在各个体验版之间还会变，欢迎反馈和提 issue。
 
@@ -45,19 +45,19 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 反馈会留在队列中，直到原任务读取并确认处理。**它不会自动唤醒已经停止的宿主任务。** 随软件分发的 Skill 会告诉 Agent 何时查看反馈、什么时候值得抛气泡，以及何时直接在板上回复。
 
-开发构建新增了**独立旁念**：为当前任务启用后，宿主在有实质进展的检查点提供短项目快照，由不继承对话历史的子代理独立判断是否值得冒泡；保持安静也是正常结果。子代理直接向 Spellcast 提交决定，只给主任务返回简短状态。检查点凭证限制重复，并拒绝过期或已被新进展替代的内容。这需要宿主支持隔离子代理和原生 MCP，不会另装后台模型服务。当前验证范围见[独立观察机制记录](docs/reviews/2026-09-06-independent-observer.md)；已有发布包尚不包含此功能。
+0.3.0 新增了**独立旁念**：为当前任务启用后，宿主在有实质进展的检查点提供短项目快照，由不继承对话历史的子代理独立判断是否值得冒泡；保持安静也是正常结果。子代理直接向 Spellcast 提交决定，只给主任务返回简短状态。检查点凭证限制重复，并拒绝过期或已被新进展替代的内容。这需要宿主支持隔离子代理和原生 MCP，不会另装后台模型服务。当前验证范围见[独立观察机制记录](docs/reviews/2026-09-06-independent-observer.md)。
 
 采纳的想法和板上回复可以跨重启保留。长期记忆是另一项明确操作：你决定记住什么，在 **记忆** 中查看、搜索和逐条遗忘。收藏气泡不会自动建立长期记忆。
 
 ## 开始使用
 
-1. 按下文从源码构建并运行桌面程序；目前只有 `main` 这一个发行渠道。
+1. 从 [Releases](https://github.com/Vanyangyang/spellcast/releases/latest) 下载并运行最新的 **Windows x64 体验版**，或按下文从源码运行。
 2. 打开 **设置**，选中正在使用的宿主并查看 MCP 配置。支持的写入器只合并 Spellcast 条目，修改前备份原文件；其他客户端提供配置片段。
 3. 安装内置 **Skill**，重载宿主中的 Agent，再请它使用 Spellcast。
 
 使用期间需要保持桌面应用运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。连接设置支持 Cursor、Codex、Windsurf、Claude Code 和通用 MCP 客户端；具体运行体验取决于宿主的工具与任务生命周期支持。
 
-发布流程也会产出 Apple Silicon 和 Intel macOS 构建；[当前原生交互验证仅覆盖 Windows](docs/releases/0.2.1.md)。
+发布流程也会产出 Apple Silicon 和 Intel macOS 构建；[当前原生交互验证仅覆盖 Windows](docs/releases/0.3.0.md)。
 
 ## 本地开发
 
@@ -84,7 +84,3 @@ npm run tauri -- build --bundles nsis
 Astra 帮助检查产品理解，构建并整合气泡 → 板 → 反馈更新的流程，验证交互，并制作这段演示。关系图使用 [AntV X6](https://github.com/antvis/X6)，桌面外壳使用 [Tauri](https://github.com/tauri-apps/tauri)。
 
 [Agent 行为说明](skills/spellcast/SKILL.md) · [版本说明与验证记录](docs/releases/) · [AGPL-3.0 许可证](LICENSE)
-
-## 许可证
-
-自 2026 年 9 月 6 日起，Spellcast 采用 [GNU Affero 通用公共许可证 v3.0 或更高版本](LICENSE)。此前发布的版本为 MIT 许可，已从 Releases 撤下；已经取得的副本仍按原 MIT 条款。
