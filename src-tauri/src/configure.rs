@@ -9,8 +9,21 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use toml_edit::{value, DocumentMut, Item, Table};
 
-// One canonical skill is copied into each supported client's native global skill directory.
+// Canonical skill root plus a fixed, known reference set. Not a recursive tree copy.
 const SPELLCAST_SKILL: &str = include_str!("../../skills/spellcast/SKILL.md");
+const SPELLCAST_REF_ASIDES: &str = include_str!("../../skills/spellcast/references/asides.md");
+const SPELLCAST_REF_CANVAS: &str = include_str!("../../skills/spellcast/references/canvas.md");
+const SPELLCAST_REF_WORKS: &str = include_str!("../../skills/spellcast/references/works.md");
+const SPELLCAST_REF_FEEDBACK: &str = include_str!("../../skills/spellcast/references/feedback.md");
+
+fn skill_reference_files() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("references/asides.md", SPELLCAST_REF_ASIDES),
+        ("references/canvas.md", SPELLCAST_REF_CANVAS),
+        ("references/works.md", SPELLCAST_REF_WORKS),
+        ("references/feedback.md", SPELLCAST_REF_FEEDBACK),
+    ]
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ClientConfig {
@@ -170,11 +183,27 @@ pub fn install_skill(client: &str) -> Result<SkillInstall, String> {
 fn install_skill_for_home(client: &str, home: &Path) -> Result<SkillInstall, String> {
     let path = skill_path_for_home(client, home)?
         .ok_or_else(|| "这个客户端没有可确认的全局 Skill 目录，只提供手动安装。".to_string())?;
-    let backup = commit_with_backup(&path, SPELLCAST_SKILL.as_bytes())?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| format!("Skill 路径没有父目录：{}", path.display()))?;
+
+    // Write the known reference files first. Do not publish a new root that points at missing refs.
+    let mut ref_backups = Vec::new();
+    for (relative, contents) in skill_reference_files() {
+        let dest = dir.join(Path::new(relative));
+        match commit_with_backup(&dest, contents.as_bytes()) {
+            Ok(Some(backup)) => ref_backups.push(backup),
+            Ok(None) => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    let root_backup = commit_with_backup(&path, SPELLCAST_SKILL.as_bytes())?;
+    let backup = root_backup.clone().or_else(|| ref_backups.first().cloned());
     let note = match &backup {
-        Some(path) => format!(
+        Some(backup_path) => format!(
             "Skill 已安装；原文件备份在 {}。重载 Agent 后生效。",
-            path.display()
+            backup_path.display()
         ),
         None => "Skill 已安装或已是最新版。重载 Agent 后生效。".into(),
     };
@@ -287,7 +316,7 @@ fn merge_codex_toml(path: &Path, url: &str) -> Result<String, String> {
     Ok(doc.to_string())
 }
 
-fn commit_with_backup(path: &Path, contents: &[u8]) -> Result<Option<PathBuf>, String> {
+pub(crate) fn commit_with_backup(path: &Path, contents: &[u8]) -> Result<Option<PathBuf>, String> {
     if path.exists() {
         let meta = fs::symlink_metadata(path)
             .map_err(|err| format!("检查不了 {}：{err}", path.display()))?;
@@ -501,14 +530,92 @@ mod tests {
 
         let first = install_skill_for_home("cursor", &dir).unwrap();
         assert_eq!(fs::read_to_string(&first.path).unwrap(), SPELLCAST_SKILL);
+        assert_skill_files(&PathBuf::from(&first.path));
+        assert!(first.backup.is_none());
+
+        let again = install_skill_for_home("cursor", &dir).unwrap();
+        assert!(again.backup.is_none());
+        assert_eq!(fs::read_to_string(&again.path).unwrap(), SPELLCAST_SKILL);
+        assert_skill_files(&PathBuf::from(&again.path));
+
         fs::write(&first.path, "user-edited skill").unwrap();
+        let asides = PathBuf::from(&first.path)
+            .parent()
+            .unwrap()
+            .join("references/asides.md");
+        fs::write(&asides, "user-edited asides").unwrap();
+        let extra = PathBuf::from(&first.path)
+            .parent()
+            .unwrap()
+            .join("notes-keep.txt");
+        fs::write(&extra, "leave me").unwrap();
         let updated = install_skill_for_home("cursor", &dir).unwrap();
         assert_eq!(fs::read_to_string(&updated.path).unwrap(), SPELLCAST_SKILL);
+        assert_eq!(fs::read_to_string(&asides).unwrap(), SPELLCAST_REF_ASIDES);
+        assert_eq!(fs::read_to_string(&extra).unwrap(), "leave me");
         assert_eq!(
             fs::read_to_string(updated.backup.unwrap()).unwrap(),
             "user-edited skill"
         );
+        let asides_backup = fs::read_dir(asides.parent().unwrap())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("asides.md.spellcast.bak")
+            })
+            .expect("asides backup");
+        assert_eq!(
+            fs::read_to_string(asides_backup.path()).unwrap(),
+            "user-edited asides"
+        );
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skill_installer_does_not_publish_new_root_when_a_reference_write_fails() {
+        let dir = test_dir("skills-ref-fail");
+        let skill_dir = dir.join(".cursor/skills/spellcast");
+        fs::create_dir_all(skill_dir.join("references")).unwrap();
+        let root = skill_dir.join("SKILL.md");
+        fs::write(&root, "old-root").unwrap();
+        fs::create_dir_all(skill_dir.join("references/asides.md")).unwrap();
+
+        let err = install_skill_for_home("cursor", &dir).unwrap_err();
+        assert!(err.contains("不是普通文件"), "{err}");
+        assert_eq!(fs::read_to_string(&root).unwrap(), "old-root");
+        assert!(!skill_dir.join("references/canvas.md").exists());
+        assert!(!skill_dir.join("references/works.md").exists());
+        assert!(!skill_dir.join("references/feedback.md").exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skill_installer_rejects_non_regular_root_without_deleting_unrelated_files() {
+        let dir = test_dir("skills-root-dir");
+        let skill_dir = dir.join(".cursor/skills/spellcast");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::create_dir_all(skill_dir.join("SKILL.md")).unwrap();
+        let keep = skill_dir.join("user-notes.txt");
+        fs::write(&keep, "keep").unwrap();
+        let err = install_skill_for_home("cursor", &dir).unwrap_err();
+        assert!(err.contains("不是普通文件"), "{err}");
+        assert!(skill_dir.join("SKILL.md").is_dir());
+        assert_eq!(fs::read_to_string(&keep).unwrap(), "keep");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn assert_skill_files(root: &Path) {
+        let dir = root.parent().unwrap();
+        assert_eq!(fs::read_to_string(root).unwrap(), SPELLCAST_SKILL);
+        for (relative, contents) in skill_reference_files() {
+            assert_eq!(
+                fs::read_to_string(dir.join(Path::new(relative))).unwrap(),
+                *contents
+            );
+        }
     }
 
     fn test_dir(label: &str) -> PathBuf {

@@ -1,0 +1,31 @@
+:root { color-scheme: light; font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; color: #253448; background: #f4f7fa; font-synthesis: none; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; padding: clamp(18px, 3vw, 34px); }
+header { max-width: 1000px; margin: 0 auto 24px; }
+.eyebrow { color: #567f77; text-transform: uppercase; letter-spacing: .15em; font-size: 11px; font-weight: 700; }
+h1 { font-size: clamp(25px, 3.8vw, 38px); letter-spacing: -.04em; margin: 8px 0 10px; line-height: 1.2; }
+p { line-height: 1.7; color: #65758b; font-size: 13px; }
+main { max-width: 1100px; margin: auto; }
+.grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; }
+.card { background: #fff; border: 1px solid #dee5ec; border-radius: 16px; padding: 20px; box-shadow: 0 8px 24px #24334a05; min-width: 0; }
+.bar { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 16px 0; }
+button, select, input, textarea { font: inherit; }
+button, select { padding: 9px 13px; border: 1px solid #d2dce6; border-radius: 8px; background: #fff; color: #2f435b; cursor: pointer; }
+button:hover { background: #e9f2ef; border-color: #a2bfb3; }
+button.primary { background: #235f56; color: #fff; border-color: #235f56; }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #73aaff; outline-offset: 2px; }
+label { display: flex; flex-direction: column; gap: 9px; font-size: 13px; font-weight: 600; margin: 15px 0; }
+input[type=range] { width: 100%; accent-color: #2c796d; }
+input[type=number], textarea { padding: 9px; border: 1px solid #ccd8e4; border-radius: 8px; width: 100%; color: #24344c; background: #fff; }
+output, .metric { color: #235f56; font-variant-numeric: tabular-nums; }
+.metric { font-size: 34px; font-weight: 650; letter-spacing: -.04em; }
+.muted { font-size: 11px; color: #7a8b9c; }
+.error { color: #a12839; }
+svg { display: block; max-width: 100%; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+td, th { text-align: left; padding: 12px; border-bottom: 1px solid #e4eaf0; }
+th { color: #718197; font-size: 11px; font-weight: 600; }
+@media (max-width: 700px) { .grid { grid-template-columns: 1fr; } body { padding: 18px; } .card { padding: 16px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

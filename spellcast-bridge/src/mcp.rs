@@ -16,26 +16,21 @@ use rmcp::{schemars, tool, tool_handler, tool_router, RoleServer, ServerHandler}
 use serde::Deserialize;
 use serde_json::json;
 use spellcast_core::types::{BubbleRequest, PresentPayload, ProposedNode, ProposedThrow};
-use spellcast_core::{ReplyPatchRequest, ReplyRequest};
+use spellcast_core::ReplyPatchRequest;
 
+use crate::feedback::{BindCodexRequest, ReplySubmission};
 use crate::observer::{CheckpointRequest, ObserverCompletion};
 use crate::{Bridge, TRUSTED_ORIGINS, VERSION};
 
 pub const PROTOCOL_VERSION: &str = "2025-03-26";
 
-pub const INSTRUCTIONS: &str = r#"Spellcast is the user's local desktop stage and everything board. The model stays in its existing host.
+pub const INSTRUCTIONS: &str = r#"Spellcast is the user's local desktop stage and Canvas. The model stays in its existing host. User-submitted Canvas feedback can continue the original task through the running Codex Desktop app. Independent aside checkpoints do not start task execution or guarantee automatic asides.
 
-Use spellcast_bubble sparingly for a worthwhile aside from the Agent's current task. It appears on the user's foreground display without bringing the host or board forward. Selected board mode and actual window focus are separate: surface=focus is not a pause when board_focused=false. A kept bubble becomes a board fragment. Use one stable source_id for the originating task, and reuse it when listening.
+Use one stable source_id for the originating task when sending bubbles, publishing Canvas replies, or handling that task's feedback. In Codex, before the first non-null spellcast_checkpoint, bind that source once to the actual host startup metadata or CODEX_THREAD_ID and cwd. Do this only once. Never use an Observer child's task id, guess the most recent task, re-bind on later checkpoints, or invent identity when it is missing. This is mechanical wiring so feedback can return to the originating task; it is not a bubble-value gate and does not add Skill reads or in-chat announcements. Memory-only work does not bind a task and does not start aside checks.
 
-When the user enables independent asides for a task, call spellcast_checkpoint at a materially new natural checkpoint with a short project snapshot, not conversation history. Only status=ready permits one fresh host-native subagent with no history fork. Forward only its brief and the observer instructions from the Spellcast skill. The child decides whether there is a worthwhile aside, then calls spellcast_observer_complete directly with a thought or null. It returns only the delivery status to its parent. The parent continues its work without waiting or reading the child's analysis. Do not author a test bubble, force a quota, use timer polling, or silently replace an unavailable subagent with inline reasoning. Cancel via snapshot=null on stop/task end/project switch. The server gates and validates tickets; the host must actually spawn the child. Spellcast does not itself run a model.
+The App aside switch is the authority for independent asides. When enabled and not paused, the main task submits a short spellcast_checkpoint snapshot at the first substantial context and whenever a plan, new evidence, or a new constraint appears. The main task only recognizes that new context; it does not pre-judge bubble value. This is not every tool call or message. Use host-provided current aside state; if missing or stale, lightly read observer_status. unknown is not OFF; a prior OFF can be refreshed when fresh context next appears. A status read does not authorize spawn. Only checkpoint status=ready permits one fresh host-native child with no history. Other statuses: do not spawn or immediately retry; a later new context submits again. thought=null is valid silence. Do not inline-replace an unavailable child, force a quota, or poll on a timer.
 
-When the user enters board mode or asks to develop a kept idea, the board can carry the full reply. Use spellcast_reply with text, comparison, graph, and sequence blocks, and origin_node_id when developing an adopted fragment. Use spellcast_present for loose fragments. Never reduce the user's requested board reply to a progress notification.
-
-Read spellcast_board before revising existing content. Use spellcast_update to change one block with its latest expected_revision; preserve the user's edits and the other blocks. Graph edges need meaningful labels. Comparisons share criteria; sequence order is explicit, not derived from screen position.
-
-Read feedback with spellcast_listen(source_id, since). Pending explicit feedback is returned until acknowledged, even when older than since. Handle only your source's input, then call spellcast_ack with its sequence ids. A quiet or closed model is not automatically awakened; do not promise an immediate reply without a live handler.
-
-Only call spellcast_remember when the user explicitly asks to remember something or clearly confirms that it should become durable memory. A kept bubble is not automatically memory. Use spellcast_recall before claiming what was remembered, and spellcast_forget when the user asks to remove a memory."#;
+When modifying existing Canvas content, read current board and object versions first. User-edited content and layout stay protected; conflicts remain reviewable proposals. Handle only this source's feedback; include feedback_sequences in the response; ack only after actually handling it. Queued, read, replied, and handled are different. Call spellcast_remember only with explicit user permission; a kept bubble is not memory."#;
 
 fn nullable_schema<T: schemars::JsonSchema>(
     generator: &mut schemars::SchemaGenerator,
@@ -124,6 +119,14 @@ impl From<BubbleParams> for BubbleRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ArtifactReadParams {
+    bundle_id: String,
+    /// Omit for the manifest and runtime contract. Name one text file to inspect its source.
+    #[serde(default)]
+    file: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct PresentNodeParams {
     title: String,
     #[serde(default)]
@@ -134,6 +137,7 @@ struct PresentNodeParams {
     #[serde(default)]
     #[schemars(schema_with = "nullable_string_schema")]
     weight: Option<String>,
+    /// Existing fragment this one belongs to. Creates a parent relationship. Omit for an independent fragment.
     #[serde(default)]
     #[schemars(schema_with = "nullable_string_schema")]
     parent_id: Option<String>,
@@ -220,6 +224,7 @@ struct PresentParams {
     #[serde(default)]
     #[schemars(schema_with = "nullable_throws_schema")]
     throws: Option<Vec<PresentThrowParams>>,
+    /// Places new fragments around this node. Does not create a parent relationship.
     #[serde(default)]
     #[schemars(schema_with = "nullable_string_schema")]
     focus_node_id: Option<String>,
@@ -252,6 +257,10 @@ struct ListenParams {
     #[serde(default)]
     #[schemars(schema_with = "nullable_string_schema")]
     source_id: Option<String>,
+    /// Read only this exact pending request. Requires source_id; returns immediately,
+    /// ignoring since/wait. Acknowledged or missing requests return no event.
+    #[serde(default)]
+    sequence: Option<u64>,
     #[serde(default)]
     since: u64,
     #[serde(default)]
@@ -270,6 +279,8 @@ struct UpdateParams {
     source_id: String,
     #[serde(flatten)]
     patch: ReplyPatchRequest,
+    #[serde(default)]
+    feedback_sequences: Vec<u64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -333,8 +344,77 @@ impl SpellcastMcp {
 #[tool_router]
 impl SpellcastMcp {
     #[tool(
+        name = "spellcast_artifact",
+        description = "Publish a complete local HTML/CSS/JS work with its assets onto Canvas, or update the same block. Build the directory first; include libraries, original source and media locally. No fixed renderer whitelist. Stable reply/block ids, expected_revision and source ownership preserve other blocks and user state. When answering Ask feedback, inspect artifact_context, pass feedback_sequences, and ack only after the result is saved. For user-edited source, publish a candidate then propose patch_reply; do not overwrite. Runtime contract is on spellcast_artifact_read."
+    )]
+    async fn artifact(
+        &self,
+        Parameters(params): Parameters<crate::artifacts::PublishArtifact>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.identify(&context);
+        let bridge = self.bridge.clone();
+        let reply = tokio::task::spawn_blocking(move || bridge.publish_artifact(params))
+            .await
+            .map_err(Self::error)?
+            .map_err(Self::error)?;
+        Self::result(reply)
+    }
+
+    #[tool(
+        name = "spellcast_artifact_read",
+        description = "Read an immutable Canvas work's manifest, original source, version history and runtime contract. Omit file for metadata; pass an exact text filename from its manifest to inspect that source (up to 200 KB). Binary assets stay in the local store and export bundle. Read the current board too before revising a work."
+    )]
+    async fn artifact_read(
+        &self,
+        Parameters(params): Parameters<ArtifactReadParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.identify(&context);
+        let bundle = self
+            .bridge
+            .artifact(&params.bundle_id)
+            .map_err(Self::error)?;
+        if let Some(name) = params.file {
+            let (mime, bytes) = self
+                .bridge
+                .artifact_file(&params.bundle_id, &name)
+                .map_err(Self::error)?;
+            if bytes.len() > 200_000
+                || !(mime.starts_with("text/")
+                    || mime == "application/json"
+                    || mime == "image/svg+xml")
+            {
+                return Err(Self::error("Use Canvas source/export for binary or large files; inspect a smaller original source file here."));
+            }
+            let text = String::from_utf8(bytes).map_err(Self::error)?;
+            return Self::result(
+                json!({ "bundle_id": bundle.id, "file": name, "media_type": mime, "text": text }),
+            );
+        }
+        let history: Vec<_> = self
+            .bridge
+            .artifact_history(&bundle.id)
+            .map_err(Self::error)?
+            .into_iter()
+            .map(|item| json!({ "id": item.id, "created_at_ms": item.created_at_ms }))
+            .collect();
+        Self::result(json!({ "bundle": bundle, "history": history, "runtime": {
+            "initialize": "const saved = await window.spellcast.ready; Restore controls from saved before registering input handlers.",
+            "save": "window.spellcast.setState({parameter: value}) merges a JSON object (64 KB max). Store large data as files. This does not ask a model.",
+            "selection": "window.spellcast.select({ids: ['stable-object-id'], label: 'What is selected', asset: 'assets/file', region: {...}, time_range: {...}}). Use fields appropriate to your work; include coordinate units and asset names.",
+            "restore": "window.spellcast.onRestore(state => restoreControlsWithoutSavingAgain(state)); The host's content revision does not reset saved parameters.",
+            "inputs": "Declare bundle io.inputs/io.outputs. window.spellcast.inputs and onInputs(snapshot => ...) expose {revision,ports:{name:{status,value?,reason?,sources}}}, separate from saved state. Show unavailable explicitly; do not feed cached values onward.",
+            "outputs": "window.spellcast.publishOutputs({port: scalar}, snapshot.revision) requires the input revision actually used. Only declared finite scalars are accepted; state changes save before outputs are forwarded. No host commands or expressions.",
+            "errors": "window.spellcast.reportError(error). Uncaught errors are reported too. Handle pagehide to dispose graphics, listeners, media and workers.",
+            "files": "Use relative local URLs. Bundle libraries, fonts and media with the work. The frame's message channel carries data, not host commands. Use the host to fetch external data and build files. __spellcast.js is injected by the container.",
+            "export": "Canvas exports files, original sources, licenses and current state as ZIP. Exported Web works can run under a local static server."
+        }}))
+    }
+
+    #[tool(
         name = "spellcast_bubble",
-        description = "Throw one sparse side thought onto the user's desktop. Never use it for progress, repetition, or a blocking question."
+        description = "Throw one sparse side thought onto the user's desktop when the user explicitly asks to show it. Not an inline substitute for an independent observer. Never use it for progress, repetition, or a blocking question. Default to none; stay quiet on not_shown, expired, or dismissed."
     )]
     async fn bubble(
         &self,
@@ -351,8 +431,20 @@ impl SpellcastMcp {
     }
 
     #[tool(
+        name = "spellcast_observer_status",
+        description = "Read aside switch state: enabled, paused, allowed, reason, and policy_revision. The App aside switch is the authority. Call this only when that state is missing or stale. unknown is not OFF; a prior OFF can be refreshed when fresh context next appears. This read does not authorize spawn or require a bubble. Submit checkpoints when enabled and not paused; only checkpoint status=ready starts a child. There is no MCP setter for the product switch."
+    )]
+    async fn observer_status(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.identify(&context);
+        Self::result(self.bridge.observer_status())
+    }
+
+    #[tool(
         name = "spellcast_checkpoint",
-        description = "For an enabled independent observer: offer a short current-project checkpoint. A ready result contains the only brief to give a fresh host subagent without history. Other results mean do not spawn. snapshot=null cancels this source's pending observer. This tool does not spawn a model."
+        description = "Submit a short current-project snapshot at the first substantial context and when a plan, new evidence, or a new constraint appears—not conversation history, not every tool call. The main task does not pre-judge bubble value. On a Codex main task, bind the stable source_id once to host startup metadata or the actual CODEX_THREAD_ID and cwd before the first non-null snapshot; do not use an Observer child id, guess the latest task, or bind again on later checkpoints. Submit when asides are enabled and not paused. Only status=ready authorizes one fresh host-native child with no history; forward only the returned brief. Other statuses mean do not spawn or immediately retry; a later new context submits again. Do not silently reason as the observer if the host cannot isolate a child. snapshot=null cancels this source's in-flight observation on task end or project switch; it is source lifecycle cleanup, not required for the App aside switch to turn off. This tool does not spawn a model or claim automatic scheduling."
     )]
     async fn checkpoint(
         &self,
@@ -365,7 +457,7 @@ impl SpellcastMcp {
 
     #[tool(
         name = "spellcast_observer_complete",
-        description = "An isolated observer submits its single decision directly. thought=null means silence. A thought must be grounded in the supplied project snapshot, not progress or the main answer. The ticket enforces original source, freshness and one completion; return only the compact status to the parent."
+        description = "An isolated no-history observer submits its single decision directly. thought=null is valid silence; do not invent an aside. A thought must be grounded in the supplied snapshot, not progress or the main answer. A short line that leaves the conversation must still be readable; if tease is not enough, use body for who it applies to and why. Do not call spellcast_bubble to bypass the ticket. The ticket enforces original source, freshness and one completion; return only the compact status to the parent, never the thought."
     )]
     async fn observer_complete(
         &self,
@@ -382,7 +474,7 @@ impl SpellcastMcp {
 
     #[tool(
         name = "spellcast_present",
-        description = "Lay several fragments out on the board as a constellation, spatial view, timeline, or stack."
+        description = "Lay several fragments out on the board as a constellation, spatial view, timeline, or stack. focus_node_id only places new fragments around that node; it does not create a relationship. Set parent_id on a node to record a parent link. Do not reduce a requested board reply to a progress notification. Do not clear a user-edited board without permission."
     )]
     async fn present(
         &self,
@@ -406,20 +498,24 @@ impl SpellcastMcp {
 
     #[tool(
         name = "spellcast_reply",
-        description = "Present a full structured reply on the user's board: mix text, aligned comparisons, labeled relationship graphs, and storyboards. Use a stable source_id and the adopted origin_node_id. Read the board before replacing an existing reply."
+        description = "Present a full structured reply on the user's board: mix text, aligned comparisons, labeled relationship graphs, and storyboards. Use a stable originating source_id and the adopted origin_node_id. Read current board versions first; preserve user edits. Include feedback_sequences when answering this source's feedback; ack only after handling."
     )]
     async fn reply(
         &self,
-        Parameters(params): Parameters<ReplyRequest>,
+        Parameters(params): Parameters<ReplySubmission>,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         self.identify(&context);
-        Self::result(self.bridge.write_reply(params).map_err(Self::error)?)
+        Self::result(
+            self.bridge
+                .write_reply_for_feedback(params.reply, &params.feedback_sequences)
+                .map_err(Self::error)?,
+        )
     }
 
     #[tool(
         name = "spellcast_update",
-        description = "Update one block of an existing board reply using its latest expected_revision. Other blocks and the user's edits remain intact. A stale revision is rejected so it can be reconciled explicitly."
+        description = "Update one block of an existing board reply using its latest expected_revision. Other blocks and the user's edits remain intact. Do not replace an entire reply to evade protection. Include feedback_sequences when answering this source's feedback; ack only after handling. A stale revision is rejected so it can be reconciled explicitly."
     )]
     async fn update_reply(
         &self,
@@ -429,14 +525,44 @@ impl SpellcastMcp {
         self.identify(&context);
         Self::result(
             self.bridge
-                .patch_reply_from_source(&params.source_id, params.patch)
+                .patch_reply_for_feedback(
+                    &params.source_id,
+                    params.patch,
+                    &params.feedback_sequences,
+                )
                 .map_err(Self::error)?,
         )
     }
 
     #[tool(
+        name = "spellcast_canvas_batch",
+        description = "Atomically create native text/images/shapes, patch selected object fields, arrange explicit targets, or compose/ungroup objects. Read spellcast_board first. Declare content/presentation/composition reads and expected write revisions. Use caller-generated stable IDs and request_id; retry identical requests with that ID. User edits/layout are protected: any conflict retains the entire batch as a reviewable proposal and no partial writes occur. Operate only on this source's targets; other sources may be read as context. Include feedback_sequences and all anchored content reads when answering Canvas feedback."
+    )]
+    async fn canvas_batch(
+        &self,
+        Parameters(params): Parameters<crate::canvas::CanvasSubmission>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.identify(&context);
+        Self::result(self.bridge.canvas_batch(params.batch, Some(&params.source_id)).map_err(Self::error)?)
+    }
+
+    #[tool(
+        name = "spellcast_bind_codex",
+        description = "Bind this source to the current Codex task's actual CODEX_THREAD_ID and cwd. Verifies the saved task without starting a model. User-submitted Canvas requests return to this exact task through the running Codex Desktop app; never pass a guessed or most-recent task."
+    )]
+    async fn bind_codex(
+        &self,
+        Parameters(params): Parameters<BindCodexRequest>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.identify(&context);
+        Self::result(self.bridge.bind_codex(params).await.map_err(Self::error)?)
+    }
+
+    #[tool(
         name = "spellcast_listen",
-        description = "Read this source_id's feedback after a sequence number, plus unacknowledged explicit input. Use the originating task's id; acknowledge only after handling it. Without source_id this remains a legacy all-source view."
+        description = "For a Canvas delivery notice, pass source_id and sequence to read only that exact pending request, immediately. status=not_pending means stop; do not redo it. The returned handling instructions match its context. The user's text determines scope; testing or asking does not authorize executing context options. Without sequence, read this source's events after since plus pending input. pending_sequences, not historical events, identifies unhandled requests. Acknowledge only after handling."
     )]
     async fn listen(
         &self,
@@ -446,6 +572,14 @@ impl SpellcastMcp {
         self.identify(&context);
         if let Some(source) = &params.source_id {
             spellcast_core::reply::validate_id(source).map_err(Self::error)?;
+        }
+        if let Some(sequence) = params.sequence {
+            let source = params.source_id.as_deref().ok_or_else(|| Self::error("按请求编号读取时必须指定 source_id。"))?;
+            let mut result = self.bridge.read_feedback_request(source, sequence).map_err(Self::error)?;
+            let status = self.bridge.status();
+            result["surface"] = json!(status.surface);
+            result["board_focused"] = json!(status.board_focused);
+            return Self::result(result);
         }
         let (events, last_seq) = self
             .bridge
@@ -462,7 +596,7 @@ impl SpellcastMcp {
 
     #[tool(
         name = "spellcast_ack",
-        description = "Acknowledge explicit feedback only after this source task has handled it. The source_id must match the feedback; acknowledgements are idempotent and persist across restart."
+        description = "Acknowledge explicit feedback only after this originating source task has actually handled it. Never ack another task's input. Acknowledgements are idempotent and persist across restart."
     )]
     async fn ack(
         &self,
@@ -479,7 +613,7 @@ impl SpellcastMcp {
 
     #[tool(
         name = "spellcast_board",
-        description = "Read the current board before referring to its fragments or arrangement."
+        description = "Read the current board and object versions before referring to fragments or revising them. surface is the selected mode; board_focused is actual window focus. User-edited content and layout stay protected."
     )]
     async fn board(
         &self,

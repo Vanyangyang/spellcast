@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tide chart</title>
+  <style>
+    :root { color-scheme: light; font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; color: #183342; background: #edf3f1; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: radial-gradient(circle at 88% 5%, #fff 0 8%, transparent 30%), #edf3f1; }
+    main { width: min(500px, calc(100vw - 24px)); height: 440px; padding: 25px 24px 20px; overflow: hidden; border: 1px solid #d8e3df; border-radius: 24px; background: linear-gradient(145deg, #fffef8, #f4f8f5); box-shadow: 0 18px 46px #2a55421a; }
+    header { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
+    .eyebrow { margin: 0 0 7px; color: #567566; font-size: 12px; letter-spacing: .12em; }
+    h1 { margin: 0; font-size: 24px; font-weight: 720; letter-spacing: .03em; }
+    .candidate { margin: 3px 0 0; color: #7b6040; font-size: 12px; line-height: 1.45; text-align: right; }
+    .reading { display: flex; align-items: baseline; gap: 8px; margin: 17px 0 8px; }
+    #current-number { color: #075b55; font: 700 38px/.9 ui-monospace, Consolas, monospace; letter-spacing: -.06em; }
+    .unit { color: #54746b; font-size: 13px; }
+    #input-status { margin: 0 0 9px; color: #55776c; font-size: 12px; }
+    #input-status[data-state="unavailable"] { color: #986547; }
+    svg { display: block; width: 100%; height: 220px; overflow: visible; border: 1px solid #d7e7e2; border-radius: 16px; background: #f9fcfa; }
+    .grid { stroke: #dceae5; stroke-width: 1; }
+    .shore { fill: #dfe6d7; }
+    .water-fill { fill: #b8e3dc; opacity: .88; transition: d .2s ease; }
+    .waterline { fill: none; stroke: #167c72; stroke-width: 4; stroke-linecap: round; transition: d .2s ease; }
+    .marker { cursor: pointer; outline: none; }
+    .marker circle { fill: #fffcf3; stroke: #597a70; stroke-width: 3; transition: fill .15s, stroke .15s; }
+    .marker text { fill: #315547; font-size: 14px; font-weight: 650; pointer-events: none; }
+    .marker.is-selected circle { fill: #e4b45b; stroke: #966819; }
+    .marker:focus circle { stroke: #dc9f31; stroke-width: 5; }
+    .marker:hover circle { stroke: #167c72; }
+    .status-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 11px 0 0; }
+    #selected-marker { color: #315547; font-size: 13px; }
+    button { padding: 8px 10px; border: 1px solid #ddc69a; border-radius: 10px; color: #765524; background: #fff8e8; font: inherit; font-size: 12px; cursor: pointer; }
+    button:focus-visible { outline: 3px solid #dcad54; outline-offset: 3px; }
+    #simulation-note { margin: 7px 0 0; color: #816d51; font-size: 11px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <main aria-labelledby="page-title">
+    <header>
+      <div>
+        <p class="eyebrow">LINKED TIDE / 图表</p>
+        <h1 id="page-title">港湾水线</h1>
+      </div>
+      <p class="candidate">机制探索候选<br>非真实航海建议</p>
+    </header>
+
+    <div class="reading" aria-label="当前潮位">
+      <strong id="current-number" aria-live="polite">—</strong>
+      <span class="unit">当前潮位 / 10</span>
+    </div>
+    <p id="input-status" data-state="unavailable" aria-live="polite">等待参数输入。</p>
+
+    <svg id="tide-chart" viewBox="0 0 500 220" role="img" aria-label="想象港湾的潮位水线图">
+      <line class="grid" x1="24" y1="42" x2="476" y2="42" />
+      <line class="grid" x1="24" y1="92" x2="476" y2="92" />
+      <line class="grid" x1="24" y1="142" x2="476" y2="142" />
+      <line class="grid" x1="24" y1="192" x2="476" y2="192" />
+      <path class="shore" d="M0 184 C70 170 128 190 192 174 C275 153 340 179 415 161 C452 152 478 158 500 148 L500 220 L0 220Z" />
+      <path id="water-fill" class="water-fill" d="M24 191 L476 191 L476 220 L24 220Z" />
+      <path id="waterline" class="waterline" d="M24 191 C118 179 190 201 278 186 C358 171 419 191 476 180" />
+      <g class="marker" data-marker="harbor" role="button" tabindex="0" aria-label="Harbor marker" aria-pressed="false">
+        <circle cx="145" cy="164" r="10" />
+        <text x="145" y="151" text-anchor="middle">港湾闸口</text>
+      </g>
+      <g class="marker" data-marker="city" role="button" tabindex="0" aria-label="City marker" aria-pressed="false">
+        <circle cx="365" cy="125" r="10" />
+        <text x="365" y="112" text-anchor="middle">城北堤线</text>
+      </g>
+    </svg>
+
+    <div class="status-row">
+      <span>当前选择：<span id="selected-marker" aria-live="polite">—</span></span>
+      <button id="simulate-failure" type="button" aria-label="Simulate upstream failure">模拟上游故障</button>
+    </div>
+    <p id="simulation-note" aria-live="polite">演示按钮仅模拟错误；重启本作品即可恢复。</p>
+  </main>
+
+  <script src="__spellcast.js"></script>
+  <script>
+    (() => {
+      const boot = async () => {
+        const spellcast = window.spellcast;
+        const currentNumber = document.querySelector('#current-number');
+        const inputStatus = document.querySelector('#input-status');
+        const selectedMarker = document.querySelector('#selected-marker');
+        const waterFill = document.querySelector('#water-fill');
+        const waterline = document.querySelector('#waterline');
+        const note = document.querySelector('#simulation-note');
+        const markers = {
+          harbor: { id: 'harbor', label: '港湾闸口' },
+          city: { id: 'city', label: '城北堤线' }
+        };
+
+        if (!spellcast) {
+          inputStatus.textContent = '输入不可用：等待作品发布器提供 Spellcast 连接。';
+          inputStatus.dataset.state = 'unavailable';
+          return;
+        }
+
+        await spellcast.ready;
+        const saved = spellcast.state && typeof spellcast.state === 'object' ? spellcast.state : {};
+        const restoredSelection = markers[saved.selected] ? saved.selected : null;
+        let selectedId = restoredSelection || 'harbor';
+        let latestInputs = spellcast.inputs;
+
+        function tideFrom(snapshot) {
+          const port = snapshot && snapshot.ports && snapshot.ports.tide;
+          if (!port || port.status !== 'available' || !Number.isFinite(port.value)) return null;
+          return Math.min(10, Math.max(0, Number(port.value)));
+        }
+
+        function draw(snapshot) {
+          latestInputs = snapshot || spellcast.inputs;
+          const tide = tideFrom(latestInputs);
+          const available = tide !== null;
+          const port = latestInputs.ports && latestInputs.ports.tide;
+          const reason = port && port.reason ? '：' + port.reason : '';
+          const level = available ? tide : 0;
+          const y = 190 - level * 14.5;
+
+          currentNumber.textContent = available ? tide.toFixed(1) : '—';
+          inputStatus.textContent = available
+            ? '输入已连接 · 修订 ' + latestInputs.revision
+            : '输入不可用' + reason;
+          inputStatus.dataset.state = available ? 'available' : 'unavailable';
+          waterFill.setAttribute('d', available
+            ? 'M24 ' + y + ' C118 ' + (y - 12) + ' 190 ' + (y + 10) + ' 278 ' + (y - 5) + ' C358 ' + (y - 20) + ' 419 ' + (y + 2) + ' 476 ' + (y - 9) + ' L476 220 L24 220Z'
+            : 'M24 191 L476 191 L476 220 L24 220Z');
+          waterline.setAttribute('d', available
+            ? 'M24 ' + y + ' C118 ' + (y - 12) + ' 190 ' + (y + 10) + ' 278 ' + (y - 5) + ' C358 ' + (y - 20) + ' 419 ' + (y + 2) + ' 476 ' + (y - 9)
+            : 'M24 191 L476 191');
+
+          document.querySelectorAll('.marker').forEach(node => {
+            const active = node.dataset.marker === selectedId;
+            node.classList.toggle('is-selected', active);
+            node.setAttribute('aria-pressed', String(active));
+          });
+          selectedMarker.textContent = markers[selectedId].label;
+        }
+
+        function choose(id, save) {
+          if (!markers[id]) return;
+          const changed = selectedId !== id;
+          selectedId = id;
+          if (save && changed) spellcast.setState({ selected: id });
+          spellcast.select({ id: markers[selectedId].id, label: markers[selectedId].label });
+          draw(latestInputs);
+        }
+
+        document.querySelectorAll('.marker').forEach(node => {
+          node.addEventListener('click', () => choose(node.dataset.marker, true));
+          node.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              choose(node.dataset.marker, true);
+            }
+          });
+        });
+        document.querySelector('#simulate-failure').addEventListener('click', () => {
+          spellcast.reportError('模拟上游故障：港湾图表输入暂不可用。');
+          note.textContent = '已报告模拟故障；重启本作品即可恢复。';
+        });
+
+        if (restoredSelection === null) spellcast.setState({ selected: selectedId });
+        spellcast.select({ id: markers[selectedId].id, label: markers[selectedId].label });
+        draw(latestInputs);
+        spellcast.onInputs(snapshot => draw(snapshot));
+        spellcast.onRestore(state => {
+          const restored = state && markers[state.selected] ? state.selected : null;
+          selectedId = restored || 'harbor';
+          if (restored === null) spellcast.setState({ selected: selectedId });
+          spellcast.select({ id: markers[selectedId].id, label: markers[selectedId].label });
+          draw(latestInputs);
+        });
+      };
+
+      boot();
+    })();
+  </script>
+</body>
+</html>

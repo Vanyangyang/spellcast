@@ -1,12 +1,15 @@
 use std::fs;
 use std::path::Path;
 
+use crate::artifacts::{ArtifactBundle, ArtifactFileInfo};
+use crate::feedback::DeliveryReceipt;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use spellcast_core::types::MemoryItem;
+use spellcast_core::AgentEvent;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
 
 pub struct Store {
     connection: Connection,
@@ -20,12 +23,40 @@ impl Store {
         }
         let connection = Connection::open(path)
             .map_err(|err| format!("打开不了状态库 {}：{err}", path.display()))?;
+        // The in-memory board and delivery gate have one owner per database.
+        // SQLite releases this lock automatically when the process closes or exits.
+        connection
+            .execute_batch(
+                "PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;",
+            )
+            .map_err(|err| {
+                format!(
+                    "无法独占状态库 {}；请先关闭正在使用它的 Spellcast 实例：{err}",
+                    path.display()
+                )
+            })?;
         connection
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS spellcast_state (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     schema_version INTEGER NOT NULL,
                     value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS spellcast_requests (
+                    id TEXT PRIMARY KEY,
+                    request_hash TEXT NOT NULL,
+                    event TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS spellcast_artifacts (
+                    id TEXT PRIMARY KEY,
+                    manifest TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS spellcast_artifact_files (
+                    bundle_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    media_type TEXT NOT NULL,
+                    bytes BLOB NOT NULL,
+                    PRIMARY KEY(bundle_id, name)
                 );
                 CREATE VIRTUAL TABLE IF NOT EXISTS spellcast_memory_fts USING fts5(
                     id UNINDEXED,
@@ -52,7 +83,7 @@ impl Store {
         let Some((version, value)) = row else {
             return Ok(None);
         };
-        if version != 1 && version != SCHEMA_VERSION {
+        if !(1..=SCHEMA_VERSION).contains(&version) {
             return Err(format!(
                 "状态库版本是 {version}，当前只支持 {SCHEMA_VERSION}；没有覆盖原数据。"
             ));
@@ -62,7 +93,101 @@ impl Store {
             .map_err(|err| format!("状态库内容损坏，未重置：{err}"))
     }
 
+    pub fn save_artifact(
+        &mut self,
+        bundle: &ArtifactBundle,
+        files: &[(ArtifactFileInfo, Vec<u8>)],
+    ) -> Result<(), String> {
+        let manifest = serde_json::to_string(bundle).map_err(|e| e.to_string())?;
+        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO spellcast_artifacts (id, manifest) VALUES (?1, ?2)",
+            params![bundle.id, manifest],
+        )
+        .map_err(|e| e.to_string())?;
+        for (file, bytes) in files {
+            tx.execute("INSERT INTO spellcast_artifact_files (bundle_id, name, media_type, bytes) VALUES (?1, ?2, ?3, ?4)",
+                params![bundle.id, file.name, file.media_type, bytes]).map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    pub fn artifact(&self, id: &str) -> Result<Option<ArtifactBundle>, String> {
+        let row: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT manifest FROM spellcast_artifacts WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        row.map(|json| serde_json::from_str(&json).map_err(|e| e.to_string()))
+            .transpose()
+    }
+
+    pub fn artifact_file(&self, id: &str, name: &str) -> Result<Option<(String, Vec<u8>)>, String> {
+        self.connection.query_row("SELECT media_type, bytes FROM spellcast_artifact_files WHERE bundle_id=?1 AND name=?2", params![id, name],
+            |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|e| e.to_string())
+    }
+
+    pub fn artifact_history(
+        &self,
+        reply: &str,
+        block: &str,
+    ) -> Result<Vec<ArtifactBundle>, String> {
+        let mut statement = self.connection.prepare("SELECT manifest FROM spellcast_artifacts WHERE json_extract(manifest, '$.reply_id')=?1 AND json_extract(manifest, '$.block_id')=?2 ORDER BY json_extract(manifest, '$.created_at_ms') DESC LIMIT 100")
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(params![reply, block], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        rows.map(|row| {
+            serde_json::from_str(&row.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+        })
+        .collect()
+    }
+
+    pub fn discard_artifact(&mut self, id: &str) -> Result<(), String> {
+        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "DELETE FROM spellcast_artifact_files WHERE bundle_id=?1",
+            [id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM spellcast_artifacts WHERE id=?1", [id])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    #[cfg(test)]
     pub fn save<T: Serialize>(&mut self, value: &T, memories: &[MemoryItem]) -> Result<(), String> {
+        self.save_with_requests(value, memories, &[])
+    }
+
+    pub fn request(&self, id: &str) -> Result<Option<(String, AgentEvent)>, String> {
+        let row: Option<(String, String)> = self
+            .connection
+            .query_row(
+                "SELECT request_hash, event FROM spellcast_requests WHERE id = ?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| format!("读取请求记录失败：{error}"))?;
+        row.map(|(hash, event)| {
+            serde_json::from_str(&event)
+                .map(|event| (hash, event))
+                .map_err(|e| format!("请求记录损坏：{e}"))
+        })
+        .transpose()
+    }
+
+    pub fn save_with_requests<T: Serialize>(
+        &mut self,
+        value: &T,
+        memories: &[MemoryItem],
+        requests: &[DeliveryReceipt],
+    ) -> Result<(), String> {
         let value = serde_json::to_string(value).map_err(|err| format!("序列化状态失败：{err}"))?;
         let transaction = self
             .connection
@@ -78,6 +203,16 @@ impl Store {
                 params![SCHEMA_VERSION, value],
             )
             .map_err(|err| format!("写入状态失败：{err}"))?;
+        for receipt in requests {
+            if let Some(id) = &receipt.event.request_id {
+                let event = serde_json::to_string(&receipt.event)
+                    .map_err(|e| format!("保存请求记录失败：{e}"))?;
+                transaction.execute(
+                    "INSERT OR IGNORE INTO spellcast_requests (id, request_hash, event) VALUES (?1, ?2, ?3)",
+                    params![id, receipt.request_hash, event],
+                ).map_err(|e| format!("保存请求记录失败：{e}"))?;
+            }
+        }
         reindex_memories(&transaction, memories)?;
         transaction
             .commit()
@@ -161,6 +296,20 @@ fn escape_like(value: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::{json, Value};
+
+    #[test]
+    fn a_second_owner_cannot_overwrite_state_or_dispatch_the_same_requests() {
+        let path =
+            std::env::temp_dir().join(format!("spellcast-owner-{}.sqlite3", std::process::id()));
+        let mut first = Store::open(&path).unwrap();
+        first.save(&json!({"keep":"original"}), &[]).unwrap();
+        assert!(Store::open(&path).is_err());
+        drop(first);
+        let next = Store::open(&path).unwrap();
+        assert_eq!(next.load::<Value>().unwrap().unwrap()["keep"], "original");
+        drop(next);
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn corrupt_state_is_rejected_without_being_replaced() {

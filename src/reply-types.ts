@@ -59,10 +59,34 @@ export type ReplyBlock =
   | ReplyTextBlock
   | ReplyComparisonBlock
   | ReplyGraphBlock
-  | ReplySequenceBlock;
+  | ReplySequenceBlock
+  | ReplyArtifactBlock;
+
+export type ReplyArtifactBlock = {
+  id: string;
+  type: "artifact";
+  title?: string;
+  description: string;
+  bundle_id: string;
+  state: Record<string, unknown> | null;
+  state_revision: number;
+};
+
+export type ArtifactBundle = {
+  id: string;
+  io?: import("./canvas-data-types").ArtifactIO;
+  source_id: string;
+  reply_id: string;
+  block_id: string;
+  entry: string;
+  files: { name: string; media_type: string; bytes: number; sha256: string }[];
+  created_at_ms: number;
+};
 
 export type BoardReply = {
   id: string;
+  /** Canonical canvas identity, resolved from BoardSnapshot.canvas.objects. */
+  object_id?: string;
   source_id: string;
   source_label: string;
   origin_node_id?: string | null;
@@ -74,17 +98,24 @@ export type BoardReply = {
 };
 
 export type ReplyPatchRequest = {
+  object_id?: string;
   reply_id: string;
+  request_id?: string;
   expected_revision: number;
   block: ReplyBlock;
   /** The backend verifies that only graph coordinates changed before suppressing feedback. */
   layout_only?: boolean;
 };
 
+export type ArtifactFeedback = { bundle_id: string; state: Record<string, unknown>; state_revision?: number; inputs?: import("./canvas-data-types").CanvasInputSnapshot };
+
 export type ReplyActionInput = {
+  object_id?: string;
   reply_id: string;
+  request_id?: string;
   block_id: string;
   action: "select" | "ask";
   option_id?: string;
   text?: string;
+  artifact_context?: ArtifactFeedback;
 };

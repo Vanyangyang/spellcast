@@ -1,0 +1,919 @@
+/* Board replies — structured Agent replies rendered on the board.
+   Scoped under .rb-root. Inherits Spellcast's dark/lilac palette via
+   the :root variables when present, with local fallbacks. */
+
+.rb-root {
+  --rb-ink: var(--ink, #07080c);
+  --rb-paper: var(--paper, #f4f1ea);
+  --rb-mute: var(--mute, rgba(244, 241, 234, 0.58));
+  --rb-line: var(--line, rgba(244, 241, 234, 0.12));
+  --rb-line-strong: rgba(244, 241, 234, 0.24);
+  --rb-glass: var(--glass, rgba(10, 12, 18, 0.72));
+  --rb-lilac: var(--lilac, #d4b3ff);
+  --rb-lilac-soft: rgba(212, 179, 255, 0.14);
+  --rb-mint: var(--mint, #7ee0c8);
+  --rb-rose: #f2a0a8;
+  --rb-surface: rgba(244, 241, 234, 0.035);
+  --rb-surface-2: rgba(244, 241, 234, 0.07);
+  --rb-font: var(--font, "IBM Plex Sans", "Noto Sans SC", sans-serif);
+  --rb-display: var(--display, "Cormorant Garamond", "Noto Serif SC", serif);
+  --rb-radius: 14px;
+  --rb-gap: 18px;
+
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  color: var(--rb-paper);
+  background: var(--rb-ink);
+  font: 14px/1.6 var(--rb-font);
+}
+
+.rb-root *,
+.rb-root *::before,
+.rb-root *::after {
+  box-sizing: border-box;
+}
+
+.rb-root:lang(ja) {
+  font-family: "IBM Plex Sans", "Noto Sans JP", sans-serif;
+}
+
+.rb-root [hidden] {
+  display: none !important;
+}
+
+.rb-root p {
+  margin: 0;
+}
+
+.rb-root button,
+.rb-root input,
+.rb-root textarea,
+.rb-root select {
+  font: inherit;
+  color: inherit;
+}
+
+.rb-root button {
+  cursor: pointer;
+  border: 1px solid var(--rb-line);
+  background: var(--rb-surface);
+  color: var(--rb-paper);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  line-height: 1.3;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.rb-root button:hover {
+  background: var(--rb-surface-2);
+  border-color: var(--rb-line-strong);
+}
+
+.rb-root button:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+
+.rb-root button.rb-primary {
+  background: var(--rb-paper);
+  color: var(--rb-ink);
+  border-color: var(--rb-paper);
+}
+
+.rb-root button.rb-primary:hover {
+  background: #fff;
+}
+
+.rb-root button.rb-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--rb-mute);
+}
+
+.rb-root button.rb-quiet:hover {
+  color: var(--rb-paper);
+  background: var(--rb-surface);
+}
+
+.rb-root button[aria-pressed="true"],
+.rb-root button[aria-selected="true"] {
+  color: var(--rb-lilac);
+  border-color: var(--rb-lilac);
+  background: var(--rb-lilac-soft);
+}
+
+.rb-root button:focus-visible,
+.rb-root input:focus-visible,
+.rb-root textarea:focus-visible,
+.rb-root select:focus-visible,
+.rb-root [tabindex]:focus-visible {
+  outline: 2px solid var(--rb-lilac);
+  outline-offset: 2px;
+}
+
+.rb-root input,
+.rb-root textarea,
+.rb-root select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--rb-line);
+  background: rgba(7, 8, 12, 0.6);
+  color: var(--rb-paper);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.rb-root textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.rb-root select {
+  appearance: auto;
+}
+
+.rb-root input::placeholder,
+.rb-root textarea::placeholder {
+  color: rgba(244, 241, 234, 0.35);
+}
+
+.rb-mute {
+  color: var(--rb-mute);
+}
+
+.rb-small {
+  font-size: 12px;
+  color: var(--rb-mute);
+}
+
+.rb-kicker {
+  display: block;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rb-lilac);
+  margin-bottom: 6px;
+}
+
+.rb-root:lang(zh-CN) .rb-kicker,
+.rb-root:lang(ja) .rb-kicker {
+  letter-spacing: 0.12em;
+  text-transform: none;
+}
+
+.rb-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- reply switcher ---------- */
+
+.rb-nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--rb-line);
+  background: var(--rb-glass);
+  backdrop-filter: blur(16px);
+}
+
+.rb-nav-label {
+  font-size: 12px;
+  color: var(--rb-mute);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.rb-tabs {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding: 2px;
+  margin: -2px;
+}
+
+.rb-tabs button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--rb-mute);
+  padding: 7px 12px;
+}
+
+.rb-tabs button[aria-selected="true"] {
+  background: var(--rb-surface-2);
+  border-color: var(--rb-line);
+  color: var(--rb-paper);
+}
+
+.rb-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rb-tab-source {
+  font-size: 11px;
+  color: var(--rb-mute);
+  white-space: nowrap;
+}
+
+.rb-tab-badge {
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: var(--rb-ink);
+  background: var(--rb-lilac);
+  white-space: nowrap;
+}
+
+.rb-nav-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--rb-mute);
+  white-space: nowrap;
+}
+
+/* ---------- document area ---------- */
+
+.rb-doc {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.rb-empty {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--rb-mute);
+}
+
+.rb-panel {
+  padding: 24px 28px 48px;
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.rb-reply-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  margin-bottom: 22px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--rb-line);
+}
+
+.rb-reply-title {
+  flex: 1 1 320px;
+  margin: 0;
+  font-family: var(--rb-display);
+  font-weight: 500;
+  font-size: 28px;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.rb-reply-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--rb-mute);
+}
+
+.rb-blocks {
+  display: grid;
+  gap: var(--rb-gap);
+}
+
+/* ---------- block frame ---------- */
+
+.rb-block {
+  position: relative;
+  border: 1px solid var(--rb-line);
+  border-radius: var(--rb-radius);
+  background: var(--rb-surface);
+  padding: 18px 20px 20px;
+  min-width: 0;
+}
+
+.rb-block.is-selected {
+  border-color: var(--rb-lilac);
+  box-shadow: inset 3px 0 0 var(--rb-lilac);
+}
+
+.rb-block-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.rb-block-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rb-block-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--rb-mute);
+  margin-bottom: 4px;
+}
+
+.rb-block-selected-tag {
+  color: var(--rb-lilac);
+}
+
+.rb-block-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.rb-block-tools {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.rb-block-body {
+  min-width: 0;
+}
+
+/* ---------- text ---------- */
+
+.rb-text {
+  max-width: 72ch;
+  display: grid;
+  gap: 12px;
+}
+
+.rb-text p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+
+/* ---------- comparison ---------- */
+
+.rb-cmp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.rb-cmp-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--rb-line);
+  border-radius: 12px;
+  padding: 16px;
+  background: rgba(7, 8, 12, 0.35);
+}
+
+.rb-cmp-card.is-selected {
+  border-color: var(--rb-lilac);
+  box-shadow: inset 0 3px 0 var(--rb-lilac);
+}
+
+.rb-cmp-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rb-cmp-card h4 {
+  margin: 0 0 4px;
+  font-size: 15.5px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.rb-cmp-summary {
+  color: var(--rb-mute);
+  overflow-wrap: anywhere;
+}
+
+.rb-cmp-card dl {
+  flex: 1 1 auto;
+  margin: 12px 0 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.rb-cmp-card dt {
+  font-size: 11.5px;
+  color: var(--rb-mute);
+}
+
+.rb-cmp-card dd {
+  margin: 1px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rb-cmp-card .rb-pick {
+  width: 100%;
+  text-align: center;
+  padding: 9px 12px;
+}
+
+.rb-cmp-current {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--rb-mute);
+}
+
+.rb-cmp-current strong {
+  font-weight: 500;
+  color: var(--rb-lilac);
+}
+
+/* ---------- sequence ---------- */
+
+.rb-seq {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  counter-reset: rb-step;
+}
+
+.rb-seq-item {
+  min-width: 0;
+  border: 1px solid var(--rb-line);
+  border-radius: 12px;
+  background: rgba(7, 8, 12, 0.35);
+  display: flex;
+  flex-direction: column;
+}
+
+.rb-seq-item.is-focused {
+  border-color: var(--rb-lilac);
+}
+
+.rb-seq-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 12px 12px 0 0;
+  padding: 14px 16px 10px;
+}
+
+.rb-seq-toggle[aria-pressed="true"] {
+  background: var(--rb-lilac-soft);
+  border-color: transparent;
+  color: inherit;
+}
+
+.rb-seq-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.rb-seq-index {
+  font-size: 12px;
+  color: var(--rb-lilac);
+  letter-spacing: 0.04em;
+}
+
+.rb-seq-title {
+  display: block;
+  margin-top: 2px;
+  font-size: 15.5px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.rb-seq-body {
+  padding: 4px 16px 14px;
+  display: grid;
+  gap: 10px;
+  flex: 1 1 auto;
+}
+
+.rb-seq-field {
+  display: grid;
+  gap: 2px;
+}
+
+.rb-seq-field dt,
+.rb-seq-field .rb-field-label {
+  font-size: 11.5px;
+  color: var(--rb-mute);
+}
+
+.rb-seq-field p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rb-seq-field.is-feedback p {
+  color: var(--rb-mint);
+}
+
+.rb-seq-field.is-note p {
+  color: var(--rb-mute);
+}
+
+.rb-seq-foot {
+  padding: 0 16px 14px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ---------- graph ---------- */
+
+.rb-graph-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.rb-graph-tools .rb-small {
+  margin-left: auto;
+}
+
+.rb-graph-canvas {
+  position: relative;
+  isolation: isolate;
+  height: 380px;
+  min-height: 220px;
+  border: 1px solid var(--rb-line);
+  border-radius: 12px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(244, 241, 234, 0.09) 1px, transparent 1.5px) 0 0 / 22px 22px,
+    rgba(7, 8, 12, 0.5);
+  touch-action: none;
+}
+
+/* X6 owns the host's inline width/height (mirrors the canvas via autoResize). */
+.rb-graph-host {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.rb-graph-canvas svg {
+  display: block;
+  overflow: hidden;
+}
+
+.rb-graph-status {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--rb-glass);
+  border: 1px solid var(--rb-line);
+  color: var(--rb-mute);
+  pointer-events: auto;
+}
+
+.rb-graph-status.is-error {
+  color: var(--rb-rose);
+  border-color: rgba(242, 160, 168, 0.4);
+}
+
+.rb-graph-status.is-ok {
+  color: var(--rb-mint);
+}
+
+.rb-graph-status button {
+  padding: 3px 9px;
+  font-size: 11.5px;
+}
+
+.rb-graph-below {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.rb-graph-nodes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-content: flex-start;
+}
+
+.rb-graph-nodes button {
+  max-width: 100%;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.rb-graph-nodes button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rb-graph-detail {
+  border-left: 1px solid var(--rb-line);
+  padding-left: 14px;
+  min-width: 0;
+}
+
+.rb-graph-detail h4 {
+  margin: 0 0 6px;
+  font-size: 15.5px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.rb-graph-detail p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rb-graph-links {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  font-size: 12.5px;
+  color: var(--rb-mute);
+}
+
+.rb-graph-links li {
+  overflow-wrap: anywhere;
+}
+
+.rb-graph-links em {
+  font-style: normal;
+  color: var(--rb-paper);
+}
+
+/* ---------- ask / edit areas ---------- */
+
+.rb-area {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--rb-line);
+}
+
+.rb-form {
+  display: grid;
+  gap: 12px;
+}
+
+.rb-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rb-field > label,
+.rb-fieldset > legend {
+  font-size: 12px;
+  color: var(--rb-mute);
+}
+
+.rb-fieldset {
+  margin: 0;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--rb-line);
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rb-fieldset > legend {
+  padding: 0 6px;
+}
+
+.rb-fieldset-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rb-fieldset-head .rb-small {
+  flex: 1 1 auto;
+}
+
+.rb-inline {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.rb-inline > * {
+  min-width: 0;
+}
+
+.rb-inline > input {
+  flex: 1 1 auto;
+}
+
+.rb-row-tools {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.rb-row-tools button {
+  padding: 5px 9px;
+}
+
+.rb-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.rb-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.rb-form-actions .rb-status {
+  margin-left: auto;
+}
+
+.rb-status {
+  font-size: 12.5px;
+  color: var(--rb-mute);
+}
+
+.rb-status.is-ok {
+  color: var(--rb-mint);
+}
+
+.rb-error {
+  font-size: 13px;
+  color: var(--rb-rose);
+  border-left: 2px solid var(--rb-rose);
+  padding-left: 10px;
+  overflow-wrap: anywhere;
+}
+
+.rb-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--rb-paper);
+  background: var(--rb-lilac-soft);
+  border: 1px solid rgba(212, 179, 255, 0.35);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.rb-notice span {
+  flex: 1 1 240px;
+}
+
+.rb-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  font-size: 12.5px;
+  color: var(--rb-lilac);
+  background: var(--rb-lilac-soft);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.rb-context-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rb-context-chip button {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 720px) {
+  .rb-nav {
+    padding: 10px 14px;
+  }
+
+  .rb-nav-count {
+    display: none;
+  }
+
+  .rb-panel {
+    padding: 16px 14px 40px;
+  }
+
+  .rb-reply-title {
+    font-size: 23px;
+  }
+
+  .rb-block {
+    padding: 14px 14px 16px;
+  }
+
+  .rb-block-head {
+    flex-direction: column;
+  }
+
+  .rb-block-tools {
+    justify-content: flex-start;
+  }
+
+  .rb-graph-canvas {
+    height: 300px;
+  }
+
+  .rb-graph-below {
+    grid-template-columns: 1fr;
+  }
+
+  .rb-graph-detail {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid var(--rb-line);
+    padding-top: 12px;
+  }
+
+  .rb-root input,
+  .rb-root textarea,
+  .rb-root select {
+    font-size: 16px;
+  }
+}
+
+@media (pointer: coarse) {
+  .rb-root button {
+    min-height: 40px;
+  }
+
+  .rb-tabs button {
+    min-height: 36px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rb-root button {
+    transition: none;
+  }
+}

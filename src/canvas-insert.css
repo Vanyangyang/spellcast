@@ -1,0 +1,93 @@
+/* Insert dialog for the light Canvas workbench. Every rule is scoped under .canvas-insert. */
+.board-dialog.canvas-insert {
+  width: min(560px, calc(100vw - 40px));
+  padding: 22px 24px 20px;
+  border: 1px solid var(--studio-line, rgba(28, 26, 22, 0.12));
+  border-radius: 16px;
+  background: var(--studio-paper, #fffcf7);
+  color: var(--studio-ink, #1c1a16);
+  box-shadow: var(--studio-shadow, 0 1px 1px rgba(28, 26, 22, 0.04), 0 8px 28px rgba(28, 26, 22, 0.07));
+  font: 14px/1.6 var(--font, system-ui, sans-serif);
+}
+.board-dialog.canvas-insert::backdrop {
+  background: rgba(28, 26, 22, 0.32);
+  backdrop-filter: blur(4px);
+}
+.board-dialog.canvas-insert > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.board-dialog.canvas-insert h2 { margin: 0; font: 500 22px/1.3 var(--font, system-ui, sans-serif); color: var(--studio-ink, #1c1a16); }
+.board-dialog.canvas-insert .canvas-insert-help { margin: 8px 0 0; color: var(--studio-soft, #5c574e); font-size: 13px; }
+
+.board-dialog.canvas-insert .canvas-insert-close {
+  flex: 0 0 auto; width: 32px; min-height: 32px; padding: 0; border-radius: 8px; font-size: 18px; line-height: 1;
+  border: 1px solid var(--studio-line, rgba(28, 26, 22, 0.12)); background: var(--studio-canvas, #f7f6f2); color: var(--studio-soft, #5c574e); cursor: pointer;
+}
+.board-dialog.canvas-insert .canvas-insert-close:hover:not(:disabled) { color: var(--studio-ink, #1c1a16); border-color: var(--studio-line-strong, rgba(28, 26, 22, 0.18)); }
+
+.board-dialog.canvas-insert .canvas-insert-form { margin: 18px 0 0; display: grid; gap: 14px; padding: 0; border: 0; }
+
+/* Type picker: real radios drive keyboard and a11y; the labels are the visible chips. */
+.board-dialog.canvas-insert .canvas-insert-kinds { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.board-dialog.canvas-insert .canvas-insert-kinds legend { padding: 0; margin-bottom: 6px; font-size: 12px; color: var(--studio-soft, #5c574e); }
+.board-dialog.canvas-insert .canvas-insert-kinds input[type="radio"] {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+.board-dialog.canvas-insert .canvas-insert-kind {
+  display: inline-block; box-sizing: border-box; height: 32px; padding: 0 12px; border-radius: 999px; cursor: pointer; user-select: none;
+  border: 1px solid var(--studio-line, rgba(28, 26, 22, 0.12)); background: var(--studio-canvas, #f7f6f2); color: var(--studio-ink, #1c1a16);
+  font: 500 13px/30px var(--font, system-ui, sans-serif);
+}
+.board-dialog.canvas-insert .canvas-insert-kind:hover { border-color: var(--studio-line-strong, rgba(28, 26, 22, 0.18)); background: var(--studio-canvas-2, #f1f1eb); }
+.board-dialog.canvas-insert .canvas-insert-kind.is-on,
+.board-dialog.canvas-insert .canvas-insert-kinds input[type="radio"]:checked + .canvas-insert-kind {
+  border-color: var(--studio-mint, #2a8a78); background: var(--studio-mint-soft, #d8ebe4); color: var(--studio-ink, #1c1a16);
+}
+.board-dialog.canvas-insert .canvas-insert-kinds input[type="radio"]:focus-visible + .canvas-insert-kind {
+  outline: 2px solid var(--studio-lilac, #9e7cc0); outline-offset: 2px;
+}
+.board-dialog.canvas-insert .canvas-insert-kinds input[type="radio"]:disabled + .canvas-insert-kind { opacity: 0.6; cursor: not-allowed; }
+
+.board-dialog.canvas-insert .canvas-insert-field { display: grid; gap: 6px; min-width: 0; }
+.board-dialog.canvas-insert .canvas-insert-field[hidden] { display: none; }
+.board-dialog.canvas-insert .canvas-insert-field label { display: block; font-size: 12px; color: var(--studio-soft, #5c574e); }
+.board-dialog.canvas-insert .canvas-insert-field input,
+.board-dialog.canvas-insert .canvas-insert-field textarea {
+  width: 100%; box-sizing: border-box; min-height: 36px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--studio-line, rgba(28, 26, 22, 0.12)); background: var(--studio-canvas, #f7f6f2); color: var(--studio-ink, #1c1a16);
+  font: 14px/1.5 var(--font, system-ui, sans-serif);
+}
+.board-dialog.canvas-insert .canvas-insert-field textarea { min-height: 96px; resize: vertical; }
+.board-dialog.canvas-insert .canvas-insert-field input:focus-visible,
+.board-dialog.canvas-insert .canvas-insert-field textarea:focus-visible {
+  outline: 2px solid var(--studio-lilac, #9e7cc0); outline-offset: 1px; border-color: var(--studio-lilac, #9e7cc0);
+}
+.board-dialog.canvas-insert .canvas-insert-field input[type="color"] { width: 64px; height: 36px; padding: 4px; cursor: pointer; }
+.board-dialog.canvas-insert .canvas-insert-field input:read-only,
+.board-dialog.canvas-insert .canvas-insert-field textarea:read-only { color: var(--studio-soft, #5c574e); }
+.board-dialog.canvas-insert .canvas-insert-hint { color: var(--studio-mute, #8a8478); font-size: 12px; }
+.board-dialog.canvas-insert .canvas-insert-hint[hidden] { display: none; }
+
+.board-dialog.canvas-insert .canvas-insert-error {
+  margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13px;
+  border: 1px solid rgba(178, 62, 44, 0.32); background: rgba(178, 62, 44, 0.08); color: #8a2a1c; overflow-wrap: anywhere;
+}
+.board-dialog.canvas-insert .canvas-insert-error[hidden] { display: none; }
+
+.board-dialog.canvas-insert .canvas-insert-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.board-dialog.canvas-insert .canvas-insert-submit-hint { flex: 1 1 auto; min-width: 0; color: var(--studio-mute, #8a8478); font-size: 12px; }
+.board-dialog.canvas-insert .canvas-insert-actions button {
+  flex: 0 0 auto; min-height: 34px; padding: 0 16px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--studio-line, rgba(28, 26, 22, 0.12)); background: var(--studio-canvas, #f7f6f2); color: var(--studio-ink, #1c1a16);
+  font: 500 13px/1 var(--font, system-ui, sans-serif);
+}
+.board-dialog.canvas-insert .canvas-insert-actions button:hover:not(:disabled) { border-color: var(--studio-line-strong, rgba(28, 26, 22, 0.18)); background: var(--studio-canvas-2, #f1f1eb); }
+.board-dialog.canvas-insert .canvas-insert-actions button.primary { background: var(--studio-mint, #2a8a78); border-color: var(--studio-mint, #2a8a78); color: var(--studio-paper, #fffcf7); }
+.board-dialog.canvas-insert .canvas-insert-actions button.primary:hover:not(:disabled) { background: #237566; border-color: #237566; }
+.board-dialog.canvas-insert .canvas-insert-actions button:focus-visible { outline: 2px solid var(--studio-lilac, #9e7cc0); outline-offset: 2px; }
+.board-dialog.canvas-insert .canvas-insert-actions button:disabled { opacity: 1; cursor: not-allowed; color: var(--studio-mute, #8a8478); background: var(--studio-canvas-2, #f1f1eb); border-color: var(--studio-line, rgba(28, 26, 22, 0.12)); }
+.board-dialog.canvas-insert.is-busy .canvas-insert-actions button.primary:disabled { color: var(--studio-paper, #fffcf7); background: var(--studio-mint, #2a8a78); border-color: var(--studio-mint, #2a8a78); opacity: 0.7; }
+
+@media (max-width: 600px) {
+  .board-dialog.canvas-insert { padding: 16px; width: calc(100vw - 24px); }
+  .board-dialog.canvas-insert .canvas-insert-actions { flex-wrap: wrap; }
+  .board-dialog.canvas-insert .canvas-insert-submit-hint { flex-basis: 100%; }
+}

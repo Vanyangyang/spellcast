@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tide harbor</title>
+  <style>
+    :root { color-scheme: light; font-family: "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; color: #1c1a16; background: #e7dfcd; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { position: relative; background: #e7dfcd; }
+    .reading { position: absolute; top: 18px; right: 18px; z-index: 1; margin: 0; color: #2a8a78; font-size: 13px; font-weight: 500; }
+    svg { display: block; width: 100%; height: 100%; }
+    .gate-hit { cursor: pointer; fill: transparent; }
+    .gate-glow { opacity: 0; }
+    [data-gate="hot"] .gate-glow { opacity: .9; }
+    .gate-leaf { transition: transform 280ms ease; }
+  </style>
+</head>
+<body>
+  <p class="reading" id="reading" aria-live="polite">潮位 —</p>
+  <svg viewBox="0 0 720 500" role="img" aria-labelledby="map-title">
+    <title id="map-title">潮汐港俯视机制图</title>
+    <defs>
+      <linearGradient id="sea" x1="0" y1="0" x2="0.12" y2="1">
+        <stop offset="0" stop-color="#4a7872"/>
+        <stop offset="1" stop-color="#6f9c94"/>
+      </linearGradient>
+      <linearGradient id="basinFill" x1="0.15" y1="0" x2="0.7" y2="1">
+        <stop offset="0" stop-color="#97c0b8"/>
+        <stop offset="1" stop-color="#5c8c84"/>
+      </linearGradient>
+      <clipPath id="basinClip">
+        <path d="M322 228 C368 182 438 174 496 196 C534 214 542 268 530 324 C516 386 456 430 386 432 C318 434 286 384 284 326 C282 280 292 248 322 228 Z"/>
+      </clipPath>
+    </defs>
+    <rect width="720" height="500" fill="#e7dfcd"/>
+    <path fill="url(#sea)" d="M0 0 H 424 C 382 32 354 68 340 108 C 324 152 344 176 318 204 C 286 234 248 228 200 230 C 156 258 136 312 122 368 C 110 420 64 466 0 500 V 0 Z"/>
+    <path fill="url(#sea)" d="M 198 216 C 246 220 286 236 316 256 C 304 274 286 290 250 296 C 214 302 176 286 158 262 C 172 240 184 222 198 216 Z"/>
+    <path fill="#d4c6ab" d="M322 228 C368 182 438 174 496 196 C534 214 542 268 530 324 C516 386 456 430 386 432 C318 434 286 384 284 326 C282 280 292 248 322 228 Z"/>
+    <rect id="basin-water" x="260" y="160" width="300" height="300" fill="url(#basinFill)" clip-path="url(#basinClip)"/>
+    <path fill="none" stroke="#c3b394" stroke-width="8" d="M322 228 C368 182 438 174 496 196 C534 214 542 268 530 324 C516 386 456 430 386 432 C318 434 286 384 284 326 C282 280 292 248 322 228 Z"/>
+    <path fill="none" stroke="#3a352e" stroke-width="1.2" d="M322 228 C368 182 438 174 496 196 C534 214 542 268 530 324 C516 386 456 430 386 432 C318 434 286 384 284 326 C282 280 292 248 322 228 Z"/>
+    <path fill="#cfc6b3" stroke="#3a352e" stroke-width="1.2" d="M 204 206 L 268 220 L 470 148 L 562 160 L 566 184 L 478 174 L 262 240 L 200 226 Z"/>
+    <path fill="#cfc6b3" stroke="#3a352e" stroke-width="1.2" d="M 162 270 L 166 304 L 238 328 L 226 352 L 148 322 L 150 278 Z"/>
+    <g transform="translate(564 170)" fill="#f4efe4" stroke="#3a352e" stroke-width="1.2">
+      <circle r="10"/><circle r="4" fill="#c9a227" stroke="none"/>
+    </g>
+    <g fill="#d2c8b4" stroke="#3a352e" stroke-width="1.2">
+      <rect x="332" y="406" width="140" height="16" rx="2"/>
+      <rect x="344" y="372" width="36" height="36" rx="2"/>
+      <rect x="388" y="360" width="40" height="48" rx="2"/>
+      <rect x="436" y="376" width="36" height="32" rx="2"/>
+    </g>
+    <g id="boat" transform="translate(400 328)" fill="#f3eee4" stroke="#3a352e" stroke-width="1.2">
+      <path d="M-24 0 C-18 -7 10 -8 26 0 C10 8 -18 7 -24 0 Z"/>
+      <ellipse cx="2" cy="0" rx="6" ry="3.2" fill="#e4dccb"/>
+    </g>
+    <g fill="#d6cdbb" stroke="#3a352e" stroke-width="1.2">
+      <rect x="534" y="276" width="34" height="24" transform="rotate(-8 551 288)"/>
+      <rect x="574" y="270" width="26" height="22" transform="rotate(6 587 281)"/>
+      <rect x="548" y="304" width="42" height="28"/>
+      <rect x="596" y="298" width="30" height="32"/>
+      <rect x="630" y="286" width="24" height="20" transform="rotate(-6 642 296)"/>
+      <rect x="562" y="338" width="36" height="24"/>
+      <rect x="606" y="338" width="28" height="22"/>
+      <rect x="638" y="320" width="22" height="28"/>
+      <rect x="572" y="368" width="34" height="20"/>
+      <rect x="452" y="414" width="56" height="28"/>
+    </g>
+    <g fill="#6f825e" stroke="#3a352e" stroke-width="1.2">
+      <circle cx="638" cy="188" r="8"/><circle cx="656" cy="204" r="6.5"/><circle cx="624" cy="208" r="7"/>
+    </g>
+    <g id="gate" data-marker="gate" data-gate="hot">
+      <g transform="translate(286 268)">
+        <rect class="gate-glow" x="-34" y="-30" width="68" height="60" rx="6" fill="none" stroke="#9e7cc0" stroke-width="2.2"/>
+        <rect x="-16" y="-28" width="32" height="16" rx="1.5" fill="#d8d0be" stroke="#3a352e" stroke-width="1.2"/>
+        <rect x="-16" y="12" width="32" height="16" rx="1.5" fill="#d8d0be" stroke="#3a352e" stroke-width="1.2"/>
+        <g id="gate-left" class="gate-leaf" style="transform-origin: 0px -12px">
+          <rect x="-5" y="-12" width="10" height="14" rx="1" fill="#6a5b48" stroke="#3a352e" stroke-width="1.2"/>
+        </g>
+        <g id="gate-right" class="gate-leaf" style="transform-origin: 0px 12px">
+          <rect x="-5" y="-2" width="10" height="14" rx="1" fill="#6a5b48" stroke="#3a352e" stroke-width="1.2"/>
+        </g>
+        <rect class="gate-hit" id="gate-hit" x="-36" y="-32" width="72" height="64" role="button" tabindex="0" aria-label="Harbor gate" aria-pressed="true"/>
+      </g>
+    </g>
+    <g fill="#3a352e" font-size="12" font-weight="500">
+      <text x="44" y="78">外海</text>
+      <text x="430" y="126">北堤</text>
+      <text x="392" y="292" fill="#eef6f3">内港</text>
+      <text x="338" y="456">码头</text>
+      <text x="640" y="268">街区</text>
+      <text id="tidal-label" x="454" y="250" font-size="11" fill="#6a6254" opacity="0">潮滩</text>
+    </g>
+    <text x="214" y="198" fill="#2a8a78" font-size="12" font-weight="500">港湾闸口</text>
+  </svg>
+  <script src="__spellcast.js"></script>
+  <script>
+    (() => {
+      const boot = async () => {
+        const spellcast = window.spellcast;
+        const water = document.getElementById('basin-water');
+        const reading = document.getElementById('reading');
+        const gate = document.getElementById('gate');
+        const hit = document.getElementById('gate-hit');
+        const left = document.getElementById('gate-left');
+        const right = document.getElementById('gate-right');
+        const flats = document.getElementById('tidal-label');
+        const markers = { gate: { id: 'gate', label: '港湾闸口' } };
+        if (!spellcast) { reading.textContent = '潮位 —'; return; }
+        await spellcast.ready;
+        const saved = spellcast.state && typeof spellcast.state === 'object' ? spellcast.state : {};
+        let selectedId = markers[saved.selected] ? saved.selected : 'gate';
+        let latestInputs = spellcast.inputs;
+        function tideFrom(snapshot) {
+          const port = snapshot && snapshot.ports && snapshot.ports.tide;
+          if (!port || port.status !== 'available' || !Number.isFinite(port.value)) return null;
+          return Math.min(10, Math.max(0, Number(port.value)));
+        }
+        function draw(snapshot) {
+          latestInputs = snapshot || spellcast.inputs;
+          const tide = tideFrom(latestInputs);
+          const available = tide !== null;
+          const level = available ? tide : 0;
+          const height = 48 + level * 26.4;
+          water.setAttribute('height', String(height));
+          water.setAttribute('y', String(432 - height));
+          const rot = level >= 6 ? 86 : 0;
+          left.style.transform = 'rotate(' + (-rot) + 'deg)';
+          right.style.transform = 'rotate(' + rot + 'deg)';
+          flats.setAttribute('opacity', level < 4.5 ? '1' : '0');
+          reading.textContent = available ? ('潮位 ' + tide.toFixed(1) + (level >= 6 ? ' · 闸口开放' : ' · 闸口关闭')) : '等待潮位';
+          const hot = selectedId === 'gate';
+          gate.dataset.gate = hot ? 'hot' : '';
+          hit.setAttribute('aria-pressed', String(hot));
+        }
+        function choose(save) {
+          const changed = selectedId !== 'gate';
+          selectedId = 'gate';
+          if (save && changed) spellcast.setState({ selected: 'gate' });
+          spellcast.select({ id: 'gate', label: '港湾闸口' });
+          draw(latestInputs);
+        }
+        hit.addEventListener('click', () => choose(true));
+        hit.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(true); }
+        });
+        if (!markers[saved.selected]) spellcast.setState({ selected: selectedId });
+        spellcast.select({ id: 'gate', label: '港湾闸口' });
+        draw(latestInputs);
+        spellcast.onInputs(snapshot => draw(snapshot));
+        spellcast.onRestore(state => {
+          selectedId = state && markers[state.selected] ? state.selected : 'gate';
+          if (!state || !markers[state.selected]) spellcast.setState({ selected: selectedId });
+          spellcast.select({ id: 'gate', label: '港湾闸口' });
+          draw(latestInputs);
+        });
+      };
+      boot();
+    })();
+  </script>
+</body>
+</html>

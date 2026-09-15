@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Spellcast desktop permissions",
-  "windows": ["main", "bubble-*"],
+  "windows": ["main", "bubble-*", "completions"],
   "permissions": [
     "core:default",
     "opener:default",

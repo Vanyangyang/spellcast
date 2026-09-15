@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Atomic canvas test work</title>
+<style>body{font:16px system-ui;background:#202532;color:#eee;padding:20px;margin:0}label{display:block;margin:16px 0}input{font:inherit;padding:8px}button{font:inherit;padding:10px}#spacer{height:500px}</style>
+<h1>Native inline work</h1><label>Work note <input id="note" aria-label="Work note"></label>
+<button id="increment">Increase count</button> <output id="count">0</output>
+<button id="select">Select count</button><div id="spacer">Scroll inside this work.</div>
+<script>
+spellcast.ready.then(state => {
+  const note = document.querySelector('#note'), count = document.querySelector('#count');
+  const render = state => { note.value = state.note ?? ''; count.value = String(state.count ?? 0); };
+  render(state); spellcast.onRestore(render);
+  note.oninput = () => spellcast.setState({ note: note.value });
+  document.querySelector('#increment').onclick = () => { const next = Number(count.value) + 1; count.value = String(next); spellcast.setState({ count: next }); };
+  document.querySelector('#select').onclick = () => spellcast.select({ kind: 'item', ids: ['count'], label: 'Count' });
+});
+</script></html>

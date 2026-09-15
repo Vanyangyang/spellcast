@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="560" viewBox="0 0 900 560">
+<defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#10182e"/><stop offset="1" stop-color="#32445b"/></linearGradient><linearGradient id="beam"><stop stop-color="#ffd98c" stop-opacity=".65"/><stop offset="1" stop-color="#ffd98c" stop-opacity="0"/></linearGradient></defs>
+<rect width="900" height="560" fill="url(#sky)"/><circle cx="690" cy="106" r="42" fill="#e8d7b0"/><path d="M0 330Q160 286 320 345T640 332T900 316V560H0Z" fill="#142737"/>
+<path d="M520 140L870 25V270Z" fill="url(#beam)"/><path d="M488 170H544L568 410H466Z" fill="#e2d7c7"/><path d="M476 166H552V120H476Z" fill="#d5a055"/><rect x="490" y="125" width="48" height="31" fill="#ffe7ab"/><path d="M470 120L514 82L558 120Z" fill="#202735"/>
+<path d="M70 400L310 355L695 428L900 401V560H0V421Z" fill="#243342"/><path d="M90 397V467M190 381V447M290 363V429" stroke="#b59366" stroke-width="8"/>
+<path d="M355 426Q445 402 533 426T713 426M300 470Q430 450 560 470T820 470M70 509Q215 490 360 509" fill="none" stroke="#748fa0" stroke-opacity=".55" stroke-width="3"/>
+<text x="46" y="62" fill="#f2e5cc" font-size="30" font-family="serif">THE HARBOR OF LOST NAMES</text><text x="48" y="94" fill="#a2b6c4" font-size="15" font-family="sans-serif" letter-spacing="4">A QUIET SIGNAL</text>
+</svg>

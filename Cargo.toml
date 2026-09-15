@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["spellcast-core", "spellcast-bridge", "spellcast-server"]
+members = ["spellcast-core", "spellcast-bridge", "spellcast-server", "spellcast-hook"]
 exclude = ["src-tauri"]
 
 [workspace.package]

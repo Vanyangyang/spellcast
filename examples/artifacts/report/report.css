@@ -1,0 +1,23 @@
+.report-header a { text-decoration: none; background: #245e54; color: #fff; border-radius: 8px; padding: 9px 13px; font-size: 13px; }
+.report { max-width: 840px; padding: clamp(24px, 5vw, 60px); background: #fffefb; }
+.report h2 { color: #284d46; font-size: 21px; margin-top: 32px; padding: 7px 0; }
+.report h2:first-child { margin-top: 0; }
+.report h2.selected-section { box-shadow: inset 4px 0 #cba85f; padding-left: 12px; background: #faf2df; }
+.report p, .report li { font-size: 14px; color: #4e5d66; line-height: 1.9; }
+.report img { width: 100%; display: block; border-radius: 9px; margin: 24px 0 8px; }
+.report em { color: #8a928f; font-size: 11px; }
+.report table { margin: 24px 0; }
+.report .katex-display { font-size: .95em; overflow-x: auto; overflow-y: hidden; padding: 12px 0; }
+@media print {
+  @page { size: A4; margin: 18mm 17mm; }
+  :root, body { background: #fff; }
+  body { padding: 0; }
+  .report-header .bar { display: none; }
+  .report-header h1 { font-size: 28px; }
+  .report { max-width: none; border: 0; border-radius: 0; box-shadow: none; padding: 0; }
+  .report h2 { break-after: avoid; font-size: 18px; }
+  .report img { max-height: 110mm; object-fit: cover; }
+  #section-2 { break-before: page; }
+  .report table, .report .katex-display { break-inside: avoid; }
+  .report p, .report li { font-size: 11px; line-height: 1.65; }
+}

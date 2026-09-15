@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tide controls</title>
+  <style>
+    :root { color-scheme: light; font-family: "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; color: #1c1a16; background: #f7f6f2; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; align-items: stretch; justify-content: stretch; background: #f7f6f2; }
+    main { display: flex; flex-direction: column; justify-content: flex-start; width: 100%; min-height: 0; height: 100%; padding: 12px 14px; gap: 8px; }
+    .kicker { margin: 0; color: #8a8478; font-size: 11px; font-weight: 500; letter-spacing: .12em; }
+    h1 { margin: 0; font: 500 20px/1.2 "Noto Serif SC", "Songti SC", serif; }
+    .readout { margin: 0; font: 500 32px/1 "Noto Serif SC", serif; letter-spacing: .02em; }
+    label { display: block; }
+    input[type="range"] { width: 100%; height: 24px; accent-color: #2a8a78; cursor: pointer; }
+    .scale { display: flex; justify-content: space-between; margin-top: 4px; color: #8a8478; font-size: 11px; font-weight: 500; }
+    input[type="number"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    input:focus-visible { outline: 2px solid #9e7cc0; outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="kicker">参数</p>
+    <h1>潮位</h1>
+    <p class="readout" id="tide-value" aria-live="polite">8.0</p>
+    <label>
+      <span class="visually-hidden" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">潮位</span>
+      <input id="tide-slider" type="range" min="0" max="10" step="0.1" value="8" aria-label="Tide slider">
+    </label>
+    <div class="scale"><span>0</span><span>10</span></div>
+    <input id="tide-number" type="number" min="0" max="10" step="0.1" value="8" aria-label="Tide level">
+  </main>
+  <script src="__spellcast.js"></script>
+  <script>
+    (() => {
+      const boot = async () => {
+        const spellcast = window.spellcast;
+        const slider = document.querySelector('#tide-slider');
+        const number = document.querySelector('#tide-number');
+        const value = document.querySelector('#tide-value');
+        if (!spellcast) { value.textContent = '—'; return; }
+        await spellcast.ready;
+        const saved = spellcast.state && typeof spellcast.state === 'object' ? spellcast.state : {};
+        const valid = (state) => {
+          if (!state || typeof state.tide !== 'number' || !Number.isFinite(state.tide) || state.tide < 0 || state.tide > 10) return null;
+          return Math.round(Math.min(10, Math.max(0, state.tide)) * 10) / 10;
+        };
+        let tide = valid(saved) === null ? 8 : valid(saved);
+        function paint() {
+          const formatted = tide.toFixed(1);
+          slider.value = String(tide);
+          number.value = String(tide);
+          value.textContent = formatted;
+        }
+        function publish() { spellcast.publishOutputs({ tide }, spellcast.inputs.revision); }
+        function apply(raw) {
+          const numeric = Number(raw);
+          if (!Number.isFinite(numeric)) return;
+          const next = Math.round(Math.min(10, Math.max(0, numeric)) * 10) / 10;
+          const changed = next !== tide;
+          tide = next; paint();
+          if (changed) { spellcast.setState({ tide }); publish(); }
+        }
+        slider.addEventListener('input', () => apply(slider.value));
+        number.addEventListener('input', () => { if (number.value !== '' && Number.isFinite(Number(number.value))) apply(number.value); });
+        number.addEventListener('change', () => apply(number.value));
+        spellcast.onInputs(() => publish());
+        spellcast.onRestore(state => {
+          const restored = valid(state);
+          tide = restored === null ? 8 : restored;
+          if (restored === null) spellcast.setState({ tide });
+          paint(); publish();
+        });
+        paint();
+        if (valid(saved) === null) spellcast.setState({ tide });
+        publish();
+      };
+      boot();
+    })();
+  </script>
+</body>
+</html>

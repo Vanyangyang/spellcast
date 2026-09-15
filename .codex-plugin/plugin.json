@@ -1,0 +1,25 @@
+{
+  "name": "spellcast",
+  "version": "0.3.0",
+  "description": "Spellcast desktop Canvas and independent asides for the current Codex task.",
+  "author": {
+    "name": "Spellcast"
+  },
+  "license": "AGPL-3.0-or-later",
+  "keywords": ["spellcast", "canvas", "observer"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Spellcast",
+    "shortDescription": "Desktop Canvas and optional independent asides.",
+    "longDescription": "Connects Codex to a local Spellcast instance over loopback HTTP. Independent asides follow the product switch in Spellcast Settings. Windows packaging of the native hook helper has been verified; other operating systems are not claimed as tested. Installing this plugin is not the same as trusting its hooks.",
+    "developerName": "Spellcast",
+    "category": "Productivity",
+    "capabilities": ["Interactive"],
+    "defaultPrompt": [
+      "Use Spellcast Canvas for this task.",
+      "When asides are on, submit a short spellcast_checkpoint at the first substantial context and at later new evidence or constraints. Do not pre-judge bubble value.",
+      "Do not start observers unless Spellcast returns ready."
+    ]
+  }
+}

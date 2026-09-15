@@ -1,0 +1,27 @@
+.artifact-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 2px 0 10px; }
+.canvas-jump { flex: 0 1 220px; min-width: 130px; max-width: 220px; border: 1px solid var(--line, #404656); border-radius: 8px; background: #1a202b; color: #dce4f0; padding: 0 10px; min-height: 32px; font: inherit; }
+.artifact-controls button, .artifact-sources button, .artifact-sources select { min-height: 32px; border: 1px solid var(--line, #414757); border-radius: 8px; background: #242936; color: #e9edf7; padding: 0 10px; font: 500 13px var(--font, inherit); }
+.artifact-controls button:hover, .artifact-sources button:hover { background: #343d4f; }
+.artifact-controls button:disabled, .artifact-sources button:disabled {
+  opacity: 1;
+  color: #9aa3b5;
+  background: #1c2230;
+  border-color: #3a4253;
+  cursor: not-allowed;
+}
+.artifact-status { color: #a5b6cd; font-size: 13px; flex: 1 1 150px; overflow-wrap: anywhere; }
+.artifact-viewport { min-height: 280px; border-radius: 10px; overflow: hidden; background: #f7f8fb; border: 1px solid #3a4253; }
+.artifact-frame { display: block; width: 100%; height: 480px; border: 0; background: #f7f8fb; }
+.artifact-selection { color: #bfcde0; font-size: 13px; margin: 8px 0; overflow-wrap: anywhere; }
+.artifact-description { color: #bdc8d8; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10px; }
+.artifact-sources { margin-top: 10px; border-top: 1px solid #343c4c; padding-top: 10px; }
+.artifact-sources summary { cursor: pointer; color: #c1d3eb; font-size: 13px; }
+.artifact-source-body { display: grid; gap: 9px; padding-top: 12px; }
+.artifact-source-body p { color: #a9b6c8; font-size: 13px; margin: 0; }
+.artifact-source-body textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; border: 1px solid #445167; border-radius: 8px; background: #131924; color: #d9e6f7; padding: 12px; font: 13px/1.6 Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
+.artifact-source-body select { width: 100%; min-width: 0; }
+.artifact-state-json { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; max-height: 240px; overflow: auto; }
+.canvas-reader .artifact-frame { height: min(68vh, 780px); min-height: 420px; }
+.canvas-frame-content .artifact-viewport { min-height: 0; }
+.canvas-frame-content .artifact-frame { height: 100%; min-height: 0; }
+@media (max-width: 620px) { .artifact-frame { height: 420px; } .artifact-controls { gap: 6px; } }

@@ -1,4 +1,6 @@
-use crate::types::{new_id, BoardEdge, BoardNode, FragmentWeight, NodeKind, ProposedNode};
+use crate::types::{
+    new_id, BoardEdge, BoardNode, EdgeRelation, FragmentWeight, NodeKind, ProposedNode,
+};
 
 const GOLDEN_ANGLE: f32 = 2.399_963_2;
 
@@ -11,7 +13,7 @@ pub fn place_nodes(
     let mut edges = Vec::new();
     let start_index = existing.len();
 
-    let parent = focus_id
+    let layout_anchor = focus_id
         .and_then(|id| existing.iter().find(|n| n.id == id))
         .or_else(|| existing.last());
 
@@ -28,15 +30,20 @@ pub fn place_nodes(
             continue;
         }
 
-        let parent_id = proposal
-            .parent_id
-            .clone()
-            .or_else(|| parent.map(|p| p.id.clone()));
-        let (x, y, z) = orbit_point(parent, start_index + i, existing.len() + i);
+        let explicit_parent = proposal.parent_id.as_deref().and_then(|pid| {
+            existing
+                .iter()
+                .find(|n| n.id == pid)
+                .or_else(|| nodes.iter().find(|n| n.id == pid))
+        });
+        let layout_parent = explicit_parent.or(layout_anchor);
+        let (x, y, z) = orbit_point(layout_parent, start_index + i, existing.len() + i);
+        let parent_id = explicit_parent.map(|n| n.id.clone());
 
         let weight = FragmentWeight::parse(proposal.weight.as_deref().unwrap_or("note"));
         let node = BoardNode {
             id: id.clone(),
+            revision: 0,
             source_id: proposal.source_id.clone(),
             title: clip(&proposal.title, 160),
             body: clip(&proposal.body, 64_000),
@@ -46,16 +53,16 @@ pub fn place_nodes(
             y,
             z,
             parent_id: parent_id.clone(),
+            captured_context: None,
         };
 
         if let Some(pid) = parent_id {
-            if existing.iter().any(|n| n.id == pid) || nodes.iter().any(|n| n.id == pid) {
-                edges.push(BoardEdge {
-                    id: new_id(),
-                    from: pid,
-                    to: id,
-                });
-            }
+            edges.push(BoardEdge {
+                id: new_id(),
+                from: pid,
+                to: id,
+                relation: EdgeRelation::Parent,
+            });
         }
 
         nodes.push(node);
@@ -102,6 +109,7 @@ mod tests {
     fn places_unique_nodes_around_a_parent() {
         let parent = BoardNode {
             id: "root".into(),
+            revision: 0,
             source_id: None,
             title: "主题".into(),
             body: String::new(),
@@ -111,6 +119,7 @@ mod tests {
             y: 0.0,
             z: 0.0,
             parent_id: None,
+            captured_context: None,
         };
         let proposals = vec![
             ProposedNode {
@@ -128,7 +137,87 @@ mod tests {
         ];
         let (nodes, edges) = place_nodes(&[parent], &proposals, Some("root"));
         assert_eq!(nodes.len(), 2);
-        assert_eq!(edges.len(), 2);
+        assert!(edges.is_empty());
+        assert!(nodes.iter().all(|n| n.parent_id.is_none()));
         assert!(nodes.iter().all(|n| n.x.abs() + n.z.abs() > 0.5));
+    }
+
+    #[test]
+    fn independent_keep_does_not_create_edges() {
+        let existing = BoardNode {
+            id: "a".into(),
+            revision: 0,
+            source_id: None,
+            title: "已有".into(),
+            body: String::new(),
+            kind: NodeKind::Idea,
+            weight: FragmentWeight::Note,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            parent_id: None,
+            captured_context: None,
+        };
+        let (nodes, edges) = place_nodes(
+            &[existing],
+            &[ProposedNode {
+                title: "独立采纳".into(),
+                ..Default::default()
+            }],
+            None,
+        );
+        assert_eq!(nodes.len(), 1);
+        assert!(edges.is_empty());
+        assert!(nodes[0].parent_id.is_none());
+    }
+
+    #[test]
+    fn explicit_parent_records_a_parent_edge() {
+        let root = BoardNode {
+            id: "root".into(),
+            revision: 0,
+            source_id: None,
+            title: "根".into(),
+            body: String::new(),
+            kind: NodeKind::Idea,
+            weight: FragmentWeight::Note,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            parent_id: None,
+            captured_context: None,
+        };
+        let (nodes, edges) = place_nodes(
+            &[root],
+            &[ProposedNode {
+                title: "子".into(),
+                parent_id: Some("root".into()),
+                ..Default::default()
+            }],
+            None,
+        );
+        assert_eq!(nodes[0].parent_id.as_deref(), Some("root"));
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].from, "root");
+        assert_eq!(edges[0].relation, EdgeRelation::Parent);
+    }
+
+    #[test]
+    fn old_edge_json_is_unconfirmed_and_omits_the_field() {
+        let edge: BoardEdge =
+            serde_json::from_str(r#"{"id":"e1","from":"a","to":"b"}"#).unwrap();
+        assert_eq!(edge.relation, EdgeRelation::Unconfirmed);
+        let value = serde_json::to_value(&edge).unwrap();
+        assert!(value.get("relation").is_none());
+        let parent = BoardEdge {
+            id: "e2".into(),
+            from: "a".into(),
+            to: "c".into(),
+            relation: EdgeRelation::Parent,
+        };
+        assert_eq!(
+            serde_json::to_value(&parent).unwrap()["relation"],
+            "parent"
+        );
     }
 }

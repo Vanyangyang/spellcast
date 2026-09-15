@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/spellcast-hook\" --endpoint http://127.0.0.1:47194/api/observer/status",
+            "commandWindows": "powershell.exe -NoProfile -NonInteractive -Command \"& (Join-Path ([Environment]::GetEnvironmentVariable('PLUGIN_ROOT')) 'bin/spellcast-hook.exe') --endpoint 'http://127.0.0.1:47194/api/observer/status'\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/bin/spellcast-hook\" --endpoint http://127.0.0.1:47194/api/observer/status",
+            "commandWindows": "powershell.exe -NoProfile -NonInteractive -Command \"& (Join-Path ([Environment]::GetEnvironmentVariable('PLUGIN_ROOT')) 'bin/spellcast-hook.exe') --endpoint 'http://127.0.0.1:47194/api/observer/status'\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

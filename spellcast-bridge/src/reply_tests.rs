@@ -42,14 +42,21 @@ async fn explicit_feedback_survives_event_churn_restart_and_source_acknowledgeme
         bridge.write_reply(request("reply-b", "cursor:b")).unwrap();
         let (_, event) = bridge
             .reply_action(ReplyActionInput {
+                object_id: None,
+                request_id: None,
                 reply_id: "reply-a".into(),
                 block_id: "choices".into(),
                 action: ReplyAction::Select,
                 option_id: Some("b".into()),
                 text: None,
+                artifact_context: None,
             })
             .unwrap();
-        sequence = event.seq;
+        assert_eq!(event.kind, "canvas_state");
+        assert!(bridge.pending_feedback(None).is_empty());
+        let object = bridge.board().canvas.objects.into_iter().find(|object| matches!(&object.content, spellcast_core::CanvasContent::Reply { id } if id == "reply-a")).unwrap();
+        sequence = bridge.say(SayRequest { text: "按最终选择继续。".into(), source_id: Some("codex:a".into()),
+            anchors: vec![spellcast_core::inbox::CanvasAnchor { object_id: object.id, content_revision: object.content_revision, compositions: vec![], block_id: Some("choices".into()), selection: None, region: None, artifact: None, inputs: None }], ..Default::default() }).unwrap().seq;
         assert_eq!(event.source_id.as_deref(), Some("codex:a"));
         for _ in 0..270 {
             bridge.user_event(AgentEvent::new("expired")).unwrap();
@@ -66,7 +73,8 @@ async fn explicit_feedback_survives_event_churn_restart_and_source_acknowledgeme
     {
         let bridge = Bridge::open(Headless, 0, &path).unwrap();
         let (events, _) = bridge.listen_scoped(999_999, 0, Some("codex:a")).await;
-        assert_eq!(events[0].option_id.as_deref(), Some("b"));
+        assert_eq!(events[0].text.as_deref(), Some("按最终选择继续。"));
+        assert_eq!(events[0].anchors[0].content_revision, 2);
         assert!(bridge
             .acknowledge_feedback("cursor:b", &[sequence])
             .is_err());
@@ -106,6 +114,8 @@ fn agent_updates_are_not_misreported_as_user_input() {
         .patch_reply_from_source(
             "cursor:b",
             ReplyPatchRequest {
+                object_id: None,
+                request_id: None,
                 reply_id: "reply-a".into(),
                 expected_revision: 1,
                 block: block.clone(),
@@ -117,6 +127,8 @@ fn agent_updates_are_not_misreported_as_user_input() {
         .patch_reply_from_source(
             "codex:a",
             ReplyPatchRequest {
+                object_id: None,
+                request_id: None,
                 reply_id: "reply-a".into(),
                 expected_revision: 1,
                 block: block.clone(),
@@ -127,6 +139,8 @@ fn agent_updates_are_not_misreported_as_user_input() {
     assert!(bridge.pending_feedback(None).is_empty());
     bridge
         .patch_reply(ReplyPatchRequest {
+            object_id: None,
+            request_id: None,
             reply_id: "reply-a".into(),
             expected_revision: 2,
             block: ReplyBlock::Text {
@@ -138,9 +152,43 @@ fn agent_updates_are_not_misreported_as_user_input() {
         })
         .unwrap();
     let pending = bridge.pending_feedback(Some("codex:a"));
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].kind, "reply_edit");
-    assert_eq!(pending[0].block_id.as_deref(), Some("text"));
+    assert!(pending.is_empty(), "Saving a user edit must not submit it to the task.");
+    assert!(bridge.feedback_state(None).deliveries.is_empty());
+    assert_eq!(bridge.board().replies[0].revision, 3);
+}
+
+#[tokio::test]
+async fn choices_and_edits_stay_local_across_restart_until_final_send() {
+    let path = std::env::temp_dir().join(format!("spellcast-final-send-{}.sqlite3", new_id()));
+    {
+        let bridge = Bridge::open(Headless, 0, &path).unwrap();
+        bridge.write_reply(request("reply-a", "codex:a")).unwrap();
+        let messages = bridge.board().messages.len();
+        for (request_id, option, revision) in [("choose-a", "a", 2), ("same-choice", "a", 2), ("choose-b", "b", 3)] {
+            let (reply, event) = bridge.reply_action(ReplyActionInput { object_id: None, request_id: Some(request_id.into()), reply_id: "reply-a".into(), block_id: "choices".into(), action: ReplyAction::Select, option_id: Some(option.into()), text: None, artifact_context: None }).unwrap();
+            assert_eq!(reply.revision, revision); assert_eq!(event.kind, "canvas_state");
+        }
+        let mut changed = bridge.board().replies[0].blocks[0].clone();
+        if let ReplyBlock::Comparison { title, .. } = &mut changed { *title = "最终选择".into(); }
+        bridge.patch_reply(ReplyPatchRequest { object_id: None, request_id: Some("edit-final".into()), reply_id: "reply-a".into(), expected_revision: 3, block: changed, layout_only: false }).unwrap();
+        assert_eq!(bridge.board().messages.len(), messages);
+        assert!(bridge.pending_feedback(None).is_empty()); assert!(bridge.feedback_state(None).deliveries.is_empty());
+        assert!(bridge.listen_scoped(0, 0, Some("codex:a")).await.0.is_empty());
+        assert!(bridge.listen(0, 0).await.0.is_empty());
+    }
+    {
+        let bridge = Bridge::open(Headless, 0, &path).unwrap();
+        let board = bridge.board(); let object = board.canvas.objects.iter().find(|o| matches!(&o.content, spellcast_core::CanvasContent::Reply { id } if id == "reply-a")).unwrap();
+        assert_eq!(object.content_revision, 4);
+        assert!(matches!(&board.replies[0].blocks[0], ReplyBlock::Comparison { selected_id: Some(id), title, .. } if id == "b" && title == "最终选择"));
+        assert!(bridge.listen_scoped(0, 0, Some("codex:a")).await.0.is_empty());
+        let event = bridge.say(SayRequest { text: "提交最终状态。".into(), source_id: Some("codex:a".into()),
+            anchors: vec![spellcast_core::inbox::CanvasAnchor { object_id: object.id.clone(), content_revision: 4, compositions: vec![], block_id: Some("choices".into()), selection: None, region: None, artifact: None, inputs: None }], ..Default::default() }).unwrap();
+        let heard = bridge.listen_scoped(0, 0, Some("codex:a")).await.0;
+        assert_eq!(heard.len(), 1); assert_eq!(heard[0].seq, event.seq); assert_eq!(heard[0].anchors[0].content_revision, 4);
+        assert_eq!(bridge.feedback_state(None).deliveries.len(), 1);
+    }
+    std::fs::remove_file(path).unwrap();
 }
 
 #[tokio::test]

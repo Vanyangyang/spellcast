@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tide controls</title>
+  <style>
+    :root { color-scheme: light; font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; color: #183342; background: #edf3f1; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: radial-gradient(circle at 12% 8%, #fff 0 9%, transparent 31%), #edf3f1; }
+    main { width: min(500px, calc(100vw - 24px)); height: 440px; padding: 28px; overflow: hidden; border: 1px solid #d8e3df; border-radius: 24px; background: linear-gradient(145deg, #fffef8, #f4f8f5); box-shadow: 0 18px 46px #2a55421a; }
+    header { display: flex; justify-content: space-between; align-items: start; gap: 16px; }
+    .eyebrow { margin: 0 0 7px; color: #567566; font-size: 12px; letter-spacing: .12em; }
+    h1 { margin: 0; font-size: 25px; font-weight: 720; letter-spacing: .03em; }
+    .candidate { margin: 4px 0 0; max-width: 118px; color: #7b6040; font-size: 12px; line-height: 1.45; text-align: right; }
+    .panel { margin-top: 28px; padding: 22px; border: 1px solid #d8e8e4; border-radius: 18px; background: #f8fcfa; }
+    .field-label, label { display: block; color: #315547; font-size: 14px; font-weight: 650; }
+    .field-label span { color: #789084; font-weight: 500; }
+    .range-row { display: grid; grid-template-columns: 1fr 68px; gap: 16px; align-items: center; margin: 12px 0 20px; }
+    input[type="range"] { width: 100%; accent-color: #16736a; }
+    output { display: grid; min-height: 50px; place-items: center; border-radius: 14px; color: #075b55; background: #d9f0ea; font: 700 25px/1 ui-monospace, Consolas, monospace; }
+    input[type="number"] { width: 100%; margin-top: 9px; padding: 12px 14px; border: 1px solid #b8d4ca; border-radius: 12px; color: #173f3c; background: #fff; font: 600 18px/1.1 ui-monospace, Consolas, monospace; }
+    input:focus-visible, button:focus-visible { outline: 3px solid #dcad54; outline-offset: 3px; }
+    .summary { margin: 18px 0 0; color: #4f7165; font-size: 14px; line-height: 1.55; }
+    .footer { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 20px; }
+    button { padding: 9px 12px; border: 1px solid #ddc69a; border-radius: 10px; color: #765524; background: #fff8e8; font: inherit; cursor: pointer; }
+    #simulation-note { flex: 1; margin: 0; color: #816d51; font-size: 12px; line-height: 1.45; }
+  </style>
+</head>
+<body>
+  <main aria-labelledby="page-title">
+    <header>
+      <div>
+        <p class="eyebrow">LINKED TIDE / 参数</p>
+        <h1 id="page-title">潮位旋钮</h1>
+      </div>
+      <p class="candidate">港湾涨潮机制探索候选<br>非真实航海建议</p>
+    </header>
+
+    <section class="panel" aria-label="潮位参数控制">
+      <label class="field-label" for="tide-slider">潮位刻度 <span>0—10</span></label>
+      <div class="range-row">
+        <input id="tide-slider" type="range" min="0" max="10" step="0.1" value="4" aria-label="Tide slider">
+        <output id="tide-value" for="tide-slider tide-number" aria-live="polite">4.0</output>
+      </div>
+      <label for="tide-number">精确数值</label>
+      <input id="tide-number" type="number" min="0" max="10" step="0.1" value="4" inputmode="decimal" aria-label="Tide level">
+      <p class="summary">这一数值会传给图表作品，描绘同一座想象港湾的水线变化。</p>
+    </section>
+
+    <div class="footer">
+      <button id="simulate-failure" type="button" aria-label="Simulate upstream failure">模拟上游故障</button>
+      <p id="simulation-note" aria-live="polite">演示按钮仅模拟错误；重启本作品即可恢复。</p>
+    </div>
+  </main>
+
+  <script src="__spellcast.js"></script>
+  <script>
+    (() => {
+      const boot = async () => {
+        const spellcast = window.spellcast;
+        const slider = document.querySelector('#tide-slider');
+        const number = document.querySelector('#tide-number');
+        const value = document.querySelector('#tide-value');
+        const note = document.querySelector('#simulation-note');
+
+        if (!spellcast) {
+          value.textContent = '—';
+          note.textContent = '等待作品发布器提供 Spellcast 连接。';
+          return;
+        }
+
+        await spellcast.ready;
+        const saved = spellcast.state && typeof spellcast.state === 'object' ? spellcast.state : {};
+        const restoredTide = validTide(saved);
+        let tide = restoredTide === null ? 4 : restoredTide;
+
+        function normalize(raw, fallback) {
+          const numeric = Number(raw);
+          if (!Number.isFinite(numeric)) return fallback;
+          return Math.round(Math.min(10, Math.max(0, numeric)) * 10) / 10;
+        }
+
+        function validTide(state) {
+          if (!state || typeof state.tide !== 'number' || !Number.isFinite(state.tide) || state.tide < 0 || state.tide > 10) return null;
+          return normalize(state.tide, 4);
+        }
+
+        function paint() {
+          const formatted = tide.toFixed(1);
+          slider.value = String(tide);
+          number.value = String(tide);
+          value.textContent = formatted;
+        }
+
+        function publish() {
+          spellcast.publishOutputs({ tide }, spellcast.inputs.revision);
+        }
+
+        function apply(raw) {
+          const next = normalize(raw, tide);
+          const changed = next !== tide;
+          tide = next;
+          paint();
+          if (changed) {
+            spellcast.setState({ tide });
+            publish();
+          }
+        }
+
+        slider.addEventListener('input', () => apply(slider.value));
+        number.addEventListener('input', () => {
+          if (number.value !== '' && Number.isFinite(Number(number.value))) apply(number.value);
+        });
+        number.addEventListener('change', () => apply(number.value));
+        document.querySelector('#simulate-failure').addEventListener('click', () => {
+          spellcast.reportError('模拟上游故障：潮位端口暂不可用。');
+          note.textContent = '已报告模拟故障；重启本作品即可恢复。';
+        });
+
+        paint();
+        if (restoredTide === null) spellcast.setState({ tide });
+        publish();
+        spellcast.onInputs(() => publish());
+        spellcast.onRestore(state => {
+          const restored = validTide(state);
+          tide = restored === null ? 4 : restored;
+          paint();
+          if (restored === null) spellcast.setState({ tide });
+          publish();
+        });
+      };
+
+      boot();
+    })();
+  </script>
+</body>
+</html>

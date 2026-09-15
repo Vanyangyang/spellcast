@@ -1,9 +1,14 @@
 ﻿/node_modules
 /dist
 /target
+/target-complete-setup
+/output
 /spellcast-core/target
 /spellcast-server/target
 /src-tauri/target
+/src-tauri/target-complete-setup
+/src-tauri/target-teardown-20260913
+/src-tauri/resources/codex-plugin
 /src-tauri/gen
 *.db
 .env

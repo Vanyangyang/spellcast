@@ -3,6 +3,83 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+/// A reference to the exact content the user discussed, independent of its placement.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+pub struct CanvasAnchor {
+    pub object_id: String,
+    pub content_revision: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compositions: Vec<CanvasCompositionAnchor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<CanvasRegion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<CanvasArtifactAnchor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<CanvasInputSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+pub struct CanvasCompositionAnchor {
+    pub id: String,
+    pub revision: u64,
+}
+
+/// Runtime input evidence, captured for feedback only; never a saved work state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasInputSnapshot {
+    pub revision: u64,
+    pub ports: std::collections::BTreeMap<String, CanvasPortValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasPortStatus { Available, Unavailable }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasPortValue {
+    pub status: CanvasPortStatus,
+    #[serde(default)]
+    pub value: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub sources: Vec<CanvasDataSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasDataSource {
+    pub object_id: String,
+    pub content_revision: u64,
+    pub block_id: String,
+    pub bundle_id: String,
+    pub state_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+pub struct CanvasRegion {
+    pub resource: String,
+    pub unit: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+pub struct CanvasArtifactAnchor {
+    pub bundle_id: String,
+    pub state_revision: u64,
+    pub state: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<serde_json::Value>,
+}
+
 /// Something the user did on the local Spellcast surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentEvent {
@@ -11,7 +88,17 @@ pub struct AgentEvent {
     /// poke | reply | kept | dismiss | expired | say | board_edit | cleared
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchors: Vec<CanvasAnchor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26,6 +113,8 @@ pub struct AgentEvent {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_context: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -78,7 +167,12 @@ impl AgentEvent {
             seq: 0,
             at_ms: 0,
             kind: kind.into(),
+            request_id: None,
             source_id: None,
+            target_thread_id: None,
+            object_id: None,
+            object_revision: None,
+            anchors: Vec::new(),
             reply_id: None,
             block_id: None,
             option_id: None,
@@ -86,6 +180,7 @@ impl AgentEvent {
             node_id: None,
             title: None,
             text: None,
+            artifact_context: None,
         }
     }
 

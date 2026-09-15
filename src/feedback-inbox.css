@@ -1,0 +1,57 @@
+/* Request-first inbox. Keep filters visible while only the records scroll. */
+#feedback-dialog { width: min(900px, calc(100vw - 40px)); height: min(790px, calc(100vh - 48px)); max-height: calc(100vh - 48px); padding: 0; overflow: hidden; background: #fbfaf6; color: #282720; border: 1px solid #dedbd3; box-shadow: 0 24px 90px #302b2529; }
+#feedback-dialog[open] { display: flex; flex-direction: column; }
+#feedback-dialog .feedback-dialog-head { flex: none; padding: 24px 28px 0; border-bottom: 1px solid #e6e2d9; background: #fbfaf6; }
+#feedback-dialog .feedback-dialog-head > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+#feedback-dialog h2 { font-size: 24px; font-weight: 600; letter-spacing: -.03em; }
+#feedback-dialog .feedback-dialog-head p { margin: 6px 0 0; color: #716c62; font-size: 13px; }
+#feedback-dialog .feedback-filters { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr) minmax(0, 1.35fr); gap: 12px; margin: 14px 0 8px; }
+#feedback-dialog .feedback-filters label { min-width: 0; margin: 0; color: #777065; font-size: 11px; }
+#feedback-dialog input, #feedback-dialog textarea, #feedback-dialog select { margin-top: 5px; min-width: 0; height: 38px; color: #36332e; background: #fffefa; border: 1px solid #dedad1; font-size: 13px; text-overflow: ellipsis; }
+#feedback-dialog button { color: #504b42; background: #fffefa; border-color: #dedad1; }
+#feedback-dialog button:hover:not(:disabled) { background: #f0ede5; border-color: #bdb6a7; }
+#feedback-dialog button:focus-visible, #feedback-dialog input:focus-visible, #feedback-dialog select:focus-visible, #feedback-dialog summary:focus-visible { outline: 2px solid #687f71; outline-offset: 3px; }
+#feedback-dialog .feedback-views { gap: 6px; margin: 0; }
+#feedback-dialog .feedback-views button { min-height: 38px; padding: 0 14px; border: 0; border-radius: 8px 8px 0 0; font-size: 13px; background: transparent; color: #746e64; }
+#feedback-dialog .feedback-views button.is-on { color: #31564c; background: #eaf0e9; box-shadow: inset 0 -2px #567c6c; }
+#feedback-dialog #feedback-summary { min-height: 0; margin: 0; padding: 8px 0; font-size: 11px; line-height: 16px; color: #8a8377; }
+#feedback-scroll { flex: 1; min-height: 0; overflow: auto; padding: 8px 28px 24px; scrollbar-color: #c8c1b4 transparent; }
+#feedback-list { display: grid; gap: 12px; padding-top: 10px; }
+#feedback-dialog .feedback-card { margin: 0; padding: 16px 20px 10px; min-width: 0; border: 1px solid #e2ded5; border-radius: 12px; background: #fffefa; }
+#feedback-dialog .feedback-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+#feedback-dialog .feedback-card h3 { flex: 1; min-width: 0; margin: 0; font-size: 14px; font-weight: 600; line-height: 1.55; color: #4c483f; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#feedback-dialog .feedback-status { flex-shrink: 0; max-width: 40%; padding: 3px 8px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: #666056; background: #f0ede6; }
+#feedback-dialog .feedback-status[data-tone=active] { color: #52725e; background: #eef3eb; }
+#feedback-dialog .feedback-status[data-tone=done] { color: #416c5d; background: #eaf1eb; }
+#feedback-dialog .feedback-status[data-tone=attention] { color: #8a632d; background: #fbefd8; }
+#feedback-dialog .feedback-meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; color: #8c8478; font-size: 11px; }
+#feedback-dialog .feedback-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#feedback-dialog time { flex-shrink: 0; }
+#feedback-dialog .feedback-note { padding: 0; margin: 14px 0 0; border: 0; background: transparent; }
+#feedback-dialog .feedback-kicker { margin: 0 0 4px; color: #918777; font-size: 11px; }
+#feedback-dialog .feedback-message-text { margin: 0; color: #242620; font-size: 15px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+#feedback-dialog .feedback-note > small { display: block; margin-top: 8px; color: #918777; font-size: 11px; }
+#feedback-dialog .feedback-warning { color: #95672c; font-size: 12px; overflow-wrap: anywhere; }
+#feedback-dialog .feedback-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 8px; }
+#feedback-dialog .feedback-actions .feedback-primary { color: #355e4e; background: #edf3eb; border-color: #c6d7c6; }
+#feedback-dialog .feedback-result { margin: 12px 0; padding: 10px 12px; border-radius: 8px; border-left: 2px solid #abc0af; background: #f3f6f0; }
+#feedback-dialog .feedback-result small { color: #687664; font-size: 11px; }
+#feedback-dialog .feedback-result p { margin: 4px 0 0; color: #48523f; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+#feedback-dialog details { color: #8e8475; font-size: 11px; }
+#feedback-dialog summary { width: fit-content; cursor: pointer; padding: 4px 0; }
+#feedback-dialog details p { font-size: 12px; color: #746b5e; overflow-wrap: anywhere; white-space: pre-wrap; }
+#feedback-dialog .feedback-context { margin-top: 5px; padding-top: 4px; border-top: 1px solid #f0ece4; }
+#feedback-dialog .feedback-empty { padding: 58px 20px; text-align: center; color: #5a6355; background: #f5f5ee; border: 1px dashed #dcdccd; border-radius: 12px; }
+#feedback-dialog .feedback-empty p { font-size: 13px; color: #8a8479; }
+#feedback-sync { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; margin: 8px 0; background: #fff1d9; border-radius: 8px; font-size: 12px; }
+#feedback-dialog .feedback-diagnostics { border-top: 1px solid #e8e3da; padding-top: 12px; }
+@media (max-width: 680px) {
+  #feedback-dialog { width: calc(100vw - 20px); height: calc(100vh - 24px); max-height: calc(100vh - 24px); border-radius: 14px; }
+  #feedback-dialog .feedback-dialog-head { padding: 18px 16px 0; }
+  #feedback-dialog .feedback-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 12px; }
+  #feedback-dialog .feedback-filters label:last-child { grid-column: 1 / -1; }
+  #feedback-scroll { padding: 6px 12px 18px; }
+  #feedback-dialog .feedback-card { padding: 14px 14px 10px; }
+  #feedback-dialog .feedback-card > header { gap: 10px; }
+  #feedback-dialog .feedback-views button { padding: 0 9px; font-size: 12px; }
+}

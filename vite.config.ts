@@ -24,6 +24,7 @@ export default defineConfig({
       input: {
         main: resolve(root, "index.html"),
         bubble: resolve(root, "bubble.html"),
+        completions: resolve(root, "completions.html"),
       },
     },
   },

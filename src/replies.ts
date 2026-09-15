@@ -2,13 +2,17 @@
  * Board replies: renders structured Agent replies (text / comparison / graph /
  * sequence) on the board and routes every user intent back through callbacks.
  *
- * Pure input + callbacks. No fetch, no model calls, no timers pretending to be
- * an Agent. All content is inserted as text (textContent / SVG text), never as
- * HTML.
+ * Native forms use text/SVG DOM. Open Web works run in the separate ArtifactFrame
+ * sandbox and share the same explicit feedback and versioned editing flow.
  */
 import { Graph } from "@antv/x6";
 import type { Edge as X6Edge, Node as X6Node } from "@antv/x6";
 import { currentLocale, onLocale, type Locale } from "./i18n";
+import { ct } from "./i18n/canvas";
+import { ArtifactFrame } from "./artifacts";
+import type { CanvasDataflow } from "./canvas-dataflow";
+import type { CanvasAnchor } from "./types";
+import { replyDrafts, draftKey, contentKey, semanticBlockKey, type DraftRecord } from "./reply-drafts";
 import type {
   BoardReply,
   ReplyActionInput,
@@ -21,6 +25,7 @@ import type {
   ReplySequenceBlock,
   ReplyStep,
   ReplyTextBlock,
+  ReplyArtifactBlock,
 } from "./reply-types";
 import "./replies.css";
 
@@ -28,19 +33,25 @@ import "./replies.css";
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
-export type ReplySelection = { reply_id: string; block_id: string };
+export type ReplySelection = { object_id?: string; reply_id: string; block_id: string };
 
 export type ReplyBoardHandlers = {
+  dataflow?: CanvasDataflow;
   onAction(request: ReplyActionInput): Promise<BoardReply>;
   onPatch(request: ReplyPatchRequest): Promise<BoardReply>;
   onSelect?(selection: ReplySelection | null): void;
+  onFocusNotice?(message: string): void;
   onError?(message: string): void;
 };
 
 export type ReplyBoardHandle = {
   update(replies: BoardReply[]): void;
   select(replyId: string): void;
+  selectBlock(replyId: string, blockId: string): void;
   getSelection(): ReplySelection | null;
+  getArtifactAnchor(): CanvasAnchor["artifact"] | undefined;
+  prepareFeedback(): Promise<void>;
+  restoreDraft(record: DraftRecord): boolean;
   destroy(): void;
 };
 
@@ -49,7 +60,11 @@ export function mountReplyBoard(host: HTMLElement, handlers: ReplyBoardHandlers)
   return {
     update: (replies) => board.update(replies),
     select: (replyId) => board.select(replyId),
+    selectBlock: (replyId, blockId) => board.selectBlock(replyId, blockId),
     getSelection: () => board.getSelection(),
+    getArtifactAnchor: () => board.getArtifactAnchor(),
+    prepareFeedback: () => board.prepareFeedback(),
+    restoreDraft: (record) => board.restoreDraft(record),
     destroy: () => board.destroy(),
   };
 }
@@ -72,8 +87,11 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "kind.comparison": "方案对照",
     "kind.graph": "关系图",
     "kind.sequence": "分镜",
-    "block.selected": "当前关注",
-    "block.focus": "关注这一块",
+    "kind.artifact": "开放作品",
+    "block.selected": "当前讨论对象",
+    "block.focus": "针对这块讨论",
+    "block.focusActive": "✓ 已选中",
+    "block.focusHelp": "已选中「{title}」，可在底部输入，继续讨论这一块。",
     "action.ask": "提问",
     "action.edit": "编辑",
     "action.save": "保存",
@@ -91,7 +109,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "ask.label": "就这一块提问",
     "ask.placeholder": "写下你想追问、质疑或补充的内容",
     "ask.context": "关于{label}",
-    "ask.done": "已保存，等待原任务接手。",
+    "ask.done": "已保存，可在「反馈」查看处理进度。",
     "ask.failed": "没有发送成功，你写的内容仍保留在这里。",
     "edit.stale": "这条回复在你编辑时有了新版本。继续保存可能不会成功；你也可以放弃草稿，载入最新内容。",
     "edit.failed": "保存没有成功，你的修改仍保留在这里。",
@@ -167,8 +185,11 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "kind.comparison": "Comparison",
     "kind.graph": "Relations",
     "kind.sequence": "Sequence",
-    "block.selected": "In focus",
-    "block.focus": "Focus this block",
+    "kind.artifact": "Web work",
+    "block.selected": "Current discussion target",
+    "block.focus": "Discuss this block",
+    "block.focusActive": "✓ Selected",
+    "block.focusHelp": "Selected “{title}”. Use the input below to discuss this block.",
     "action.ask": "Ask",
     "action.edit": "Edit",
     "action.save": "Save",
@@ -186,7 +207,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "ask.label": "Ask about this block",
     "ask.placeholder": "What would you like to question, challenge or add?",
     "ask.context": "About {label}",
-    "ask.done": "Saved, waiting for the originating task.",
+    "ask.done": "Saved. Check Feedback for processing status.",
     "ask.failed": "Sending failed. Your text is still here.",
     "edit.stale": "This reply changed while you were editing. Saving may not succeed; you can also discard the draft and load the latest version.",
     "edit.failed": "Saving failed. Your changes are still here.",
@@ -262,8 +283,11 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "kind.comparison": "案の比較",
     "kind.graph": "関係図",
     "kind.sequence": "シーケンス",
-    "block.selected": "注目中",
-    "block.focus": "このブロックに注目",
+    "kind.artifact": "Web 作品",
+    "block.selected": "現在の議論対象",
+    "block.focus": "このブロックについて話す",
+    "block.focusActive": "✓ 選択中",
+    "block.focusHelp": "「{title}」を選択しました。下の入力欄でこのブロックについて続けられます。",
     "action.ask": "質問",
     "action.edit": "編集",
     "action.save": "保存",
@@ -281,7 +305,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "ask.label": "このブロックについて質問する",
     "ask.placeholder": "確認したいこと、疑問、補足を書いてください",
     "ask.context": "{label} について",
-    "ask.done": "保存しました。元のタスクでの処理を待っています。",
+    "ask.done": "保存しました。処理状況は「フィードバック」で確認できます。",
     "ask.failed": "送信できませんでした。入力内容はそのまま残っています。",
     "edit.stale": "編集中にこの返信が更新されました。保存できない場合があります。下書きを破棄して最新を読み込むこともできます。",
     "edit.failed": "保存できませんでした。変更内容はそのまま残っています。",
@@ -459,6 +483,8 @@ interface BoardContext {
 
 type EditSession<D> = {
   expectedRevision: number;
+  baseBlock: ReplyBlock;
+  draftStamp?: number;
   draft: D;
   busy: boolean;
   error: string | null;
@@ -472,11 +498,14 @@ type EditSession<D> = {
 };
 
 type AskState = {
+  expectedRevision: number;
+  draftStamp?: number;
+  preserveContext: boolean;
   text: string;
   busy: boolean;
   error: string | null;
   done: boolean;
-  context: { label: string; prefix: string } | null;
+  context: DraftRecord["context"];
   frame: HTMLElement | null;
   input: HTMLTextAreaElement | null;
   sendBtn: HTMLButtonElement | null;
@@ -509,6 +538,8 @@ abstract class BlockView<B extends ReplyBlock, D> {
   protected edit: EditSession<D> | null = null;
   protected ask: AskState | null = null;
   protected keepBodyWhileEditing = false;
+  protected destroyed = false;
+  private storageWarned = false;
 
   constructor(protected readonly ctx: BoardContext, protected readonly kindKey: string) {
     this.root = el("section", "rb-block");
@@ -521,7 +552,10 @@ abstract class BlockView<B extends ReplyBlock, D> {
     this.titleEl = el("h3", "rb-block-title");
     this.heading.append(this.kindEl, this.titleEl);
     this.tools = el("div", "rb-block-tools");
-    this.focusBtn = button("", "rb-quiet", () => this.ctx.selectBlock(this.reply.id, this.block.id));
+    this.focusBtn = button("", "rb-quiet rb-focus-block", () => {
+      this.ctx.selectBlock(this.reply.id, this.block.id);
+      this.ctx.handlers.onFocusNotice?.(translate("block.focusHelp", { title: this.block.title?.trim() || translate(this.kindKey) }));
+    });
     this.askBtn = button("", "", () => this.toggleAsk());
     this.editBtn = button("", "", () => this.beginEdit());
     this.tools.append(this.focusBtn, this.askBtn, this.editBtn);
@@ -539,10 +573,16 @@ abstract class BlockView<B extends ReplyBlock, D> {
         this.ctx.selectBlock(this.reply.id, this.block.id);
       }
     });
+    this.root.addEventListener("input", () => this.persistDrafts());
+    this.root.addEventListener("change", () => this.persistDrafts());
   }
 
   /** Re-render with fresh data. Never touches an open editor's inputs or ask draft. */
   render(reply: BoardReply, block: ReplyBlock): void {
+    if (this.edit && this.reply && this.edit.expectedRevision === this.reply.revision &&
+      (block.type === "artifact" ? semanticBlockKey(this.block) === semanticBlockKey(block) : contentKey(this.block) === contentKey(block))) {
+      this.edit.expectedRevision = reply.revision;
+    }
     this.reply = reply;
     // The board only hands a view blocks of the type it was created for.
     this.block = block as B;
@@ -576,13 +616,55 @@ abstract class BlockView<B extends ReplyBlock, D> {
     const on = this.ctx.isBlockSelected(this.reply.id, this.block.id);
     this.root.classList.toggle("is-selected", on);
     this.focusBtn.setAttribute("aria-pressed", String(on));
+    this.focusBtn.textContent = translate(on ? "block.focusActive" : "block.focus");
+    this.focusBtn.dataset.focusLabel = translate("block.focus");
+    this.focusBtn.title = on ? translate("block.focusHelp", { title: this.block.title?.trim() || translate(this.kindKey) }) : translate("block.focus");
     this.selectedTag.textContent = on ? translate("block.selected") : "";
     if (on && !this.selectedTag.isConnected) this.kindEl.append(this.selectedTag);
     if (!on && this.selectedTag.isConnected) this.selectedTag.remove();
   }
 
   destroy(): void {
+    if (this.destroyed) return;
+    this.persistDrafts();
+    this.destroyed = true;
     this.root.remove();
+  }
+
+  private draftRef(kind: DraftRecord["kind"], context: DraftRecord["context"] = null) {
+    return { source_id: this.reply.source_id, object_id: this.reply.object_id, reply_id: this.reply.id, block_id: this.block.id, block_type: this.block.type, kind, context };
+  }
+
+  protected persistDrafts(): void {
+    if (!this.reply || !this.block || this.destroyed) return;
+    const save = (record: DraftRecord) => {
+      const ok = replyDrafts.put(record);
+      if (!ok && !this.storageWarned) { this.storageWarned = true; this.ctx.reportError(ct("draftUnsafe")); }
+      if (ok) this.storageWarned = false;
+      return replyDrafts.get(draftKey(record))?.updated_at;
+    };
+    if (this.edit) {
+      const block = this.draftToBlock(this.edit.draft);
+      if (contentKey(block) !== contentKey(this.edit.baseBlock)) {
+        this.edit.draftStamp = save({ ...this.draftRef("edit"), reply_title: this.reply.title, expected_revision: this.edit.expectedRevision,
+          updated_at: Date.now(), block, base_block: this.edit.baseBlock,
+          focus_id: (this.edit.draft as { nodeId?: string | null }).nodeId });
+      } else if (this.edit.draftStamp !== undefined) { replyDrafts.remove(draftKey(this.draftRef("edit")), this.edit.draftStamp); }
+    }
+    if (this.ask && this.ask.text.trim()) {
+      this.ask.draftStamp = save({ ...this.draftRef("ask", this.ask.context), reply_title: this.reply.title,
+        expected_revision: this.ask.expectedRevision, updated_at: Date.now(), text: this.ask.text });
+    } else if (this.ask?.draftStamp !== undefined) { replyDrafts.remove(draftKey(this.draftRef("ask", this.ask.context)), this.ask.draftStamp); }
+  }
+
+  restoreDraft(record: DraftRecord): boolean {
+    if (this.destroyed || record.source_id !== this.reply.source_id || record.block_type !== this.block.type || this.edit?.busy || this.ask?.busy) return false;
+    if (record.kind === "edit") {
+      if (!this.edit) this.beginEdit();
+      this.edit?.form?.querySelector<HTMLElement>("input, textarea, select")?.focus();
+    } else { this.openAsk(record.context ?? null); }
+    this.root.scrollIntoView({ block: "nearest" });
+    return true;
   }
 
   protected renderHead(): void {
@@ -598,7 +680,8 @@ abstract class BlockView<B extends ReplyBlock, D> {
   }
 
   protected abstract renderView(): void;
-  protected abstract createDraft(): D;
+  protected editingBase(): ReplyBlock { return structuredClone(this.block); }
+  protected abstract createDraft(block?: B): D;
   protected abstract renderEditor(form: HTMLElement, draft: D): void;
   protected abstract draftToBlock(draft: D): B;
 
@@ -612,10 +695,17 @@ abstract class BlockView<B extends ReplyBlock, D> {
     }
   }
 
-  protected openAsk(context: { label: string; prefix: string } | null): void {
+  protected openAsk(context: DraftRecord["context"]): void {
+    if (this.ask?.busy) return;
+    if (this.ask && ((this.ask.context?.prefix ?? "") !== (context?.prefix ?? "") ||
+      contentKey(this.ask.context?.artifact_context) !== contentKey(context?.artifact_context))) this.closeAsk();
     if (!this.ask) {
+      const saved = replyDrafts.get(draftKey(this.draftRef("ask", context)));
       this.ask = {
-        text: "",
+        text: saved?.text ?? "",
+        expectedRevision: saved?.expected_revision ?? this.reply.revision,
+        draftStamp: saved?.updated_at,
+        preserveContext: Boolean(saved),
         busy: false,
         error: null,
         done: false,
@@ -639,8 +729,10 @@ abstract class BlockView<B extends ReplyBlock, D> {
     this.ask.input?.focus();
   }
 
-  protected closeAsk(): void {
+  protected closeAsk(discard = false): void {
     if (this.ask?.busy) return;
+    if (discard && this.ask?.draftStamp !== undefined) replyDrafts.remove(draftKey(this.draftRef("ask", this.ask.context)), this.ask.draftStamp);
+    else this.persistDrafts();
     this.ask = null;
     this.askArea.hidden = true;
     this.askArea.replaceChildren();
@@ -680,7 +772,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
     const actions = el("div", "rb-form-actions");
     const sendBtn = el("button", "rb-primary", translate("action.send"));
     sendBtn.type = "submit";
-    const cancelBtn = button(translate("action.cancel"), "rb-quiet", () => this.closeAsk());
+    const cancelBtn = button(translate("action.cancel"), "rb-quiet", () => this.closeAsk(true));
     const statusEl = el("span", "rb-status");
     statusEl.setAttribute("aria-live", "polite");
     actions.append(sendBtn, cancelBtn, statusEl);
@@ -707,8 +799,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
     chip.append(
       button(translate("action.clear"), "rb-quiet", () => {
         if (!ask.busy && this.ask) {
-          this.ask.context = null;
-          this.renderAskChip();
+          this.openAsk(null);
         }
       }),
     );
@@ -743,17 +834,28 @@ abstract class BlockView<B extends ReplyBlock, D> {
       return;
     }
     ask.busy = true;
+    this.persistDrafts();
+    const storedKey = draftKey(this.draftRef("ask", ask.context));
+    const storedStamp = ask.draftStamp;
     ask.error = null;
     ask.done = false;
     this.updateAskFrame();
-    const request: ReplyActionInput = {
-      reply_id: this.reply.id,
-      block_id: this.block.id,
-      action: "ask",
-      text: ask.context ? `${ask.context.prefix}${trimmed}` : trimmed,
-    };
     try {
+      await this.beforeAsk();
+      this.persistDrafts();
+      const latestKey = draftKey(this.draftRef("ask", ask.context));
+      const latestStamp = ask.draftStamp;
+      const request: ReplyActionInput = {
+        object_id: this.reply.object_id, reply_id: this.reply.id,
+        block_id: this.block.id,
+        action: "ask",
+        text: ask.context ? `${ask.context.prefix}${trimmed}` : trimmed,
+        ...(ask.context?.artifact_context ? { artifact_context: ask.context.artifact_context } : {}),
+      };
       const updated = await this.ctx.handlers.onAction(request);
+      replyDrafts.remove(storedKey, storedStamp);
+      replyDrafts.remove(latestKey, latestStamp);
+      if (this.destroyed) return;
       if (this.ask !== ask) return;
       ask.busy = false;
       ask.text = "";
@@ -764,6 +866,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
       this.updateAskFrame();
       this.ctx.mergeReply(updated);
     } catch (err) {
+      if (this.destroyed) return;
       if (this.ask !== ask) return;
       ask.busy = false;
       const { user, detail } = friendlyError(err, translate("ask.failed"));
@@ -773,16 +876,23 @@ abstract class BlockView<B extends ReplyBlock, D> {
     }
   }
 
+  protected async beforeAsk(): Promise<void> {}
+
   /* ---------------- edit ---------------- */
 
   protected beginEdit(): void {
     if (this.edit) {
-      this.cancelEdit();
+      this.cancelEdit(false);
       return;
     }
+    const saved = replyDrafts.get(draftKey(this.draftRef("edit")));
+    const draft = this.createDraft(saved?.block as B | undefined);
+    if (saved?.focus_id && draft && typeof draft === "object" && "nodeId" in draft) (draft as { nodeId: string }).nodeId = saved.focus_id;
     this.edit = {
-      expectedRevision: this.reply.revision,
-      draft: this.createDraft(),
+      expectedRevision: saved?.base_block && semanticBlockKey(saved.base_block) !== semanticBlockKey(this.block) ? saved.expected_revision : this.reply.revision,
+      baseBlock: saved?.base_block ?? this.editingBase(),
+      draftStamp: saved?.updated_at,
+      draft,
       busy: false,
       error: null,
       frame: null,
@@ -800,8 +910,10 @@ abstract class BlockView<B extends ReplyBlock, D> {
     first?.focus();
   }
 
-  protected cancelEdit(): void {
+  protected cancelEdit(discard = true): void {
     if (this.edit?.busy) return;
+    if (discard && this.edit?.draftStamp !== undefined) replyDrafts.remove(draftKey(this.draftRef("edit")), this.edit.draftStamp);
+    else this.persistDrafts();
     this.edit = null;
     this.editArea.hidden = true;
     this.editArea.replaceChildren();
@@ -817,6 +929,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
     if (!edit?.form) return;
     edit.form.replaceChildren();
     this.renderEditor(edit.form, edit.draft);
+    this.persistDrafts();
   }
 
   private buildEditFrame(): void {
@@ -887,6 +1000,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
 
   private discardAndReload(): void {
     if (this.edit?.busy) return;
+    replyDrafts.remove(draftKey(this.draftRef("edit")));
     this.edit = null;
     this.editArea.hidden = true;
     this.editArea.replaceChildren();
@@ -900,16 +1014,21 @@ abstract class BlockView<B extends ReplyBlock, D> {
     const edit = this.edit;
     if (!edit || edit.busy) return;
     edit.busy = true;
+    this.persistDrafts();
+    const storedKey = draftKey(this.draftRef("edit"));
     edit.error = null;
     this.updateEditFrame();
+    const block = this.draftToBlock(edit.draft);
     const request: ReplyPatchRequest = {
-      reply_id: this.reply.id,
+      object_id: this.reply.object_id, reply_id: this.reply.id,
       expected_revision: edit.expectedRevision,
-      block: this.draftToBlock(edit.draft),
-      layout_only: false,
+      block,
+      layout_only: block.type === "graph" && semanticBlockKey(block) === semanticBlockKey(this.block),
     };
     try {
       const updated = await this.ctx.handlers.onPatch(request);
+      replyDrafts.remove(storedKey, edit.draftStamp);
+      if (this.destroyed) return;
       if (this.edit !== edit) return;
       this.edit = null;
       this.editArea.hidden = true;
@@ -919,6 +1038,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
       this.ctx.mergeReply(updated);
       this.editBtn.focus();
     } catch (err) {
+      if (this.destroyed) return;
       if (this.edit !== edit) return;
       edit.busy = false;
       const conflict = looksLikeConflict(err) || this.reply.revision !== edit.expectedRevision;
@@ -948,6 +1068,36 @@ abstract class BlockView<B extends ReplyBlock, D> {
 
 type TextDraft = { title: string; text: string };
 
+class ArtifactView extends BlockView<ReplyArtifactBlock, TextDraft> {
+  private artifact: ArtifactFrame | null = null;
+  constructor(ctx: BoardContext) { super(ctx, "kind.artifact"); this.keepBodyWhileEditing = true; }
+  protected renderHead(): void {
+    super.renderHead();
+    if (this.block.title?.trim() === this.reply.title.trim()) this.titleEl.hidden = true;
+  }
+  protected renderView(): void {
+    this.artifact ??= new ArtifactFrame(this.body, reply => this.ctx.mergeReply(reply), error => this.ctx.reportError(error), async bundle_id => {
+      const reply = await this.ctx.handlers.onPatch({ object_id: this.reply.object_id, reply_id: this.reply.id, expected_revision: this.reply.revision, block: { ...this.block, bundle_id } });
+      this.ctx.mergeReply(reply);
+    }, this.ctx.handlers.dataflow);
+    this.artifact.update(this.reply, this.block);
+  }
+  protected toggleAsk(): void { if (this.ask) this.closeAsk(); else this.openAsk(this.artifact?.context() ?? null); }
+  protected async beforeAsk(): Promise<void> {
+    await this.artifact?.flush();
+    if (this.ask && !this.ask.preserveContext) this.ask.context = this.artifact?.context() ?? null;
+  }
+  canvasAnchor() { return this.artifact?.canvasAnchor(); }
+  async prepareFeedback() { await this.artifact?.flush(); }
+  protected createDraft(block = this.block): TextDraft { return { title: block.title ?? "", text: block.description }; }
+  protected renderEditor(form: HTMLElement, draft: TextDraft): void {
+    form.append(this.labeled(translate("edit.titleOptional"), textInput(draft.title, v => { draft.title = v; })),
+      this.labeled(translate("edit.text"), textArea(draft.text, v => { draft.text = v; })));
+  }
+  protected draftToBlock(draft: TextDraft): ReplyArtifactBlock { return { ...this.block, title: draft.title, description: draft.text }; }
+  destroy() { this.artifact?.destroy(); this.artifact = null; super.destroy(); }
+}
+
 class TextView extends BlockView<ReplyTextBlock, TextDraft> {
   constructor(ctx: BoardContext) {
     super(ctx, "kind.text");
@@ -961,8 +1111,8 @@ class TextView extends BlockView<ReplyTextBlock, TextDraft> {
     this.body.replaceChildren(wrap);
   }
 
-  protected createDraft(): TextDraft {
-    return { title: this.block.title ?? "", text: this.block.text };
+  protected createDraft(block = this.block): TextDraft {
+    return { title: block.title ?? "", text: block.text };
   }
 
   protected renderEditor(form: HTMLElement, draft: TextDraft): void {
@@ -1066,13 +1216,14 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
     this.pickError = null;
     this.renderView();
     const request: ReplyActionInput = {
-      reply_id: this.reply.id,
+      object_id: this.reply.object_id, reply_id: this.reply.id,
       block_id: this.block.id,
       action: "select",
       option_id: optionId,
     };
     try {
       const updated = await this.ctx.handlers.onAction(request);
+      if (this.destroyed) return;
       this.pickingId = null;
       this.ctx.mergeReply(updated);
       if (!this.edit) this.renderView();
@@ -1085,12 +1236,12 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
     }
   }
 
-  protected createDraft(): ComparisonDraft {
+  protected createDraft(block = this.block): ComparisonDraft {
     return {
-      title: this.block.title ?? "",
-      criteria: [...this.block.criteria],
-      options: this.block.options.map((o) => ({ ...o, values: [...o.values] })),
-      selected_id: this.block.selected_id ?? null,
+      title: block.title ?? "",
+      criteria: [...block.criteria],
+      options: block.options.map((o) => ({ ...o, values: [...o.values] })),
+      selected_id: block.selected_id ?? null,
     };
   }
 
@@ -1278,8 +1429,8 @@ class SequenceView extends BlockView<ReplySequenceBlock, SequenceDraft> {
     this.body.replaceChildren(list);
   }
 
-  protected createDraft(): SequenceDraft {
-    return { title: this.block.title ?? "", steps: this.block.steps.map((s) => ({ ...s })) };
+  protected createDraft(block = this.block): SequenceDraft {
+    return { title: block.title ?? "", steps: block.steps.map((s) => ({ ...s })) };
   }
 
   protected renderEditor(form: HTMLElement, draft: SequenceDraft): void {
@@ -1350,16 +1501,16 @@ const LAYOUT_GAP_Y = 72;
 const GRAPH_FONT = '"IBM Plex Sans", "Noto Sans SC", "Noto Sans JP", sans-serif';
 
 const NODE_BASE_ATTRS = {
-  body: { fill: "#14161d", stroke: "rgba(244, 241, 234, 0.24)", strokeWidth: 1, rx: 12, ry: 12 },
+  body: { fill: "var(--rb-node-fill, #14161d)", stroke: "var(--rb-node-stroke, rgba(244, 241, 234, 0.24))", strokeWidth: 1, rx: 12, ry: 12 },
   label: {
-    fill: "#f4f1ea",
+    fill: "var(--rb-node-text, #f4f1ea)",
     fontSize: 13,
     fontFamily: GRAPH_FONT,
     textWrap: { width: -24, height: -16, ellipsis: true },
   },
 };
 
-const NODE_FOCUS_BODY = { fill: "rgba(212, 179, 255, 0.14)", stroke: "#d4b3ff", strokeWidth: 2 };
+const NODE_FOCUS_BODY = { fill: "var(--rb-node-focus, rgba(212, 179, 255, 0.14))", stroke: "var(--rb-node-focus-stroke, #d4b3ff)", strokeWidth: 2 };
 
 function hasCoords(node: ReplyGraphNode): node is ReplyGraphNode & { x: number; y: number } {
   return typeof node.x === "number" && Number.isFinite(node.x) && typeof node.y === "number" && Number.isFinite(node.y);
@@ -1431,7 +1582,7 @@ function autoLayout(block: ReplyGraphBlock): Map<string, { x: number; y: number 
   return result;
 }
 
-type GraphDraft = { title: string; nodeId: string | null; nodes: ReplyGraphNode[] };
+type GraphDraft = { title: string; nodeId: string | null; nodes: ReplyGraphNode[]; edges: ReplyGraphBlock["edges"] };
 
 class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
   private graph: Graph | null = null;
@@ -1454,6 +1605,9 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
   private readonly below: HTMLElement;
   private readonly nodeListWrap: HTMLElement;
   private readonly detailWrap: HTMLElement;
+
+  private shownBlock(): ReplyGraphBlock { return this.edit ? this.draftToBlock(this.edit.draft) : this.block; }
+  protected editingBase(): ReplyBlock { return { ...this.block, nodes: this.currentNodes() }; }
 
   constructor(ctx: BoardContext) {
     super(ctx, "kind.graph");
@@ -1482,7 +1636,8 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
   protected renderView(): void {
     this.renderTools();
     this.canvas.setAttribute("aria-label", `${translate("graph.canvas")}: ${displayTitle(this.block.title)}`);
-    if (this.focusedNodeId && !this.block.nodes.some((n) => n.id === this.focusedNodeId)) this.focusedNodeId = null;
+    if (this.edit?.draft.nodeId) this.focusedNodeId = this.edit.draft.nodeId;
+    if (this.focusedNodeId && !this.shownBlock().nodes.some((n) => n.id === this.focusedNodeId)) this.focusedNodeId = null;
     this.ensureGraph();
     this.syncGraph();
     this.renderNodeList();
@@ -1508,6 +1663,8 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
       container: this.graphHost,
       width,
       height,
+      // Edit/save reuses stable cell IDs. Flush removals before those IDs are added again.
+      async: false,
       // X6 observes the host's parent (our CSS-sized canvas) and resizes itself.
       autoResize: true,
       background: false,
@@ -1533,8 +1690,10 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     graph.on("node:move", () => {
       this.dragging = true;
     });
-    graph.on("node:moved", () => {
+    graph.on("node:moved", ({ node }) => {
       this.dragging = false;
+      const draftNode = this.edit?.draft.nodes.find(item => item.id === node.id);
+      if (draftNode) { const pos = node.getPosition(); draftNode.x = Math.round(pos.x); draftNode.y = Math.round(pos.y); }
       this.scheduleLayoutSave();
     });
     // Fires after X6's own resize (including the first time a hidden panel becomes visible).
@@ -1574,10 +1733,10 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     return [
       {
         attrs: {
-          text: { text, fill: "#f4f1ea", fontSize: 12, fontFamily: GRAPH_FONT },
+          text: { text, fill: "var(--rb-node-text, #f4f1ea)", fontSize: 12, fontFamily: GRAPH_FONT },
           rect: {
-            fill: "#0f1117",
-            stroke: "rgba(244, 241, 234, 0.18)",
+            fill: "var(--rb-node-fill, #0f1117)",
+            stroke: "var(--rb-node-stroke, rgba(244, 241, 234, 0.18))",
             strokeWidth: 1,
             rx: 6,
             ry: 6,
@@ -1596,11 +1755,12 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
   private syncGraph(): void {
     const g = this.graph;
     if (!g) return;
-    const block = this.block;
-    const key = this.structureOf(block);
+    const block = this.shownBlock();
+    const key = (this.edit ? "draft:" : "saved:") + this.structureOf(block);
     const layoutPending = this.dragging || this.layoutTimer !== null || this.layoutInFlight || this.layoutQueued;
 
     if (key !== this.structureKey) {
+      const firstRender = !this.structureKey;
       g.clearCells();
       const positions = autoLayout(block);
       const ids = new Set(block.nodes.map((n) => n.id));
@@ -1625,7 +1785,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
           connector: { name: "smooth" },
           attrs: {
             line: {
-              stroke: "rgba(244, 241, 234, 0.45)",
+              stroke: "var(--rb-edge-stroke, rgba(244, 241, 234, 0.45))",
               strokeWidth: 1.3,
               targetMarker: { name: "block", width: 9, height: 7 },
             },
@@ -1634,8 +1794,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
         });
       });
       this.structureKey = key;
-      this.pendingFit = true;
-      this.fit();
+      if (firstRender) { this.pendingFit = true; this.fit(); }
       return;
     }
 
@@ -1663,7 +1822,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     this.ctx.selectBlock(this.reply.id, this.block.id);
     const g = this.graph;
     if (g) {
-      this.block.nodes.forEach((node) => {
+      this.shownBlock().nodes.forEach((node) => {
         const cell = g.getCellById(node.id);
         if (cell && cell.isNode()) (cell as X6Node).setAttrs(this.nodeAttrs(node));
       });
@@ -1678,7 +1837,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
 
   private renderNodeList(): void {
     this.nodeListWrap.replaceChildren();
-    const nodes = this.block.nodes;
+    const nodes = this.shownBlock().nodes;
     if (nodes.length === 0) {
       this.nodeListWrap.append(el("p", "rb-mute", translate("graph.empty")));
       return;
@@ -1700,10 +1859,11 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
 
   private renderDetail(): void {
     this.detailWrap.replaceChildren();
-    const node = this.block.nodes.find((n) => n.id === this.focusedNodeId) ?? null;
+    const block = this.shownBlock();
+    const node = block.nodes.find((n) => n.id === this.focusedNodeId) ?? null;
     this.detailWrap.append(el("span", "rb-kicker", translate("graph.detail")));
     if (!node) {
-      this.detailWrap.append(el("p", "rb-mute", translate(this.block.nodes.length ? "graph.pick" : "graph.empty")));
+      this.detailWrap.append(el("p", "rb-mute", translate(block.nodes.length ? "graph.pick" : "graph.empty")));
       return;
     }
     this.detailWrap.append(el("h4", undefined, displayTitle(node.title)));
@@ -1714,8 +1874,8 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     } else {
       this.detailWrap.append(el("p", "rb-mute", translate("graph.noDetail")));
     }
-    const titleOf = (id: string) => displayTitle(this.block.nodes.find((n) => n.id === id)?.title ?? id);
-    const related = this.block.edges.filter((e) => e.from === node.id || e.to === node.id);
+    const titleOf = (id: string) => displayTitle(block.nodes.find((n) => n.id === id)?.title ?? id);
+    const related = block.edges.filter((e) => e.from === node.id || e.to === node.id);
     if (related.length) {
       const links = el("ul", "rb-graph-links");
       links.setAttribute("aria-label", translate("graph.links"));
@@ -1754,7 +1914,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
 
   private currentNodes(): ReplyGraphNode[] {
     const g = this.graph;
-    return this.block.nodes.map((node) => {
+    return (this.edit?.draft.nodes ?? this.block.nodes).map((node) => {
       const cell = g?.getCellById(node.id);
       if (cell && cell.isNode()) {
         const pos = (cell as X6Node).getPosition();
@@ -1777,6 +1937,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
   }
 
   private scheduleLayoutSave(): void {
+    if (this.edit) { this.persistDrafts(); return; }
     if (this.statusTimer !== null) {
       window.clearTimeout(this.statusTimer);
       this.statusTimer = null;
@@ -1789,6 +1950,8 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
   }
 
   private async saveLayout(): Promise<void> {
+    if (this.destroyed) return;
+    if (this.edit) { this.persistDrafts(); return; }
     if (this.layoutInFlight) {
       this.layoutQueued = true;
       return;
@@ -1797,22 +1960,25 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     this.layoutState = "saving";
     this.renderStatus();
     const request: ReplyPatchRequest = {
-      reply_id: this.reply.id,
+      object_id: this.reply.object_id, reply_id: this.reply.id,
       expected_revision: this.reply.revision,
       block: { ...this.block, nodes: this.currentNodes() },
       layout_only: true,
     };
     try {
       const updated = await this.ctx.handlers.onPatch(request);
+      if (this.destroyed) return;
       this.layoutInFlight = false;
       this.layoutState = "saved";
       // An open node editor already reads live positions, so it may follow this revision.
-      if (this.edit && this.edit.expectedRevision === request.expected_revision) {
-        this.edit.expectedRevision = updated.revision;
+      const activeEdit = this.edit as EditSession<GraphDraft> | null;
+      if (activeEdit && activeEdit.expectedRevision === request.expected_revision) {
+        activeEdit.expectedRevision = updated.revision;
       }
       this.ctx.mergeReply(updated);
       this.scheduleStatusClear();
     } catch (err) {
+      if (this.destroyed) return;
       this.layoutInFlight = false;
       this.layoutState = "error";
       const { detail } = friendlyError(err, translate("graph.layoutFailed"));
@@ -1825,14 +1991,20 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     }
   }
 
-  protected createDraft(): GraphDraft {
-    const nodes = this.block.nodes.map((n) => ({ ...n }));
+  protected createDraft(block = this.block): GraphDraft {
+    const nodes = block === this.block ? this.currentNodes() : block.nodes.map((n) => ({ ...n }));
     const nodeId = this.focusedNodeId ?? nodes[0]?.id ?? null;
-    return { title: this.block.title ?? "", nodeId, nodes };
+    return { title: block.title ?? "", nodeId, nodes, edges: block.edges.map(e => ({ ...e })) };
   }
+
+  protected rebuildEditor(): void { super.rebuildEditor(); if (this.graph) this.renderView(); }
 
   protected renderEditor(form: HTMLElement, draft: GraphDraft): void {
     form.append(this.labeled(translate("edit.titleOptional"), textInput(draft.title, (v) => (draft.title = v))));
+    form.append(button(ct("graphAddNode"), "", () => {
+      const node = { id: newId("node"), title: ct("graphNewNode") };
+      draft.nodes.push(node); draft.nodeId = node.id; this.rebuildEditor();
+    }));
     if (draft.nodes.length === 0) {
       form.append(el("p", "rb-small", translate("edit.noNodes")));
       return;
@@ -1852,35 +2024,63 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     });
     form.append(this.labeled(translate("edit.node"), select));
     const node = draft.nodes.find((n) => n.id === draft.nodeId)!;
-    form.append(this.labeled(translate("edit.nodeTitle"), textInput(node.title, (v) => (node.title = v))));
-    form.append(this.labeled(translate("edit.nodeDetail"), textArea(node.detail ?? "", (v) => (node.detail = v), 4)));
+    form.append(this.labeled(translate("edit.nodeTitle"), textInput(node.title, (v) => { node.title = v; this.syncGraph(); this.renderNodeList(); this.renderDetail(); })));
+    form.append(this.labeled(translate("edit.nodeDetail"), textArea(node.detail ?? "", (v) => { node.detail = v; this.renderDetail(); }, 4)));
+    form.append(button(ct("graphDeleteNode"), "rb-quiet", () => {
+      draft.nodes = draft.nodes.filter(n => n.id !== node.id);
+      draft.edges = draft.edges.filter(edge => edge.from !== node.id && edge.to !== node.id);
+      draft.nodeId = draft.nodes[0]?.id ?? null;
+      this.rebuildEditor();
+    }));
+    const relations = el("fieldset", "rb-fieldset");
+    relations.append(el("legend", undefined, ct("graphConnections")));
+    for (const edge of draft.edges) {
+      const row = el("div", "rb-relation-edit");
+      const endpoint = (side: "from" | "to") => {
+        const choice = el("select");
+        for (const node of draft.nodes) {
+          const option = el("option", undefined, displayTitle(node.title)); option.value = node.id; option.selected = edge[side] === node.id; choice.append(option);
+        }
+        choice.addEventListener("change", () => { edge[side] = choice.value; this.persistDrafts(); this.renderView(); });
+        return this.labeled(ct(side === "from" ? "graphFrom" : "graphTo"), choice);
+      };
+      const label = textInput(edge.label, value => { edge.label = value; this.syncGraph(); });
+      label.placeholder = ct("graphLabelHint");
+      row.append(endpoint("from"), endpoint("to"), this.labeled(ct("graphLabel"), label), button(ct("graphRemoveEdge"), "rb-quiet", () => { draft.edges = draft.edges.filter(e => e.id !== edge.id); this.rebuildEditor(); }));
+      relations.append(row);
+    }
+    const addEdge = button(ct("graphAddEdge"), "", () => {
+      if (draft.nodes.length < 2) return;
+      draft.edges.push({ id: newId("edge"), from: draft.nodes[0].id, to: draft.nodes[1].id, label: "" });
+      this.rebuildEditor();
+    });
+    addEdge.disabled = draft.nodes.length < 2;
+    relations.append(addEdge); form.append(relations);
   }
 
   protected draftToBlock(draft: GraphDraft): ReplyGraphBlock {
     const title = draft.title.trim();
-    const current = new Map(this.currentNodes().map((n) => [n.id, n]));
     const nodes = draft.nodes.map((n) => {
-      const pos = current.get(n.id);
       const detail = (n.detail ?? "").trim();
       return {
         id: n.id,
         title: n.title.trim(),
         ...(detail ? { detail } : {}),
-        x: pos?.x ?? n.x ?? null,
-        y: pos?.y ?? n.y ?? null,
+        x: n.x ?? null,
+        y: n.y ?? null,
       };
     });
-    return { id: this.block.id, type: "graph", ...(title ? { title } : {}), nodes, edges: this.block.edges.map((e) => ({ ...e })) };
+    return { id: this.block.id, type: "graph", ...(title ? { title } : {}), nodes, edges: draft.edges.map((e) => ({ ...e, label: e.label.trim() })) };
   }
 
   destroy(): void {
+    super.destroy();
     if (this.layoutTimer !== null) window.clearTimeout(this.layoutTimer);
     this.layoutTimer = null;
     if (this.statusTimer !== null) window.clearTimeout(this.statusTimer);
     this.statusTimer = null;
     this.graph?.dispose();
     this.graph = null;
-    super.destroy();
   }
 }
 
@@ -1888,7 +2088,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
 /* Board                                                               */
 /* ------------------------------------------------------------------ */
 
-type AnyBlockView = TextView | ComparisonView | SequenceView | GraphView;
+type AnyBlockView = TextView | ComparisonView | SequenceView | GraphView | ArtifactView;
 
 type ReplyPanel = {
   el: HTMLElement;
@@ -1970,9 +2170,10 @@ class ReplyBoard {
     const ordered = replies
       .map((incoming) => {
         const held = this.replies.find((r) => r.id === incoming.id);
-        return held && held.revision > incoming.revision && held.updated_at_ms >= incoming.updated_at_ms
+        const current = held && held.revision > incoming.revision && held.updated_at_ms >= incoming.updated_at_ms
           ? held
           : incoming;
+        return { ...current, object_id: incoming.object_id ?? held?.object_id };
       })
       .sort((a, b) => a.created_at_ms - b.created_at_ms);
     const incomingIds = new Set(ordered.map((r) => r.id));
@@ -2035,7 +2236,25 @@ class ReplyBoard {
   }
 
   getSelection(): ReplySelection | null {
-    return this.selection ? { ...this.selection } : null;
+    return this.selection ? { ...this.selection, object_id: this.replies.find(reply => reply.id === this.selection!.reply_id)?.object_id } : null;
+  }
+
+  getArtifactAnchor(): CanvasAnchor["artifact"] | undefined {
+    const panel = this.activeId ? this.panels.get(this.activeId) : undefined;
+    const view = this.selection ? panel?.views.get(this.selection.block_id) : [...(panel?.views.values() ?? [])].find(view => view instanceof ArtifactView);
+    return view instanceof ArtifactView ? view.canvasAnchor() : undefined;
+  }
+
+  async prepareFeedback() {
+    const panel = this.activeId ? this.panels.get(this.activeId) : undefined;
+    await Promise.all([...(panel?.views.values() ?? [])].filter((view): view is ArtifactView => view instanceof ArtifactView).map(view => view.prepareFeedback()));
+  }
+
+  restoreDraft(record: DraftRecord): boolean {
+    const reply = this.replies.find(r => (record.object_id ? r.object_id === record.object_id : r.id === record.reply_id) && r.source_id === record.source_id);
+    if (!reply) return false;
+    this.select(reply.id);
+    return this.panels.get(reply.id)?.views.get(record.block_id)?.restoreDraft(record) ?? false;
   }
 
   destroy(): void {
@@ -2085,7 +2304,8 @@ class ReplyBoard {
     if (!same) this.handlers.onSelect?.(this.getSelection());
   }
 
-  private selectBlock(replyId: string, blockId: string): void {
+  selectBlock(replyId: string, blockId: string): void {
+    if (!this.replies.some(reply => reply.id === replyId && reply.blocks.some(block => block.id === blockId))) return;
     if (replyId !== this.activeId) {
       this.activeId = replyId;
       this.badges.delete(replyId);
@@ -2098,6 +2318,13 @@ class ReplyBoard {
   private mergeReply(reply: BoardReply): void {
     if (this.destroyed) return;
     const index = this.replies.findIndex((r) => r.id === reply.id);
+    const previous = this.replies[index];
+    if (previous && previous.revision > reply.revision) return;
+    if (previous) reply = { ...reply, object_id: reply.object_id ?? previous.object_id, blocks: reply.blocks.map(block => {
+      const old = previous.blocks.find(b => b.id === block.id);
+      return block.type === "artifact" && old?.type === "artifact" && old.state_revision > block.state_revision
+        ? { ...block, state: old.state, state_revision: old.state_revision } : block;
+    }) };
     const next = [...this.replies];
     if (index >= 0) next[index] = reply;
     else next.push(reply);
@@ -2211,6 +2438,8 @@ class ReplyBoard {
         return new GraphView(this.ctx);
       case "sequence":
         return new SequenceView(this.ctx);
+      case "artifact":
+        return new ArtifactView(this.ctx);
     }
   }
 

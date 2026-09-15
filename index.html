@@ -33,24 +33,34 @@
           <em>Spellcast</em>
           <span data-i18n="brand.board"></span>
         </div>
-        <p id="topic" class="topic chrome-focus"></p>
         <nav class="board-views chrome-focus" aria-label="Board content">
           <button type="button" id="view-replies" class="ghost" data-board-text="replies"></button>
           <button type="button" id="view-ideas" class="ghost" data-board-text="ideas"></button>
         </nav>
         <nav id="forms" class="forms chrome-focus" data-i18n-aria="forms.aria"></nav>
-        <label class="locale-wrap">
-          <span class="visually-hidden" data-i18n="action.language"></span>
-          <select id="locale"></select>
-        </label>
-        <button type="button" id="settings-open" class="ghost" data-i18n="settings.open"></button>
-        <button type="button" id="memory-open" class="ghost" data-board-text="memory"></button>
-        <button type="button" id="feedback-open" class="ghost"><span data-board-text="feedback"></span><span id="feedback-count" hidden></span></button>
-        <button type="button" id="bubbles-pause" class="ghost" aria-pressed="false" data-board-text="pause"></button>
-        <button type="button" id="mode-focus" class="primary chrome-ambient" data-i18n="mode.focus"></button>
-        <button type="button" id="mode-desktop" class="ghost chrome-focus" data-i18n="mode.desktop"></button>
-        <button type="button" id="add-btn" class="ghost chrome-focus" data-i18n="action.add"></button>
-        <button type="button" id="clear-btn" class="ghost chrome-focus" data-i18n="action.clear"></button>
+        <p id="topic" class="topic chrome-focus"></p>
+        <div class="top-tools">
+          <label class="locale-wrap">
+            <span class="visually-hidden" data-i18n="action.language"></span>
+            <select id="locale"></select>
+          </label>
+          <details class="top-more" open>
+            <summary class="ghost" data-i18n-aria="action.more" data-i18n-title="action.more">
+              <span class="visually-hidden" data-i18n="action.more">More</span>
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="4.5" r="1.2" fill="currentColor"/><circle cx="9" cy="9" r="1.2" fill="currentColor"/><circle cx="9" cy="13.5" r="1.2" fill="currentColor"/></svg>
+            </summary>
+            <div class="top-more-menu">
+              <button type="button" id="settings-open" class="ghost" data-i18n="settings.open"></button>
+              <button type="button" id="memory-open" class="ghost" data-board-text="memory"></button>
+              <button type="button" id="feedback-open" class="ghost"><span data-board-text="feedback"></span><span id="feedback-count" hidden></span></button>
+            </div>
+          </details>
+          <button type="button" id="bubbles-pause" class="ghost" aria-pressed="false" data-board-text="pause"></button>
+          <button type="button" id="mode-focus" class="primary chrome-ambient" data-i18n="mode.focus"></button>
+          <button type="button" id="mode-desktop" class="ghost chrome-focus" data-i18n="mode.desktop"></button>
+          <button type="button" id="add-btn" class="ghost chrome-focus" data-i18n="action.add"></button>
+          <button type="button" id="clear-btn" class="ghost chrome-focus" data-i18n="action.clear"></button>
+        </div>
       </header>
 
       <aside id="whisper" class="whisper chrome-focus" data-i18n-aria="whisper.title">
@@ -76,14 +86,19 @@
       </aside>
 
       <footer class="composer chrome-focus">
-        <p id="form-reason" class="reason"></p>
-        <label id="recipient-label" for="recipient" data-board-text="recipient" hidden></label>
-        <select id="recipient" hidden></select>
-        <form id="talk">
-          <textarea id="input" rows="2" data-i18n-placeholder="composer.placeholder"></textarea>
-          <div class="row">
-            <button type="submit" class="primary" id="send" data-i18n="action.say"></button>
+        <div class="composer-context">
+          <p id="form-reason" class="reason"></p>
+          <div class="composer-task" id="recipient-route" hidden>
+            <div class="composer-destination"><span id="recipient-summary"></span><button type="button" class="ghost" id="recipient-change" aria-controls="recipient-picker" aria-expanded="false"></button></div>
+            <div class="composer-route-options" id="recipient-picker" hidden>
+              <label class="composer-route-field"><span id="recipient-workspace-label"></span><select id="recipient-workspace"></select></label>
+              <label class="composer-route-field"><span id="recipient-label"></span><select id="recipient" disabled></select></label>
+            </div>
           </div>
+        </div>
+        <form id="talk">
+          <textarea id="input" rows="2" data-i18n-placeholder="composer.placeholder" disabled></textarea>
+          <button type="submit" class="primary" id="send" data-i18n="action.say" disabled></button>
         </form>
       </footer>
     </div>
@@ -98,6 +113,22 @@
         <span id="agent-seen" data-i18n="agent.none"></span>
       </div>
 
+      <div class="agent-observer">
+        <label class="observer-switch" for="agent-observer-enabled">
+          <span class="observer-switch-title" data-i18n="observer.title"></span>
+          <span class="observer-switch-side">
+            <input id="agent-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
+            <span class="observer-switch-track" aria-hidden="true"></span>
+            <span class="observer-switch-state">
+              <span class="observer-state-on" data-i18n="observer.on"></span>
+              <span class="observer-state-off" data-i18n="observer.off"></span>
+            </span>
+          </span>
+        </label>
+        <p class="agent-observer-hint" data-i18n="observer.body"></p>
+        <p id="agent-observer-error" class="hint has-warning" role="alert" hidden></p>
+      </div>
+
       <div class="agent-url">
         <label for="agent-mcp-url" data-i18n="agent.url"></label>
         <div class="config-line">
@@ -107,22 +138,24 @@
       </div>
 
       <div id="agent-clients" class="agent-clients" data-i18n-aria="agent.connect">
-        <button type="button" data-client="cursor">Cursor</button>
-        <button type="button" data-client="claude-code">Claude Code</button>
+        <button type="button" data-client="cursor" disabled>Cursor</button>
+        <button type="button" data-client="claude-code" disabled>Claude Code</button>
         <button type="button" data-client="codex">Codex</button>
-        <button type="button" data-client="windsurf">Windsurf</button>
-        <button type="button" data-client="generic" data-i18n="agent.client.other"></button>
+        <button type="button" data-client="windsurf" disabled>Windsurf</button>
+        <button type="button" data-client="generic" disabled data-i18n="agent.client.other"></button>
       </div>
 
       <div id="agent-result" class="agent-result" hidden>
-        <p id="agent-path" class="config-path"></p>
-        <pre id="agent-snippet"></pre>
-        <p id="agent-note" class="hint"></p>
-        <p id="agent-skill-path" class="config-path"></p>
+        <p class="hint" data-i18n="setup.codexOnly"></p>
+        <p id="agent-setup-status" class="setup-status"></p>
+        <p id="agent-setup-hint" class="hint"></p>
         <div class="config-actions">
-          <button type="button" id="agent-write" class="primary" data-i18n="settings.write"></button>
-          <button type="button" id="agent-install-skill" class="ghost" data-i18n="settings.installSkill"></button>
+          <button type="button" id="agent-complete-setup" class="primary" data-i18n="setup.install"></button>
         </div>
+        <details class="setup-details" hidden>
+          <summary data-i18n="setup.details"></summary>
+          <pre id="agent-setup-details-body" class="setup-details-body"></pre>
+        </details>
       </div>
 
       <div class="agent-activity">
@@ -132,13 +165,32 @@
       </div>
     </section>
 
-    <div id="settings" class="settings" hidden>
-      <section class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <dialog id="settings" class="settings" aria-labelledby="settings-title" tabindex="-1" hidden>
+      <section class="settings-sheet">
         <header class="settings-head">
           <p class="eyebrow" data-i18n="settings.eyebrow"></p>
           <button type="button" id="settings-close" class="ghost" data-i18n="settings.close"></button>
         </header>
         <h2 id="settings-title" data-i18n="settings.title"></h2>
+
+        <section class="settings-observer" aria-labelledby="settings-observer-title">
+          <h3 id="settings-observer-title" data-i18n="observer.title"></h3>
+          <p class="settings-body" data-i18n="observer.body"></p>
+          <label class="observer-switch" for="settings-observer-enabled">
+            <span class="observer-switch-title" data-i18n="observer.title"></span>
+            <span class="observer-switch-side">
+              <input id="settings-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
+              <span class="observer-switch-track" aria-hidden="true"></span>
+              <span class="observer-switch-state">
+                <span class="observer-state-on" data-i18n="observer.on"></span>
+                <span class="observer-state-off" data-i18n="observer.off"></span>
+              </span>
+            </span>
+          </label>
+          <p id="settings-observer-error" class="hint has-warning" role="alert" hidden></p>
+        </section>
+
+        <p class="eyebrow" data-i18n="settings.eyebrow"></p>
         <p class="settings-body" data-i18n="settings.body"></p>
 
         <div class="agent-status">
@@ -154,27 +206,25 @@
 
         <label data-i18n="agent.connect"></label>
         <div id="settings-clients" class="agent-clients">
-          <button type="button" data-client="cursor">Cursor</button>
-          <button type="button" data-client="claude-code">Claude Code</button>
+          <button type="button" data-client="cursor" disabled>Cursor</button>
+          <button type="button" data-client="claude-code" disabled>Claude Code</button>
           <button type="button" data-client="codex">Codex</button>
-          <button type="button" data-client="windsurf">Windsurf</button>
-          <button type="button" data-client="generic" data-i18n="agent.client.other"></button>
+          <button type="button" data-client="windsurf" disabled>Windsurf</button>
+          <button type="button" data-client="generic" disabled data-i18n="agent.client.other"></button>
         </div>
 
-        <div id="settings-file" class="settings-file">
-          <label for="settings-path" data-i18n="settings.file"></label>
-          <input id="settings-path" readonly spellcheck="false" />
-          <button type="button" id="settings-write-file" class="primary" data-i18n="settings.write"></button>
+        <p class="hint" data-i18n="setup.codexOnly"></p>
+        <p id="settings-setup-status" class="setup-status"></p>
+        <p id="settings-setup-hint" class="hint"></p>
+        <div class="config-actions">
+          <button type="button" id="settings-complete-setup" class="primary" data-i18n="setup.install"></button>
         </div>
-        <div id="settings-skill" class="settings-skill">
-          <label for="settings-skill-path" data-i18n="settings.skill"></label>
-          <input id="settings-skill-path" readonly spellcheck="false" />
-          <button type="button" id="settings-install-skill" class="ghost" data-i18n="settings.installSkill"></button>
-        </div>
-        <pre id="settings-snippet" class="settings-snippet"></pre>
-        <p id="settings-note" class="hint" data-i18n="settings.previewNote"></p>
+        <details class="setup-details" hidden>
+          <summary data-i18n="setup.details"></summary>
+          <pre id="settings-setup-details-body" class="setup-details-body"></pre>
+        </details>
       </section>
-    </div>
+    </dialog>
 
     <div id="peek" class="peek" hidden>
       <div class="peek-sheet">
@@ -206,8 +256,28 @@
       <p class="results-help" data-board-text="recent"></p><div id="memory-list"></div>
     </dialog>
     <dialog id="feedback-dialog" class="board-dialog" aria-labelledby="feedback-heading">
-      <header><h2 id="feedback-heading" data-board-text="feedback"></h2><button type="button" class="ghost" data-close data-board-text="close"></button></header>
-      <p data-board-text="feedbackHelp"></p><div id="feedback-list"></div>
+      <div class="feedback-dialog-head">
+        <header><div><h2 id="feedback-heading" data-board-text="feedback"></h2><p data-board-text="feedbackHelp"></p></div><button type="button" class="ghost" data-close data-board-text="close"></button></header>
+        <div class="feedback-filters">
+          <label><span data-board-text="filterWorkspace"></span><select id="feedback-workspace"></select></label>
+          <label><span data-board-text="filterTask"></span><select id="feedback-task"></select></label>
+          <label><span data-board-text="searchFeedback"></span><input id="feedback-search" autocomplete="off" /></label>
+        </div>
+        <div id="feedback-views" class="feedback-views" role="tablist" aria-label="Replies">
+          <button type="button" class="ghost" role="tab" id="feedback-tab-followup" aria-controls="feedback-list" data-feedback-view="followup"></button>
+          <button type="button" class="ghost" role="tab" id="feedback-tab-replied" aria-controls="feedback-list" data-feedback-view="replied"></button>
+          <button type="button" class="ghost" role="tab" id="feedback-tab-activity" aria-controls="feedback-list" data-feedback-view="activity"></button>
+        </div>
+        <p id="feedback-summary" role="status"></p>
+      </div>
+      <div id="feedback-scroll">
+        <div id="feedback-sync" role="status" hidden><span data-board-text="feedbackSyncError"></span><button id="feedback-refresh" type="button" data-board-text="refreshFeedback"></button></div>
+        <div id="feedback-list" role="tabpanel" aria-labelledby="feedback-tab-followup"></div>
+        <details id="feedback-diagnostics" class="feedback-diagnostics">
+          <summary data-board-text="diagnostics"></summary>
+          <div id="feedback-task-list"></div>
+        </details>
+      </div>
     </dialog>
     <div id="app-notice" role="status" hidden></div>
     <script type="module" src="/src/main.ts"></script>

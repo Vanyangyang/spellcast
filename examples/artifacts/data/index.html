@@ -1,0 +1,4 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>从数据走向解释</title><link rel="stylesheet" href="./app.css"></head><body>
+<header><div class="eyebrow">02 / Linked data studio</div><h1>同一批数据，两种看法</h1><p>比较六座示例建筑的月度用水。筛选类型、排序数据或框选图表，图与表始终使用同一组对象标识。</p></header>
+<main><div class="bar"><label>建筑类型<select id="kind"><option value="all">全部建筑</option><option value="住宅">住宅</option><option value="公共">公共建筑</option></select></label><div style="margin-left:auto"><div class="muted">当前范围用水合计 / m³</div><output id="total" class="metric"></output></div></div>
+<section class="card"><div id="chart" style="height:330px" aria-label="建筑用水量柱状图"></div></section><section class="card" style="margin-top:18px"><div id="table"></div><p id="selection" aria-live="polite"></p></section><p class="muted">教学样本，数值为构造数据。可用图表右上角的框选工具选择多座建筑。</p></main><script type="module" src="./app.js"></script></body></html>

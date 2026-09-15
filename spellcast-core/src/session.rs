@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::place_nodes;
 use crate::types::{
-    new_id, BoardNode, BoardSnapshot, BubbleRequest, BubbleShape, BubbleSize, ChatMessage,
-    FragmentWeight, NodeDraft, NodeKind, NodePatch, PokeAction, PresentPayload, PresentResult,
-    ProposedNode, ProposedThrow, ScreenAim, SpellcastError, StageForm, ThrownBubble,
+    new_id, BoardNode, BoardSnapshot, BubbleRequest, BubbleShape, BubbleSize, CapturedContext,
+    ChatMessage, FragmentWeight, NodeDraft, NodeKind, NodePatch, PokeAction, PresentPayload,
+    PresentResult, ProposedNode, ProposedThrow, ScreenAim, SpellcastError, StageForm, ThrownBubble,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +36,14 @@ impl Session {
     }
 
     pub fn add_node(&mut self, draft: NodeDraft) -> BoardNode {
+        self.add_node_captured(draft, None)
+    }
+
+    pub fn add_node_captured(
+        &mut self,
+        draft: NodeDraft,
+        captured: Option<CapturedContext>,
+    ) -> BoardNode {
         let title = draft.title.trim();
         let title = if title.is_empty() {
             "未命名碎片"
@@ -63,6 +71,7 @@ impl Session {
         if let Some(z) = draft.z {
             node.z = z;
         }
+        node.captured_context = captured;
         self.board.nodes.push(node.clone());
         self.board.edges.extend(edges);
         if self.board.topic.is_empty() {
@@ -72,12 +81,41 @@ impl Session {
     }
 
     pub fn patch_node(&mut self, id: &str, patch: NodePatch) -> Result<BoardNode, SpellcastError> {
+        if let Some(object_id) = &patch.object_id {
+            self.canvas_target(object_id, None, Some(id))?;
+        }
         let node = self
             .board
             .nodes
             .iter_mut()
             .find(|n| n.id == id)
             .ok_or_else(|| SpellcastError::user("这块碎片不在板上。"))?;
+        if patch
+            .expected_revision
+            .is_some_and(|revision| revision != node.revision)
+        {
+            return Err(SpellcastError::user(
+                "内容已被其他更新修改，你的修改没有保存。",
+            ));
+        }
+        if patch
+            .title
+            .as_deref()
+            .is_some_and(|value| value.trim().chars().count() > 160)
+            || patch
+                .body
+                .as_deref()
+                .is_some_and(|value| value.trim().chars().count() > 64_000)
+        {
+            return Err(SpellcastError::user(
+                "想法标题最多 160 字，正文最多 64000 字；没有截断或保存你的修改。",
+            ));
+        }
+        let content_changed = patch
+            .title
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty() && v.trim() != node.title)
+            || patch.body.as_deref().is_some_and(|v| v.trim() != node.body);
         if let Some(title) = patch.title {
             let title = title.trim();
             if !title.is_empty() {
@@ -101,6 +139,9 @@ impl Session {
         }
         if let Some(z) = patch.z {
             node.z = z;
+        }
+        if content_changed {
+            node.revision += 1;
         }
         Ok(node.clone())
     }
@@ -361,6 +402,7 @@ fn bind_throw(item: &ProposedThrow, nodes: &[BoardNode], order: usize) -> Option
         linger_ms: linger * 1000,
         delay_ms: item.delay.unwrap_or((order as u32) * 520),
         screen: ScreenAim::parse(item.screen.as_deref().unwrap_or("")),
+        captured_context: None,
     })
 }
 
@@ -622,5 +664,78 @@ mod tests {
         assert_eq!(session.board.nodes[0].title, "改过了");
         session.remove_node(&node.id).unwrap();
         assert!(session.board.nodes.is_empty());
+    }
+
+    #[test]
+    fn old_node_json_has_no_captured_context_and_none_is_not_serialized() {
+        let json = r#"{"id":"n1","title":"旧点子","body":"正文","kind":"idea","weight":"note","x":0,"y":0,"z":0}"#;
+        let node: BoardNode = serde_json::from_str(json).unwrap();
+        assert!(node.captured_context.is_none());
+        let value = serde_json::to_value(&node).unwrap();
+        assert!(value.get("captured_context").is_none());
+
+        let bubble_json = r#"{"id":"b1","tease":"短句","title":"短句","body":"","kind":"idea","size":"note","shape":"orb","on_poke":"peek","linger_ms":18000,"delay_ms":0,"screen":"active"}"#;
+        let bubble: ThrownBubble = serde_json::from_str(bubble_json).unwrap();
+        assert!(bubble.captured_context.is_none());
+        let bubble_value = serde_json::to_value(&bubble).unwrap();
+        assert!(bubble_value.get("captured_context").is_none());
+    }
+
+    #[test]
+    fn add_node_defaults_none_and_capture_helper_keeps_patch_from_clearing_it() {
+        let mut session = Session::default();
+        let plain = session.add_node(NodeDraft {
+            title: "普通".into(),
+            body: "无背景".into(),
+            ..Default::default()
+        });
+        assert!(plain.captured_context.is_none());
+        let independent = session.add_node(NodeDraft {
+            title: "独立".into(),
+            body: String::new(),
+            ..Default::default()
+        });
+        assert!(independent.parent_id.is_none());
+        assert!(session.board.edges.is_empty());
+        let context = CapturedContext {
+            project: "calendar".into(),
+            goal: "A realistic week".into(),
+            change: "Lunch resolved".into(),
+            source_id: "task-a".into(),
+            captured_at_ms: 42,
+            thread_id: Some("thread-1".into()),
+            cwd: Some("/tmp/proj".into()),
+        };
+        let captured = session.add_node_captured(
+            NodeDraft {
+                title: "旁念点子".into(),
+                body: "给周五预留空档。".into(),
+                ..Default::default()
+            },
+            Some(context.clone()),
+        );
+        assert_eq!(captured.captured_context.as_ref(), Some(&context));
+        session
+            .patch_node(
+                &captured.id,
+                NodePatch {
+                    title: Some("改过标题".into()),
+                    body: Some("改过正文".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let after = session
+            .board
+            .nodes
+            .iter()
+            .find(|n| n.id == captured.id)
+            .unwrap();
+        assert_eq!(after.title, "改过标题");
+        assert_eq!(after.body, "改过正文");
+        assert_eq!(after.captured_context.as_ref(), Some(&context));
+        let value = serde_json::to_value(after).unwrap();
+        assert_eq!(value["captured_context"]["project"], "calendar");
+        assert!(value["captured_context"].get("facts").is_none());
     }
 }

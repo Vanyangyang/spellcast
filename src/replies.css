@@ -322,7 +322,7 @@
 
 .rb-block.is-selected {
   border-color: var(--rb-lilac);
-  box-shadow: inset 3px 0 0 var(--rb-lilac);
+  box-shadow: inset 4px 0 0 var(--rb-lilac);
 }
 
 .rb-block-head {
@@ -350,6 +350,9 @@
   color: var(--rb-lilac);
 }
 
+.rb-focus-block::after { content: attr(data-focus-label); display: block; height: 0; visibility: hidden; overflow: hidden; }
+.rb-root .rb-focus-block[aria-pressed="true"] { color: var(--rb-paper); background: #b1a0eb30; border-color: var(--rb-lilac); }
+
 .rb-block-title {
   margin: 0;
   font-size: 17px;
@@ -369,6 +372,10 @@
 .rb-block-body {
   min-width: 0;
 }
+
+.rb-relation-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--rb-line); }
+.rb-relation-edit > :nth-child(3) { grid-column: 1 / -1; }
+.rb-relation-edit > button { justify-self: start; }
 
 /* ---------- text ---------- */
 

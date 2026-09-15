@@ -1,0 +1,4 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>搜索如何找到最短路径</title><link rel="stylesheet" href="./app.css"></head><body>
+<header><div class="eyebrow">01 / Algorithm notebook</div><h1>让搜索过程可见</h1><p>每一层都比上一层多走一步。逐步观察广度优先搜索，选择一个格子，继续讨论它为什么被访问。</p></header>
+<main class="grid"><section class="card"><svg id="grid" viewBox="0 0 540 340" role="img" aria-label="广度优先搜索网格"></svg><div class="bar"><button id="play" class="primary">播放</button><button id="next">下一步</button><button id="reset">从头开始</button><output id="step"></output></div><p id="detail" aria-live="polite"></p><p class="muted">绿色为已访问，金色为最短路径，深色为障碍。网格单元可用 Tab 和 Enter 选择。</p></section>
+<aside class="card"><h2>为什么先找到的路最短？</h2><p>队列按到达层数展开。在每条边代价相同的条件下，终点第一次进入队列时，已经有了最少步数的路径。</p><div id="flow"></div><p class="muted">算法状态和选中的对象会保留。布局位置不会替代搜索顺序。</p></aside></main><script type="module" src="./app.js"></script></body></html>

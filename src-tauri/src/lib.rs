@@ -1,5 +1,37 @@
+mod complete_setup;
+#[cfg(desktop)]
+mod instance;
 mod configure;
 mod desktop;
+mod completion_hook;
+mod completion_read;
+mod completions;
+mod completion_speech;
+
+/// Headless notification mode runs before Tauri, so completed tasks never launch the board.
+pub fn handle_completion_command() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("--codex-notify") => {
+            if let (Some(root), Some(raw)) = (args.get(2), args.get(3)) {
+                completion_hook::notify(std::path::Path::new(root), raw);
+            }
+            true
+        }
+        Some("--install-completion-hook") => {
+            let result = (|| completion_hook::install(&completion_hook::codex_home()?, &completion_hook::root()?,
+                &std::env::current_exe().map_err(|e| e.to_string())?))();
+            match result { Ok(note) => println!("{note}"), Err(err) => { eprintln!("{err}"); std::process::exit(1); } }
+            true
+        }
+        Some("--uninstall-completion-hook") => {
+            let result = (|| completion_hook::uninstall(&completion_hook::codex_home()?, &completion_hook::root()?))();
+            match result { Ok(note) => println!("{note}"), Err(err) => { eprintln!("{err}"); std::process::exit(1); } }
+            true
+        }
+        _ => false,
+    }
+}
 
 use std::sync::Arc;
 
@@ -247,6 +279,62 @@ fn install_client_skill(client: String) -> Result<configure::SkillInstall, Strin
     configure::install_skill(&client)
 }
 
+fn complete_setup_paths(app: &AppHandle) -> Result<complete_setup::SetupPaths, String> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "找不到用户目录。".to_string())?;
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|err| format!("找不到随包插件资源：{err}"))?;
+    let resource_root = ["codex-plugin", "resources/codex-plugin"]
+        .into_iter()
+        .map(|rel| resource_dir.join(rel))
+        .find(|path| path.join("integrity.json").is_file())
+        .unwrap_or_else(|| resource_dir.join("codex-plugin"));
+    complete_setup::default_paths(home, resource_root)
+}
+
+fn complete_setup_cli(paths: &complete_setup::SetupPaths) -> Option<complete_setup::ProcessCli> {
+    paths.cli.as_ref().map(|program| complete_setup::ProcessCli {
+        program: program.clone(),
+        timeout: paths.cli_timeout,
+    })
+}
+
+#[tauri::command]
+async fn complete_setup_status(
+    app: AppHandle,
+    client: String,
+    url: Option<String>,
+) -> Result<complete_setup::SetupReport, String> {
+    let paths = complete_setup_paths(&app)?;
+    let cli = complete_setup_cli(&paths);
+    tauri::async_runtime::spawn_blocking(move || match &cli {
+        Some(cli) => complete_setup::status_with_cli(&client, url.as_deref(), &paths, cli),
+        None => complete_setup::status(&client, url.as_deref(), &paths),
+    })
+    .await
+    .map_err(|err| format!("状态查询中断：{err}"))
+}
+
+#[tauri::command]
+async fn complete_setup_install(
+    app: AppHandle,
+    client: String,
+    url: Option<String>,
+) -> Result<complete_setup::SetupReport, String> {
+    let paths = complete_setup_paths(&app)?;
+    let cli = complete_setup_cli(&paths);
+    tauri::async_runtime::spawn_blocking(move || match cli {
+        Some(cli) => complete_setup::install(&client, url.as_deref(), &paths, &cli),
+        None => complete_setup::status(&client, url.as_deref(), &paths),
+    })
+    .await
+    .map_err(|err| format!("安装中断：{err}"))
+}
+
 #[tauri::command]
 fn list_desktop_screens(app: AppHandle) -> Result<Vec<desktop::DesktopScreen>, String> {
     desktop::list_screens(&app)
@@ -279,7 +367,11 @@ pub fn run() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_PORT);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(instance::plugin());
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
@@ -293,16 +385,15 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             // Shared bridge state keeps board, feedback, and explicit memory in one transaction.
-            let data_path = std::env::var_os("SPELLCAST_STATE_FILE")
-                .map(std::path::PathBuf::from)
-                .unwrap_or(
-                    app.path()
+            let data_path = match std::env::var_os("SPELLCAST_STATE_FILE") {
+                Some(path) => std::path::PathBuf::from(path),
+                None => app.path()
                         .app_data_dir()
                         .map_err(|err| {
                             std::io::Error::other(format!("找不到 Spellcast 数据目录：{err}"))
                         })?
                         .join("spellcast.sqlite3"),
-                );
+            };
             let bridge = Arc::new(
                 Bridge::open(
                     Desktop {
@@ -343,6 +434,7 @@ pub fn run() {
                 }
             });
 
+            completions::start(handle.clone());
             serve(bridge, port);
             Ok(())
         })
@@ -364,8 +456,15 @@ pub fn run() {
             mcp_config,
             configure_client,
             install_client_skill,
+            complete_setup_status,
+            complete_setup_install,
             list_desktop_screens,
             desktop::drag_bubble,
+            completions::get_completions,
+            completions::open_completed_task,
+            completions::dismiss_completion,
+            completions::get_completion_voice,
+            completions::set_completion_voice,
             close_bubbles
         ])
         .run(tauri::generate_context!())

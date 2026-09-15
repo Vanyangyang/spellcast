@@ -14,9 +14,10 @@ use spellcast_core::types::{
     forms, BoardNode, BoardSnapshot, BubbleRequest, ImportRequest, NodeDraft, NodePatch,
     PresentPayload, SayRequest, SetFormRequest, SpellcastError, ThrownBubble,
 };
-use spellcast_core::{BoardReply, ReplyActionInput, ReplyPatchRequest, ReplyRequest};
+use spellcast_core::{BoardReply, ReplyActionInput, ReplyPatchRequest};
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::feedback::{BindCodexRequest, ReplySubmission};
 use crate::{mcp, Bridge, TRUSTED_ORIGINS};
 
 type Shared = Arc<Bridge>;
@@ -30,6 +31,7 @@ fn bad(err: SpellcastError) -> Fail {
 }
 
 pub fn router(bridge: Shared) -> Router {
+    bridge.start_delivery_worker();
     let allowed_origins = TRUSTED_ORIGINS.map(HeaderValue::from_static);
     let mcp_service = mcp::service(bridge.clone());
     Router::new()
@@ -37,6 +39,12 @@ pub fn router(bridge: Shared) -> Router {
         .route("/api/forms", get(list_forms))
         .route("/api/board", get(board).delete(reset))
         .route("/api/board/form", post(set_form))
+        .route("/api/canvas", post(patch_canvas).delete(delete_canvas_item))
+        .route("/api/canvas/restore", post(restore_canvas_item))
+        .route("/api/canvas/content", axum::routing::delete(delete_canvas_content))
+        .route("/api/canvas/batch", post(canvas_batch))
+        .route("/api/canvas/blocks/:id/action", post(canvas_block_action))
+        .route("/api/canvas/proposals/:id", post(canvas_proposal))
         .route("/api/nodes", post(create_node))
         .route(
             "/api/nodes/:id",
@@ -51,6 +59,8 @@ pub fn router(bridge: Shared) -> Router {
         .route("/api/expired", post(expired))
         .route("/api/surface", post(set_surface))
         .route("/api/paused", post(set_paused))
+        .route("/api/observer/status", get(observer_status))
+        .route("/api/observer/settings", post(set_observer_settings))
         .route("/api/focus", post(focus))
         .route("/api/events", get(events))
         .route("/api/present", post(present))
@@ -59,8 +69,21 @@ pub fn router(bridge: Shared) -> Router {
         .route("/api/replies", post(write_reply))
         .route("/api/replies/patch", post(patch_reply))
         .route("/api/replies/action", post(reply_action))
+        .route("/api/artifacts", post(publish_artifact))
+        .route("/api/artifacts/state", post(artifact_state))
+        .route(
+            "/api/artifacts/edit",
+            post(artifact_edit).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route("/api/artifacts/:id", get(artifact_manifest))
+        .route("/api/artifacts/:id/history", get(artifact_history))
+        .route("/api/artifacts/:id/file", get(artifact_raw_file))
         .route("/api/feedback", get(feedback))
         .route("/api/feedback/ack", post(ack_feedback))
+        .route("/api/feedback/:sequence/retry", post(retry_feedback))
+        .route("/api/bindings/codex", post(bind_codex))
+        .route("/api/task-target", post(task_target))
+        .route("/api/bindings/:source", axum::routing::delete(unbind_codex))
         .route("/api/memories", get(memories).post(remember))
         .route("/api/memories/:id", axum::routing::delete(forget))
         .nest_service("/mcp", mcp_service)
@@ -71,7 +94,99 @@ pub fn router(bridge: Shared) -> Router {
                 .allow_headers(Any),
         )
         .layer(middleware::from_fn(local_request_guard))
+        .merge(Router::new().route("/artifacts/:id/*name", get(artifact_resource)))
         .with_state(bridge)
+}
+
+async fn task_target(State(b): State<Shared>, Json(req): Json<crate::task_target::TaskTargetRequest>) -> Result<Json<crate::task_target::TaskTargetStatus>, Fail> {
+    b.task_target_status(req).await.map(Json).map_err(bad)
+}
+
+async fn publish_artifact(
+    State(b): State<Shared>,
+    Json(req): Json<crate::artifacts::PublishArtifact>,
+) -> Result<Json<BoardReply>, Fail> {
+    // Directory reading and SQLite writes are blocking local I/O.
+    tokio::task::spawn_blocking(move || b.publish_artifact(req))
+        .await
+        .map_err(|e| bad(SpellcastError::user(e.to_string())))?
+        .map(Json)
+        .map_err(bad)
+}
+
+async fn artifact_state(
+    State(b): State<Shared>,
+    Json(req): Json<spellcast_core::ArtifactStatePatch>,
+) -> Result<Json<BoardReply>, Fail> {
+    b.save_artifact_state(req).map(Json).map_err(bad)
+}
+
+async fn artifact_manifest(
+    State(b): State<Shared>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::artifacts::ArtifactBundle>, Fail> {
+    b.artifact(&id).map(Json).map_err(bad)
+}
+
+async fn artifact_history(
+    State(b): State<Shared>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::artifacts::ArtifactBundle>>, Fail> {
+    b.artifact_history(&id).map(Json).map_err(bad)
+}
+
+#[derive(Deserialize)]
+struct ArtifactFileQuery {
+    name: String,
+}
+
+async fn artifact_raw_file(
+    State(b): State<Shared>,
+    Path(id): Path<String>,
+    Query(query): Query<ArtifactFileQuery>,
+) -> Result<Response, Fail> {
+    let (_, bytes) = b.artifact_file(&id, &query.name).map_err(bad)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            (header::CONTENT_DISPOSITION, "attachment"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+async fn artifact_edit(
+    State(b): State<Shared>,
+    Json(req): Json<crate::artifacts::ArtifactEdit>,
+) -> Result<Json<BoardReply>, Fail> {
+    tokio::task::spawn_blocking(move || b.edit_artifact(req))
+        .await
+        .map_err(|e| bad(SpellcastError::user(e.to_string())))?
+        .map(Json)
+        .map_err(bad)
+}
+
+async fn artifact_resource(
+    State(b): State<Shared>,
+    Path((id, name)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("127.0.0.1");
+    if !is_loopback_host(host) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    crate::artifacts::resource_response(
+        &b,
+        &id,
+        &name,
+        headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+        host,
+    )
 }
 
 async fn local_request_guard(request: Request, next: Next) -> Response {
@@ -90,18 +205,26 @@ async fn local_request_guard(request: Request, next: Next) -> Response {
         if !is_trusted_origin(origin) {
             return StatusCode::FORBIDDEN.into_response();
         }
+    } else if request
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|site| site != "none" && site != "same-origin")
+    {
+        // Opaque frames can send no-CORS requests without Origin, including GETs.
+        return StatusCode::FORBIDDEN.into_response();
     }
     next.run(request).await
 }
 
 fn is_loopback_host(host: &str) -> bool {
     let host = host.trim().to_ascii_lowercase();
-    host == "localhost"
-        || host.starts_with("localhost:")
-        || host == "127.0.0.1"
-        || host.starts_with("127.0.0.1:")
-        || host == "[::1]"
-        || host.starts_with("[::1]:")
+    ["localhost", "127.0.0.1", "[::1]"].iter().any(|base| {
+        host == *base
+            || host
+                .strip_prefix(&format!("{base}:"))
+                .is_some_and(|port| port.parse::<u16>().is_ok())
+    })
 }
 
 fn is_trusted_origin(origin: &str) -> bool {
@@ -110,6 +233,7 @@ fn is_trusted_origin(origin: &str) -> bool {
 
 async fn health(State(b): State<Shared>) -> Json<Value> {
     let st = b.status();
+    let observer = b.observer_status();
     Json(json!({
         "ok": true,
         "name": "spellcast",
@@ -124,7 +248,22 @@ async fn health(State(b): State<Shared>) -> Json<Value> {
         "agents": st.agents,
         "sources": st.sources,
         "paused": st.paused,
+        "observer_enabled": observer.enabled,
+        "observer_policy_revision": observer.policy_revision,
+        "observer_allowed": observer.allowed,
+        "observer_reason": observer.reason,
     }))
+}
+
+fn observer_payload(b: &Bridge) -> Value {
+    let observer = b.observer_status();
+    json!({
+        "enabled": observer.enabled,
+        "paused": observer.paused,
+        "allowed": observer.allowed,
+        "reason": observer.reason,
+        "policy_revision": observer.policy_revision,
+    })
 }
 
 async fn list_forms() -> Json<Value> {
@@ -133,6 +272,50 @@ async fn list_forms() -> Json<Value> {
 
 async fn board(State(b): State<Shared>) -> Json<BoardSnapshot> {
     Json(b.board())
+}
+
+async fn patch_canvas(
+    State(b): State<Shared>,
+    Json(patch): Json<spellcast_core::CanvasPatch>,
+) -> Result<Json<spellcast_core::CanvasLayout>, Fail> {
+    b.patch_canvas(patch).map(Json).map_err(bad)
+}
+
+#[derive(serde::Deserialize)]
+struct CanvasDelete {
+    item_id: String,
+    expected_revision: u64,
+    #[serde(default)]
+    current: Vec<spellcast_core::CanvasRead>,
+}
+
+async fn delete_canvas_item(
+    State(b): State<Shared>,
+    Json(req): Json<CanvasDelete>,
+) -> Result<Json<BoardSnapshot>, Fail> {
+    b.remove_canvas_item(&req.item_id, req.expected_revision)
+        .map(Json)
+        .map_err(bad)
+}
+
+async fn restore_canvas_item(State(b): State<Shared>, Json(req): Json<CanvasDelete>) -> Result<Json<BoardSnapshot>, Fail> {
+    b.restore_canvas_item(&req.item_id, req.expected_revision).map(Json).map_err(bad)
+}
+
+async fn delete_canvas_content(State(b): State<Shared>, Json(req): Json<CanvasDelete>) -> Result<Json<BoardSnapshot>, Fail> {
+    b.delete_canvas_content(&req.item_id, req.expected_revision, req.current).map(Json).map_err(bad)
+}
+
+async fn canvas_batch(State(b): State<Shared>, Json(req): Json<spellcast_core::CanvasBatchRequest>) -> Result<Json<crate::canvas::CanvasOutcome>, Fail> {
+    b.canvas_batch(req, None).map(Json).map_err(bad)
+}
+
+async fn canvas_block_action(State(b): State<Shared>, Path(id): Path<String>, Json(req): Json<crate::canvas_blocks::BlockActionRequest>) -> Result<Json<crate::canvas_blocks::BlockActionOutcome>, Fail> {
+    b.canvas_block_action(&id, req).map(Json).map_err(bad)
+}
+
+async fn canvas_proposal(State(b): State<Shared>, Path(id): Path<String>, Json(req): Json<crate::canvas::CanvasProposalAction>) -> Result<Json<crate::canvas::CanvasOutcome>, Fail> {
+    b.canvas_proposal(&id, req).map(Json).map_err(bad)
 }
 
 async fn reset(State(b): State<Shared>) -> Result<Json<BoardSnapshot>, Fail> {
@@ -250,6 +433,24 @@ async fn set_paused(
         .map_err(bad)
 }
 
+async fn observer_status(State(b): State<Shared>) -> Json<Value> {
+    Json(observer_payload(&b))
+}
+
+#[derive(Deserialize)]
+struct ObserverSettingsRequest {
+    enabled: bool,
+}
+
+async fn set_observer_settings(
+    State(b): State<Shared>,
+    Json(req): Json<ObserverSettingsRequest>,
+) -> Result<Json<Value>, Fail> {
+    b.set_observer_enabled(req.enabled)
+        .map(|status| Json(json!(status)))
+        .map_err(bad)
+}
+
 async fn focus(State(b): State<Shared>) -> Json<Value> {
     b.focus();
     Json(json!({ "ok": true }))
@@ -298,9 +499,11 @@ async fn bubble(
 
 async fn write_reply(
     State(b): State<Shared>,
-    Json(req): Json<ReplyRequest>,
+    Json(req): Json<ReplySubmission>,
 ) -> Result<Json<BoardReply>, Fail> {
-    b.write_reply(req).map(Json).map_err(bad)
+    b.write_reply_for_feedback(req.reply, &req.feedback_sequences)
+        .map(Json)
+        .map_err(bad)
 }
 
 async fn patch_reply(
@@ -320,7 +523,36 @@ async fn reply_action(
 }
 
 async fn feedback(State(b): State<Shared>, Query(q): Query<Since>) -> Json<Value> {
-    Json(json!({ "pending": b.pending_feedback(q.source_id.as_deref()) }))
+    Json(json!(b.feedback_state(q.source_id.as_deref())))
+}
+
+async fn bind_codex(
+    State(b): State<Shared>,
+    Json(req): Json<BindCodexRequest>,
+) -> Result<Json<Value>, Fail> {
+    b.bind_codex(req)
+        .await
+        .map(|binding| Json(json!(binding)))
+        .map_err(bad)
+}
+
+async fn unbind_codex(
+    State(b): State<Shared>,
+    Path(source): Path<String>,
+) -> Result<Json<Value>, Fail> {
+    b.unbind_codex(&source)
+        .map(|()| Json(json!({ "unbound": true })))
+        .map_err(bad)
+}
+
+async fn retry_feedback(
+    State(b): State<Shared>,
+    Path(sequence): Path<u64>,
+) -> Result<Json<Value>, Fail> {
+    b.retry_feedback(sequence)
+        .await
+        .map(|receipt| Json(json!(receipt)))
+        .map_err(bad)
 }
 
 #[derive(Deserialize)]
@@ -490,12 +722,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_canvas_batch_has_flat_schema_and_keeps_proposals_atomic() {
+        let bridge = Arc::new(Bridge::new(crate::Headless, 0));
+        let app = router(bridge.clone());
+        let listed = rpc(&app, 1, "tools/list", json!({})).await;
+        let tool = listed["result"]["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "spellcast_canvas_batch").unwrap();
+        for name in ["source_id", "request_id", "reads", "operations", "feedback_sequences"] {
+            assert!(tool["inputSchema"]["properties"][name].is_object(), "{tool}");
+        }
+        let arguments = json!({"source_id":"naming-task","request_id":"names","operations":[
+            {"op":"create","id":"first-name","content":{"type":"text","title":"雾港档案","text":"从消失的地名追踪一座港口。"},"placement":{"x":10,"y":20}},
+            {"op":"create","id":"second-name","content":{"type":"text","title":"灯塔失语","text":"最后一盏灯不再指向归航者。"},"placement":{"x":460,"y":20}},
+            {"op":"compose","id":"directions","expected_revision":0,"title":"两个故事方向","members":["first-name","second-name"]}
+        ]});
+        let result = rpc(&app, 2, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":arguments})).await;
+        assert_eq!(result["result"]["structuredContent"]["result"]["status"], "applied", "{result}");
+        let again = rpc(&app, 3, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":arguments})).await;
+        assert_eq!(again["result"]["structuredContent"]["result"]["status"], "applied", "{again}");
+        assert_eq!(bridge.board().canvas.objects.len(), 2);
+        let before = bridge.board().canvas.items;
+        let stale = rpc(&app, 4, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":{
+            "source_id":"naming-task","request_id":"stale-arrangement","operations":[
+                {"op":"place","id":"first-name","expected_revision":0,"fields":{"x":999}},
+                {"op":"place","id":"second-name","expected_revision":1,"fields":{"x":999}}
+            ]
+        }})).await;
+        assert_eq!(stale["result"]["structuredContent"]["result"]["status"], "proposed", "{stale}");
+        assert_eq!(bridge.board().canvas.items, before);
+    }
+
+    #[tokio::test]
     async fn mcp_structured_reply_and_local_feedback_round_trip() {
         let bridge = Arc::new(Bridge::new(crate::Headless, 0));
         let app = router(bridge.clone());
         let listed = rpc(&app, 1, "tools/list", json!({})).await;
         let tools = listed["result"]["tools"].as_array().unwrap();
-        for name in ["spellcast_reply", "spellcast_update", "spellcast_ack"] {
+        for name in [
+            "spellcast_reply",
+            "spellcast_update",
+            "spellcast_canvas_batch",
+            "spellcast_ack",
+            "spellcast_artifact",
+            "spellcast_artifact_read",
+        ] {
             assert!(tools.iter().any(|t| t["name"] == name));
         }
         let update_schema = tools
@@ -539,7 +808,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let action: Value =
             serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
-        let sequence = action["event"]["seq"].as_u64().unwrap();
+        assert_eq!(action["event"]["kind"], "canvas_state");
         let heard = rpc(
             &app,
             3,
@@ -549,17 +818,19 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(
-            heard["result"]["structuredContent"]["events"][0]["option_id"],
-            "b"
-        );
+        assert_eq!(heard["result"]["structuredContent"]["events"], json!([]));
+        let res = app.clone().oneshot(Request::post("/api/replies/action").header("content-type","application/json")
+            .body(Body::from(json!({"reply_id":"story","block_id":"choices","action":"ask","text":"按最终选择继续。"}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let sent: Value = serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        let sequence = sent["event"]["seq"].as_u64().unwrap();
         let changed = rpc(
             &app,
             4,
             "tools/call",
             json!({
                 "name":"spellcast_update","arguments":{
-                    "source_id":"codex:launch","reply_id":"story","expected_revision":2,
+                    "source_id":"codex:launch","reply_id":"story","expected_revision":2,"feedback_sequences":[sequence],
                     "block":{"id":"intro","type":"text","text":"接着展开你选择的节奏方向。"}
                 }
             }),
@@ -581,6 +852,38 @@ mod tests {
             1
         );
         assert!(bridge.pending_feedback(None).is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_exact_feedback_requires_source_and_never_replays_acknowledged_history() {
+        let bridge = Arc::new(Bridge::new(crate::Headless, 0));
+        let app = router(bridge.clone());
+        let first = bridge.say(SayRequest { text: "无关的早先请求".into(), source_id: Some("codex:a".into()), ..Default::default() }).unwrap();
+        let target = bridge.say(SayRequest { text: "这只是测试".into(), source_id: Some("codex:a".into()), ..Default::default() }).unwrap();
+        let other = bridge.say(SayRequest { text: "其他任务".into(), source_id: Some("codex:b".into()), ..Default::default() }).unwrap();
+        let listed = rpc(&app, 1, "tools/list", json!({})).await;
+        let listen = listed["result"]["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "spellcast_listen").unwrap();
+        assert!(listen["inputSchema"]["properties"]["sequence"].is_object());
+        let request = |source: &str, sequence: u64| json!({"name":"spellcast_listen","arguments":{"source_id":source,"sequence":sequence,"since":99999,"wait":120}});
+        let heard = rpc(&app, 2, "tools/call", request("codex:a", target.seq)).await;
+        let content = &heard["result"]["structuredContent"];
+        assert_eq!(content["events"].as_array().unwrap().len(), 1);
+        assert_eq!(content["events"][0]["text"], "这只是测试");
+        assert_eq!(content["pending_sequences"], json!([target.seq]));
+        assert_eq!(content["status"], "pending");
+        assert!(content["handling"].as_array().unwrap().len() >= 2);
+        let foreign = rpc(&app, 3, "tools/call", request("codex:a", other.seq)).await;
+        assert_eq!(foreign["result"]["structuredContent"]["events"], json!([]));
+        let missing_source = rpc(&app, 4, "tools/call", json!({"name":"spellcast_listen","arguments":{"sequence":target.seq}})).await;
+        assert!(missing_source["error"].is_object() || missing_source["result"]["isError"] == true);
+        bridge.acknowledge_feedback("codex:a", &[target.seq]).unwrap();
+        let repeated = rpc(&app, 5, "tools/call", request("codex:a", target.seq)).await;
+        assert_eq!(repeated["result"]["structuredContent"]["status"], "not_pending");
+        assert_eq!(repeated["result"]["structuredContent"]["events"], json!([]));
+        assert_eq!(repeated["result"]["structuredContent"]["pending_sequences"], json!([]));
+        let general = rpc(&app, 6, "tools/call", json!({"name":"spellcast_listen","arguments":{"source_id":"codex:a","since":0}})).await;
+        assert!(general["result"]["structuredContent"]["events"].as_array().unwrap().iter().any(|e| e["seq"] == target.seq));
+        assert_eq!(general["result"]["structuredContent"]["pending_sequences"], json!([first.seq]));
     }
 
     #[tokio::test]
@@ -727,5 +1030,90 @@ mod tests {
                 .unwrap();
             assert_eq!(res.status(), StatusCode::OK, "origin {origin}");
         }
+    }
+
+    #[tokio::test]
+    async fn observer_http_settings_and_readonly_mcp_status() {
+        let bridge = Arc::new(Bridge::new(crate::Headless, 0));
+        let app = router(bridge.clone());
+        let status = app
+            .clone()
+            .oneshot(Request::get("/api/observer/status").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &status.into_body().collect().await.unwrap().to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(body["enabled"], false);
+        assert_eq!(body["allowed"], false);
+        assert_eq!(body["reason"], "disabled");
+        assert_eq!(body["policy_revision"], 0);
+
+        let health = app
+            .clone()
+            .oneshot(Request::get("/api/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let health_body: Value = serde_json::from_slice(
+            &health.into_body().collect().await.unwrap().to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(health_body["observer_enabled"], false);
+
+        let bad = app
+            .clone()
+            .oneshot(
+                Request::post("/api/observer/settings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "enabled": "yes" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            bad.status().is_client_error(),
+            "invalid enabled should fail: {}",
+            bad.status()
+        );
+        assert!(!bridge.observer_status().enabled);
+
+        let on = app
+            .clone()
+            .oneshot(
+                Request::post("/api/observer/settings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "enabled": true }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(on.status(), StatusCode::OK);
+        let on_body: Value =
+            serde_json::from_slice(&on.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(on_body["enabled"], true);
+        assert!(on_body["policy_revision"].as_u64().unwrap() > 0);
+
+        let listed = rpc(&app, 1, "tools/list", json!({})).await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        assert!(tools.iter().any(|t| t["name"] == "spellcast_observer_status"));
+        assert!(!tools.iter().any(|t| t["name"]
+            .as_str()
+            .is_some_and(|name| name.contains("observer_set")
+                || name.contains("observer_enable")
+                || name == "spellcast_observer_settings")));
+        let called = rpc(
+            &app,
+            2,
+            "tools/call",
+            json!({ "name": "spellcast_observer_status", "arguments": {} }),
+        )
+        .await;
+        assert_eq!(
+            called["result"]["structuredContent"]["enabled"],
+            true,
+            "{called}"
+        );
     }
 }

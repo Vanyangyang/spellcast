@@ -79,6 +79,19 @@ pub enum ReplyBlock {
         title: String,
         steps: Vec<ReplyStep>,
     },
+    /// An immutable, locally saved Web work. Runtime state has its own revision.
+    Artifact {
+        id: String,
+        #[serde(default)]
+        title: String,
+        bundle_id: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        state: serde_json::Value,
+        #[serde(default)]
+        state_revision: u64,
+    },
 }
 
 fn check(condition: bool, message: &str) -> Result<(), SpellcastError> {
@@ -124,7 +137,8 @@ impl ReplyBlock {
             Self::Text { id, .. }
             | Self::Comparison { id, .. }
             | Self::Graph { id, .. }
-            | Self::Sequence { id, .. } => id,
+            | Self::Sequence { id, .. }
+            | Self::Artifact { id, .. } => id,
         }
     }
 
@@ -133,7 +147,8 @@ impl ReplyBlock {
             Self::Text { title, .. }
             | Self::Comparison { title, .. }
             | Self::Graph { title, .. }
-            | Self::Sequence { title, .. } => title,
+            | Self::Sequence { title, .. }
+            | Self::Artifact { title, .. } => title,
         }
     }
 
@@ -141,6 +156,16 @@ impl ReplyBlock {
         validate_id(self.id())?;
         text_limit(self.title(), 160)?;
         match self {
+            Self::Artifact {
+                bundle_id,
+                description,
+                state,
+                ..
+            } => {
+                validate_id(bundle_id)?;
+                text_limit(description, 4_000)?;
+                validate_artifact_state(state)?;
+            }
             Self::Text { text, .. } => {
                 check(!text.trim().is_empty(), "文字块需要有正文。")?;
                 text_limit(text, 64_000)?;
@@ -242,9 +267,41 @@ impl ReplyBlock {
                     node.y = None;
                 }
             }
+            if let Self::Artifact {
+                state,
+                state_revision,
+                ..
+            } = block
+            {
+                *state = serde_json::Value::Null;
+                *state_revision = 0;
+            }
         }
         left == right
     }
+}
+
+pub fn validate_artifact_state(state: &serde_json::Value) -> Result<(), SpellcastError> {
+    check(
+        state.is_null() || state.is_object(),
+        "作品状态需要是 JSON 对象。",
+    )?;
+    check(
+        serde_json::to_vec(state)?.len() <= 64_000,
+        "作品状态超过 64 KB；请把素材保存在资源文件中。",
+    )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactStatePatch {
+    #[serde(default)]
+    pub object_id: Option<String>,
+    #[serde(default)]
+    pub reply_id: String,
+    pub block_id: String,
+    pub bundle_id: String,
+    pub expected_state_revision: u64,
+    pub state: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -282,7 +339,12 @@ pub struct ReplyRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReplyPatchRequest {
+    #[serde(default)]
+    pub object_id: Option<String>,
+    #[serde(default)]
     pub reply_id: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
     pub expected_revision: u64,
     pub block: ReplyBlock,
     #[serde(default)]
@@ -297,14 +359,31 @@ pub enum ReplyAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArtifactFeedback {
+    pub bundle_id: String,
+    pub state: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inputs: Option<crate::inbox::CanvasInputSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReplyActionInput {
+    #[serde(default)]
+    pub object_id: Option<String>,
+    #[serde(default)]
     pub reply_id: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
     pub block_id: String,
     pub action: ReplyAction,
     #[serde(default)]
     pub option_id: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_context: Option<ArtifactFeedback>,
 }
 
 fn validate_blocks(blocks: &[ReplyBlock]) -> Result<(), SpellcastError> {
@@ -327,8 +406,111 @@ fn revision_matches(actual: u64, expected: Option<u64>) -> Result<(), SpellcastE
     )
 }
 
+impl ReplyBlock {
+    /// Model-authored content changes do not reset choices or positions the user
+    /// has already saved. Direct user patches remain free to change them.
+    pub fn preserve_user_state_from(&mut self, previous: &ReplyBlock) {
+        match (self, previous) {
+            (
+                Self::Artifact {
+                    state,
+                    state_revision,
+                    ..
+                },
+                Self::Artifact {
+                    state: old,
+                    state_revision: revision,
+                    ..
+                },
+            ) => {
+                *state = old.clone();
+                *state_revision = *revision;
+            }
+            (Self::Graph { nodes, .. }, Self::Graph { nodes: old, .. }) => {
+                for node in nodes {
+                    if let Some(before) = old.iter().find(|item| item.id == node.id) {
+                        if before.x.is_some() {
+                            node.x = before.x;
+                        }
+                        if before.y.is_some() {
+                            node.y = before.y;
+                        }
+                    }
+                }
+            }
+            (
+                Self::Comparison {
+                    options,
+                    selected_id,
+                    ..
+                },
+                Self::Comparison {
+                    selected_id: Some(chosen),
+                    ..
+                },
+            ) if options.iter().any(|option| option.id == *chosen) => {
+                *selected_id = Some(chosen.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
 impl Session {
-    pub fn write_reply(&mut self, req: ReplyRequest) -> Result<BoardReply, SpellcastError> {
+    /// Saving controls or a selection does not enqueue a model request or change content revision.
+    pub fn patch_artifact_state(
+        &mut self,
+        mut req: ArtifactStatePatch,
+    ) -> Result<BoardReply, SpellcastError> {
+        req.reply_id = self.canvas_reply_id(req.object_id.as_deref(), &req.reply_id)?;
+        validate_artifact_state(&req.state)?;
+        let reply = self
+            .board
+            .replies
+            .iter_mut()
+            .find(|r| r.id == req.reply_id)
+            .ok_or_else(|| SpellcastError::user("这块回复已经不在板上。"))?;
+        let block = reply
+            .blocks
+            .iter_mut()
+            .find(|b| b.id() == req.block_id)
+            .ok_or_else(|| SpellcastError::user("作品已经不在回复里。"))?;
+        let ReplyBlock::Artifact {
+            bundle_id,
+            state,
+            state_revision,
+            ..
+        } = block
+        else {
+            return Err(SpellcastError::user("这不是开放作品。"));
+        };
+        check(
+            *bundle_id == req.bundle_id,
+            "作品内容已更新，请重新打开后继续。",
+        )?;
+        check(
+            *state_revision == req.expected_state_revision,
+            "作品状态已在其他窗口更新；保留当前输入后再合并。",
+        )?;
+        if *state != req.state {
+            *state = req.state;
+            *state_revision += 1;
+        }
+        Ok(reply.clone())
+    }
+
+    pub fn write_reply(&mut self, mut req: ReplyRequest) -> Result<BoardReply, SpellcastError> {
+        if let Some(existing) = req
+            .id
+            .as_ref()
+            .and_then(|id| self.board.replies.iter().find(|r| &r.id == id))
+        {
+            for block in &mut req.blocks {
+                if let Some(previous) = existing.blocks.iter().find(|old| old.id() == block.id()) {
+                    block.preserve_user_state_from(previous);
+                }
+            }
+        }
         validate_id(&req.source_id)?;
         check(!req.title.trim().is_empty(), "回复需要一个标题。")?;
         text_limit(&req.title, 160)?;
@@ -382,7 +564,11 @@ impl Session {
         Ok(reply)
     }
 
-    pub fn patch_reply(&mut self, req: ReplyPatchRequest) -> Result<BoardReply, SpellcastError> {
+    pub fn patch_reply(
+        &mut self,
+        mut req: ReplyPatchRequest,
+    ) -> Result<BoardReply, SpellcastError> {
+        req.reply_id = self.canvas_reply_id(req.object_id.as_deref(), &req.reply_id)?;
         req.block.validate()?;
         let reply = self
             .board
@@ -396,6 +582,9 @@ impl Session {
             .iter()
             .position(|block| block.id() == req.block.id())
             .ok_or_else(|| SpellcastError::user("这段内容已经不在回复里。"))?;
+        if matches!(req.block, ReplyBlock::Artifact { .. }) {
+            req.block.preserve_user_state_from(&reply.blocks[position]);
+        }
         if req.layout_only {
             check(
                 matches!(req.block, ReplyBlock::Graph { .. })
@@ -416,17 +605,26 @@ impl Session {
         &mut self,
         req: &ReplyActionInput,
     ) -> Result<(BoardReply, String), SpellcastError> {
+        let reply_id = self.canvas_reply_id(req.object_id.as_deref(), &req.reply_id)?;
         let reply = self
             .board
             .replies
             .iter_mut()
-            .find(|reply| reply.id == req.reply_id)
+            .find(|reply| reply.id == reply_id)
             .ok_or_else(|| SpellcastError::user("这块回复已经不在板上。"))?;
         let block = reply
             .blocks
             .iter_mut()
             .find(|block| block.id() == req.block_id)
             .ok_or_else(|| SpellcastError::user("这段内容已经不在回复里。"))?;
+        if let Some(context) = &req.artifact_context {
+            check(
+                matches!(block, ReplyBlock::Artifact { .. }),
+                "只有开放作品可以携带作品选区。",
+            )?;
+            validate_id(&context.bundle_id)?;
+            validate_artifact_state(&context.state)?;
+        }
         let text = match req.action {
             ReplyAction::Ask => {
                 let text = req.text.as_deref().unwrap_or("").trim();
@@ -447,9 +645,11 @@ impl Session {
                     .iter()
                     .find(|option| Some(&option.id) == req.option_id.as_ref())
                     .ok_or_else(|| SpellcastError::user("这个方案已经不存在。"))?;
-                *selected_id = Some(option.id.clone());
-                reply.revision += 1;
-                reply.updated_at_ms = now_ms();
+                if selected_id.as_ref() != Some(&option.id) {
+                    *selected_id = Some(option.id.clone());
+                    reply.revision += 1;
+                    reply.updated_at_ms = now_ms();
+                }
                 format!("选择了方案「{}」。", option.title)
             }
         };
@@ -482,6 +682,8 @@ mod tests {
         let mut session = Session::default();
         let original = session.write_reply(request()).unwrap();
         let patch = ReplyPatchRequest {
+            object_id: None,
+            request_id: None,
             reply_id: original.id.clone(),
             expected_revision: 1,
             block: ReplyBlock::Text {
@@ -537,6 +739,8 @@ mod tests {
             nodes[0].y = Some(20.0);
         }
         let patch = ReplyPatchRequest {
+            object_id: None,
+            request_id: None,
             reply_id: "reply-1".into(),
             expected_revision: 1,
             block: moved.clone(),
@@ -548,6 +752,8 @@ mod tests {
         }
         assert!(session
             .patch_reply(ReplyPatchRequest {
+                object_id: None,
+                request_id: None,
                 reply_id: "reply-1".into(),
                 expected_revision: 2,
                 block: moved,

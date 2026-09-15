@@ -1,6 +1,14 @@
 //! Shared application state behind the Spellcast desktop and its local REST adapter.
 
 pub mod api;
+pub mod artifacts;
+pub mod canvas;
+pub mod canvas_blocks;
+pub mod task_target;
+pub mod desktop_delivery;
+mod canvas_data;
+pub mod codex;
+pub mod feedback;
 pub mod mcp;
 pub mod observer;
 #[cfg(test)]
@@ -9,14 +17,15 @@ mod store;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use spellcast_core::inbox::now_ms;
 use spellcast_core::types::{
-    new_id, BoardNode, BoardSnapshot, BubbleRequest, ImportRequest, MemoryItem, NodeDraft,
-    NodePatch, PresentPayload, PresentResult, SayRequest, SetFormRequest, SpellcastError,
+    new_id, BoardNode, BoardSnapshot, BubbleRequest, CapturedContext, ImportRequest, MemoryItem,
+    NodeDraft, NodePatch, PresentPayload, PresentResult, SayRequest, SetFormRequest, SpellcastError,
     StageForm, ThrownBubble,
 };
 use spellcast_core::{
@@ -104,6 +113,11 @@ pub struct Status {
     pub sources: Vec<RecentSource>,
     #[serde(default)]
     pub paused: bool,
+    /// Product aside switch. Missing in old databases means off.
+    #[serde(default)]
+    pub observer_enabled: bool,
+    #[serde(default)]
+    pub observer_policy_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,10 +142,24 @@ struct PersistedState {
     /// Explicit feedback is retained until its originating task acknowledges it.
     #[serde(default)]
     pending: Vec<AgentEvent>,
+    #[serde(default)]
+    bindings: Vec<codex::CodexBinding>,
+    #[serde(default)]
+    deliveries: Vec<feedback::DeliveryReceipt>,
     #[serde(skip)]
     bubble_sources: HashMap<String, String>,
+    /// Canonical captured_context for bubbles this process admitted/dispatched.
+    /// Same lifetime as bubble_sources; not persisted.
+    #[serde(skip)]
+    bubble_captures: HashMap<String, CapturedContext>,
     #[serde(default)]
     paused: bool,
+    /// Independent observer asides. Absent field in an old store is off.
+    #[serde(default)]
+    observer_enabled: bool,
+    /// Bumps only when the aside switch or observation-relevant pause actually changes.
+    #[serde(default)]
+    observer_policy_revision: u64,
 }
 
 #[derive(Default)]
@@ -141,6 +169,11 @@ struct Admission {
 }
 
 impl PersistedState {
+    fn forget_bubble(&mut self, id: &str) {
+        self.bubble_sources.remove(id);
+        self.bubble_captures.remove(id);
+    }
+
     fn source_for(&self, event: &AgentEvent) -> Option<String> {
         event
             .reply_id
@@ -164,7 +197,17 @@ impl PersistedState {
     }
 
     fn record(&mut self, mut event: AgentEvent) -> AgentEvent {
+        self.session.sync_canvas();
+        let content = event.reply_id.as_ref().map(|id| spellcast_core::CanvasContent::Reply { id: id.clone() })
+            .or_else(|| event.node_id.as_ref().map(|id| spellcast_core::CanvasContent::Node { id: id.clone() }));
+        if let Some(object) = content.as_ref().and_then(|content| self.session.board.canvas.object_for(content)) {
+            event.object_id = Some(object.id.clone());
+            event.object_revision = Some(object.content_revision);
+        }
         event.source_id = self.source_for(&event);
+        if event.target_thread_id.is_none() {
+            event.target_thread_id = self.bindings.iter().find(|binding| Some(binding.source_id.as_str()) == event.source_id.as_deref()).map(|binding| binding.thread_id.clone());
+        }
         let important = matches!(
             event.kind.as_str(),
             "reply" | "say" | "kept" | "unkept" | "selection" | "reply_edit"
@@ -173,6 +216,7 @@ impl PersistedState {
         if important {
             self.pending.push(event.clone());
         }
+        self.record_delivery(&event);
         event
     }
 
@@ -180,7 +224,7 @@ impl PersistedState {
         let mut events = self.inbox.since(since);
         events.extend(self.pending.iter().cloned());
         events.retain(|e| {
-            source_id.map_or(true, |id| {
+            !matches!(e.kind.as_str(), "canvas_state" | "board_edit") && source_id.map_or(true, |id| {
                 e.source_id.as_deref() == Some(id)
                     || (e.source_id.is_none()
                         && matches!(e.kind.as_str(), "cleared" | "board_edit"))
@@ -201,6 +245,8 @@ pub struct Bridge {
     surface: Box<dyn Surface>,
     admission: Mutex<Admission>,
     observers: Mutex<observer::Observers>,
+    delivery_gate: tokio::sync::Mutex<()>,
+    delivery_started: AtomicBool,
 }
 
 impl Bridge {
@@ -208,10 +254,31 @@ impl Bridge {
         Self::from_parts(surface, port, PersistedState::default(), None)
     }
 
+    #[cfg(test)]
+    fn test_bubble_maps(&self, id: &str) -> (Option<String>, Option<CapturedContext>) {
+        let state = self.state.lock().unwrap();
+        (
+            state.bubble_sources.get(id).cloned(),
+            state.bubble_captures.get(id).cloned(),
+        )
+    }
+
     pub fn open(surface: impl Surface, port: u16, path: impl AsRef<Path>) -> Result<Self, String> {
         let mut store = Store::open(path.as_ref())?;
-        let state: PersistedState = store.load()?.unwrap_or_default();
-        store.reindex(&state.memories)?;
+        let mut state: PersistedState = store.load()?.unwrap_or_default();
+        let mut recovered = state.session.sync_canvas();
+        for receipt in &mut state.deliveries {
+            if receipt.phase == feedback::DeliveryPhase::Dispatching {
+                receipt.phase = feedback::DeliveryPhase::Unknown;
+                receipt.error = Some("应用在收到投递确认前退出，请先核对原任务；没有自动重发。".into());
+                recovered = true;
+            }
+        }
+        if recovered || !state.deliveries.is_empty() {
+            store.save_with_requests(&state, &state.memories, &state.deliveries)?;
+        } else {
+            store.reindex(&state.memories)?;
+        }
         Ok(Self::from_parts(surface, port, state, Some(store)))
     }
 
@@ -234,11 +301,15 @@ impl Bridge {
                 agents: Vec::new(),
                 sources: Vec::new(),
                 paused: false,
+                observer_enabled: false,
+                observer_policy_revision: 0,
             }),
             notify: Notify::new(),
             surface: Box::new(surface),
             admission: Mutex::new(Admission::default()),
             observers: Mutex::new(observer::Observers::default()),
+            delivery_gate: tokio::sync::Mutex::new(()),
+            delivery_started: AtomicBool::new(false),
         }
     }
 
@@ -247,13 +318,22 @@ impl Bridge {
         change: impl FnOnce(&mut PersistedState) -> Result<R, SpellcastError>,
     ) -> Result<R, SpellcastError> {
         let mut current = self.state.lock().unwrap();
+        let previous_sequence = current.inbox.last_seq();
         let mut next = current.clone();
         let result = change(&mut next)?;
+        next.session.sync_canvas();
         if let Some(store) = &self.store {
+            let requests: Vec<_> = next
+                .deliveries
+                .iter()
+                .filter(|r| r.event.seq > previous_sequence && r.event.request_id.is_some())
+                .cloned()
+                .collect();
+            next.prune_completed_receipts();
             store
                 .lock()
                 .unwrap()
-                .save(&next, &next.memories)
+                .save_with_requests(&next, &next.memories, &requests)
                 .map_err(|err| {
                     SpellcastError::user(format!("Spellcast 没能保存这次改动：{err}"))
                 })?;
@@ -262,9 +342,65 @@ impl Bridge {
         Ok(result)
     }
 
+    pub fn patch_canvas(
+        &self,
+        patch: spellcast_core::CanvasPatch,
+    ) -> Result<spellcast_core::CanvasLayout, SpellcastError> {
+        let canvas = self.update(|state| state.session.patch_canvas(patch))?;
+        self.surface.board_changed();
+        Ok(canvas)
+    }
+
+    pub fn remove_canvas_item(
+        &self,
+        item_id: &str,
+        expected_revision: u64,
+    ) -> Result<BoardSnapshot, SpellcastError> {
+        let snapshot = self.update(|state| {
+            state
+                .session
+                .remove_canvas_item(item_id, expected_revision)?;
+            Ok(state.session.snapshot())
+        })?;
+        self.surface.board_changed();
+        Ok(snapshot)
+    }
+
+    pub fn restore_canvas_item(&self, item_id: &str, expected_revision: u64) -> Result<BoardSnapshot, SpellcastError> {
+        let snapshot = self.update(|state| {
+            state.session.set_canvas_removed(item_id, expected_revision, false)?;
+            Ok(state.session.snapshot())
+        })?;
+        self.surface.board_changed();
+        Ok(snapshot)
+    }
+
+    pub fn delete_canvas_content(&self, object_id: &str, expected_revision: u64, current: Vec<spellcast_core::CanvasRead>) -> Result<BoardSnapshot, SpellcastError> {
+        let snapshot = self.update(|state| {
+            let content = state.session.canvas_target(object_id, None, None)?;
+            state.session.delete_canvas_content(object_id, expected_revision, &current)?;
+            if let spellcast_core::CanvasContent::Node { id } = content { state.kept.retain(|_, node_id| node_id != &id); }
+            Ok(state.session.snapshot())
+        })?;
+        self.surface.board_changed();
+        Ok(snapshot)
+    }
+
     pub fn status(&self) -> Status {
         let mut status = self.status.lock().unwrap().clone();
-        status.paused = self.state.lock().unwrap().paused;
+        let state = self.state.lock().unwrap();
+        status.paused = state.paused;
+        status.observer_enabled = state.observer_enabled;
+        status.observer_policy_revision = state.observer_policy_revision;
+        for binding in &state.bindings {
+            if !status.sources.iter().any(|s| s.id == binding.source_id) {
+                status.sources.push(RecentSource {
+                    id: binding.source_id.clone(),
+                    label: binding.label.clone(),
+                    last_call_ms: binding.bound_at_ms,
+                });
+            }
+        }
         status.board_focused = self.surface.board_is_focused();
         status
     }
@@ -275,14 +411,58 @@ impl Bridge {
     }
 
     pub fn set_paused(&self, paused: bool) -> Result<Status, SpellcastError> {
-        self.update(|state| {
-            state.paused = paused;
-            Ok(())
-        })?;
+        {
+            let mut observers = self.observers.lock().unwrap();
+            self.update(|state| {
+                if state.paused != paused {
+                    state.paused = paused;
+                    state.observer_policy_revision = state.observer_policy_revision.saturating_add(1);
+                }
+                Ok(())
+            })?;
+            if paused {
+                observers.invalidate_all();
+            }
+        }
         if paused {
             self.close_bubbles();
         }
         Ok(self.status())
+    }
+
+    pub fn set_observer_enabled(&self, enabled: bool) -> Result<observer::ObserverStatus, SpellcastError> {
+        {
+            let mut observers = self.observers.lock().unwrap();
+            self.update(|state| {
+                if state.observer_enabled != enabled {
+                    state.observer_enabled = enabled;
+                    state.observer_policy_revision =
+                        state.observer_policy_revision.saturating_add(1);
+                }
+                Ok(())
+            })?;
+            if !enabled {
+                observers.invalidate_all();
+            }
+        }
+        Ok(self.observer_status())
+    }
+
+    pub fn observer_status(&self) -> observer::ObserverStatus {
+        self.observer_gate()
+    }
+
+    fn observer_gate(&self) -> observer::ObserverStatus {
+        let surface = self.status.lock().unwrap().surface.clone();
+        let actual_focus = self.surface.board_is_focused();
+        let state = self.state.lock().unwrap();
+        let board_focused = surface == "focus" && actual_focus;
+        observer::ObserverStatus::from_flags(
+            state.observer_enabled,
+            state.paused,
+            board_focused,
+            state.observer_policy_revision,
+        )
     }
 
     pub fn close_bubbles(&self) {
@@ -333,6 +513,11 @@ impl Bridge {
                         .bubble_sources
                         .insert(bubble.id.clone(), source.clone());
                 }
+                if let Some(captured) = &bubble.captured_context {
+                    state
+                        .bubble_captures
+                        .insert(bubble.id.clone(), captured.clone());
+                }
             }
         }
         match self.surface.throw(&admitted) {
@@ -342,7 +527,7 @@ impl Bridge {
                 let mut state = self.state.lock().unwrap();
                 for bubble in admitted.iter().skip(count) {
                     gate.active.remove(&bubble.id);
-                    state.bubble_sources.remove(&bubble.id);
+                    state.forget_bubble(&bubble.id);
                 }
                 Ok(count)
             }
@@ -351,7 +536,7 @@ impl Bridge {
                 let mut state = self.state.lock().unwrap();
                 for bubble in &admitted {
                     gate.active.remove(&bubble.id);
-                    state.bubble_sources.remove(&bubble.id);
+                    state.forget_bubble(&bubble.id);
                 }
                 Err(error)
             }
@@ -521,14 +706,46 @@ impl Bridge {
     }
 
     fn bubble_now(&self, req: BubbleRequest) -> Result<BubbleOutcome, SpellcastError> {
+        self.bubble_now_captured(req, None)
+    }
+
+    pub(crate) fn capture_from_brief(
+        &self,
+        brief: &observer::ObserverBrief,
+    ) -> spellcast_core::CapturedContext {
+        let binding = {
+            let state = self.state.lock().unwrap();
+            state
+                .bindings
+                .iter()
+                .find(|binding| binding.source_id == brief.source_id)
+                .cloned()
+        };
+        spellcast_core::CapturedContext {
+            project: brief.snapshot.project.clone(),
+            goal: brief.snapshot.goal.clone(),
+            change: brief.snapshot.change.clone(),
+            source_id: brief.source_id.clone(),
+            captured_at_ms: now_ms(),
+            thread_id: binding.as_ref().map(|b| b.thread_id.clone()),
+            cwd: binding.as_ref().map(|b| b.cwd.clone()),
+        }
+    }
+
+    pub(crate) fn bubble_now_captured(
+        &self,
+        req: BubbleRequest,
+        captured: Option<spellcast_core::CapturedContext>,
+    ) -> Result<BubbleOutcome, SpellcastError> {
         if let Some(source) = &req.source_id {
             self.identify_source(source, None)?;
         }
         self.hello_quiet();
-        let (bubble, since) = {
+        let (mut bubble, since) = {
             let state = self.state.lock().unwrap();
             (state.session.bubble(req)?, state.inbox.last_seq())
         };
+        bubble.captured_context = captured;
         let shown = match self.dispatch(std::slice::from_ref(&bubble)) {
             Ok(n) => n > 0,
             Err(err) => {
@@ -570,11 +787,20 @@ impl Bridge {
                 (state.feedback(since, source_id), state.inbox.last_seq())
             };
             if !events.is_empty() || wait == 0 {
+                if let Err(error) = self.mark_received(source_id, &events) {
+                    tracing::warn!(%error, "could not persist feedback read receipt");
+                }
                 return (events, last);
             }
             if tokio::time::timeout_at(deadline, notified).await.is_err() {
-                let state = self.state.lock().unwrap();
-                return (state.feedback(since, source_id), state.inbox.last_seq());
+                let (events, last) = {
+                    let state = self.state.lock().unwrap();
+                    (state.feedback(since, source_id), state.inbox.last_seq())
+                };
+                if let Err(error) = self.mark_received(source_id, &events) {
+                    tracing::warn!(%error, "could not persist feedback read receipt");
+                }
+                return (events, last);
             }
         }
     }
@@ -595,17 +821,40 @@ impl Bridge {
         self.surface.focus();
     }
 
-    pub fn write_reply(&self, mut req: ReplyRequest) -> Result<BoardReply, SpellcastError> {
+    pub fn write_reply(&self, req: ReplyRequest) -> Result<BoardReply, SpellcastError> {
+        self.write_reply_for_feedback(req, &[])
+    }
+
+    pub fn write_reply_for_feedback(
+        &self,
+        mut req: ReplyRequest,
+        sequences: &[u64],
+    ) -> Result<BoardReply, SpellcastError> {
+        self.validate_artifacts(&req.source_id, &req.blocks)?;
         self.hello_quiet();
         let label = self.identify_source(&req.source_id, req.source_label.as_deref())?;
         req.source_label = Some(label);
-        let reply = self.update(|state| state.session.write_reply(req))?;
+        let reply = self.update(|state| {
+            if let Some(id) = &req.id {
+                if state.session.board.canvas.objects.iter().any(|object| object.user_edited && matches!(&object.content, spellcast_core::CanvasContent::Reply { id: existing } if existing == id)) {
+                    return Err(SpellcastError::user("用户已修改这个对象；请通过 spellcast_canvas_batch 提交局部修改提案。"));
+                }
+            }
+            let reply = state.session.write_reply(req)?;
+            state.mark_response(
+                &reply.source_id,
+                &reply.id,
+                reply.origin_node_id.as_deref(),
+                sequences,
+            )?;
+            Ok(reply)
+        })?;
         self.surface.board_changed();
         Ok(reply)
     }
 
     pub fn patch_reply(&self, req: ReplyPatchRequest) -> Result<BoardReply, SpellcastError> {
-        self.patch_reply_inner(req, None)
+        self.patch_reply_inner(req, None, &[], None)
     }
 
     pub fn patch_reply_from_source(
@@ -614,15 +863,46 @@ impl Bridge {
         req: ReplyPatchRequest,
     ) -> Result<BoardReply, SpellcastError> {
         spellcast_core::reply::validate_id(source_id)?;
-        self.patch_reply_inner(req, Some(source_id))
+        self.patch_reply_inner(req, Some(source_id), &[], None)
+    }
+
+    pub fn patch_reply_for_feedback(
+        &self,
+        source_id: &str,
+        req: ReplyPatchRequest,
+        sequences: &[u64],
+    ) -> Result<BoardReply, SpellcastError> {
+        spellcast_core::reply::validate_id(source_id)?;
+        self.patch_reply_inner(req, Some(source_id), sequences, None)
     }
 
     fn patch_reply_inner(
         &self,
-        req: ReplyPatchRequest,
+        mut req: ReplyPatchRequest,
         source_id: Option<&str>,
+        sequences: &[u64],
+        request_hash: Option<String>,
     ) -> Result<BoardReply, SpellcastError> {
+        let request_hash = request_hash
+            .map(Ok)
+            .unwrap_or_else(|| feedback::fingerprint("patch", &req))?;
         let reply = self.update(|state| {
+            req.reply_id = state.session.canvas_reply_id(req.object_id.as_deref(), &req.reply_id)?;
+            if source_id.is_none()
+                && !req.layout_only
+                && self
+                    .replay_request(state, req.request_id.as_deref(), &request_hash)?
+                    .is_some()
+            {
+                return state
+                    .session
+                    .board
+                    .replies
+                    .iter()
+                    .find(|r| r.id == req.reply_id)
+                    .cloned()
+                    .ok_or_else(|| SpellcastError::user("请求已保存，但原回复已被删除。"));
+            }
             if let Some(source) = source_id {
                 let existing = state
                     .session
@@ -634,19 +914,60 @@ impl Bridge {
                 if existing.source_id != source {
                     return Err(SpellcastError::user("这块回复属于另一个任务。"));
                 }
+                if let Some(previous) = existing
+                    .blocks
+                    .iter()
+                    .find(|old| old.id() == req.block.id())
+                {
+                    req.block.preserve_user_state_from(previous);
+                }
             }
+            let owner = state
+                .session
+                .board
+                .replies
+                .iter()
+                .find(|r| r.id == req.reply_id)
+                .ok_or_else(|| SpellcastError::user("这块回复已经不在板上。"))?;
+            self.validate_artifacts(&owner.source_id, std::slice::from_ref(&req.block))?;
             let layout_only = req.layout_only;
+            let content_changed = state
+                .session
+                .board
+                .replies
+                .iter()
+                .find(|r| r.id == req.reply_id)
+                .and_then(|r| r.blocks.iter().find(|b| b.id() == req.block.id()))
+                .is_some_and(|before| !before.same_content(&req.block));
+            if source_id.is_some() && content_changed && state.session.board.canvas.objects.iter().any(|object| object.user_edited && matches!(&object.content, spellcast_core::CanvasContent::Reply { id } if id == &req.reply_id)) {
+                return Err(SpellcastError::user("用户已修改这个对象；请通过 spellcast_canvas_batch 提交局部修改提案。"));
+            }
+            let request_id = req.request_id.clone();
             let block_id = req.block.id().to_string();
             let reply = state.session.patch_reply(req)?;
-            if !layout_only && source_id.is_none() {
-                let mut event = AgentEvent::new("reply_edit")
+            if !layout_only && source_id.is_none() && content_changed {
+                state.session.sync_canvas();
+                if let Some(object) = state.session.board.canvas.objects.iter_mut().find(|o| matches!(&o.content, spellcast_core::CanvasContent::Reply { id } if id == &reply.id)) {
+                    object.user_edited = true;
+                }
+                let mut event = AgentEvent::new("canvas_state")
                     .title(reply.title.clone())
                     .source(Some(reply.source_id.clone()))
                     .node(reply.origin_node_id.clone())
-                    .text("用户修改了这段内容；请读取最新版本再继续。");
+                    .text("已在画布保存内容修改，尚未发送。");
                 event.reply_id = Some(reply.id.clone());
                 event.block_id = Some(block_id);
-                state.record(event);
+                event.request_id = request_id;
+                let event = state.record(event);
+                state.stamp_request(event.seq, request_hash);
+            }
+            if let Some(source) = source_id {
+                state.mark_response(
+                    source,
+                    &reply.id,
+                    reply.origin_node_id.as_deref(),
+                    sequences,
+                )?;
             }
             Ok(reply)
         })?;
@@ -657,12 +978,51 @@ impl Bridge {
 
     pub fn reply_action(
         &self,
-        req: ReplyActionInput,
+        mut req: ReplyActionInput,
     ) -> Result<(BoardReply, AgentEvent), SpellcastError> {
+        let request_hash = feedback::fingerprint("action", &req)?;
         let (reply, event) = self.update(|state| {
+            req.reply_id = state.session.canvas_reply_id(req.object_id.as_deref(), &req.reply_id)?;
+            if let Some(event) =
+                self.replay_request(state, req.request_id.as_deref(), &request_hash)?
+            {
+                let reply = state
+                    .session
+                    .board
+                    .replies
+                    .iter()
+                    .find(|r| r.id == req.reply_id)
+                    .cloned()
+                    .ok_or_else(|| SpellcastError::user("请求已保存，但原回复已被删除。"))?;
+                return Ok((reply, event));
+            }
             let (reply, text) = state.session.act_on_reply(&req)?;
+            let mut connected_anchor = None;
+            if let Some(context) = &req.artifact_context {
+                if self.artifact(&context.bundle_id)?.source_id != reply.source_id {
+                    return Err(SpellcastError::user("反馈的作品版本属于另一个任务。"));
+                }
+                if context.inputs.is_some() {
+                    let object = state.session.board.canvas.objects.iter().find(|object| matches!(&object.content, spellcast_core::CanvasContent::Reply { id } if id == &reply.id))
+                        .ok_or_else(|| SpellcastError::user("作品的画布身份不存在。"))?;
+                    let anchor = spellcast_core::inbox::CanvasAnchor {
+                        compositions: vec![],
+                        object_id: object.id.clone(), content_revision: object.content_revision, block_id: Some(req.block_id.clone()), selection: None, region: None,
+                        artifact: Some(spellcast_core::inbox::CanvasArtifactAnchor { bundle_id: context.bundle_id.clone(), state_revision: context.state_revision.ok_or_else(|| SpellcastError::user("连接反馈需要确切的参数版本。"))?, state: context.state.clone(), selection: context.state.get("selection").cloned() }),
+                        inputs: context.inputs.clone(),
+                    };
+                    canvas::validate_anchors(&state.session, std::slice::from_ref(&anchor))?;
+                    self.validate_input_anchor(&state.session, &anchor)?;
+                    connected_anchor = Some(anchor);
+                }
+            }
+            if req.action == ReplyAction::Ask && connected_anchor.is_none() {
+                if let Some(spellcast_core::ReplyBlock::Artifact { bundle_id, .. }) = reply.blocks.iter().find(|block| block.id() == req.block_id) {
+                    if !self.artifact(bundle_id)?.io.inputs.is_empty() { return Err(SpellcastError::user("反馈需要当前连接输入，请重新选择作品后发送。")); }
+                }
+            }
             let mut event = AgentEvent::new(if req.action == ReplyAction::Select {
-                "selection"
+                "canvas_state"
             } else {
                 "reply"
             })
@@ -673,10 +1033,18 @@ impl Bridge {
             event.reply_id = Some(reply.id.clone());
             event.block_id = Some(req.block_id);
             event.option_id = req.option_id;
-            state
-                .session
-                .note_user(event.text.as_deref().unwrap_or_default());
+            event.request_id = req.request_id;
+            if let Some(anchor) = connected_anchor { event.object_id = Some(anchor.object_id.clone()); event.object_revision = Some(anchor.content_revision); event.anchors.push(anchor); }
+            if let Some(context) = req.artifact_context {
+                event.artifact_context = Some(serde_json::to_value(context)?);
+            } else if let Some(spellcast_core::ReplyBlock::Artifact { bundle_id, state: view_state, state_revision, .. }) = reply.blocks.iter().find(|b| Some(b.id()) == event.block_id.as_deref()) {
+                event.artifact_context = Some(serde_json::json!({ "bundle_id": bundle_id, "state": view_state, "state_revision": state_revision }));
+            }
+            if req.action == ReplyAction::Ask {
+                state.session.note_user(event.text.as_deref().unwrap_or_default());
+            }
             let event = state.record(event);
+            state.stamp_request(event.seq, request_hash);
             Ok((reply, event))
         })?;
         self.notify.notify_waiters();
@@ -715,6 +1083,15 @@ impl Bridge {
                 state.pending.retain(|e| {
                     !(sequences.contains(&e.seq) && e.source_id.as_deref() == Some(source_id))
                 });
+                for receipt in &mut state.deliveries {
+                    if receipt.event.source_id.as_deref() == Some(source_id)
+                        && sequences.contains(&receipt.event.seq)
+                    {
+                        receipt.phase = feedback::DeliveryPhase::Handled;
+                        receipt.handled_at_ms.get_or_insert_with(now_ms);
+                        receipt.error = None;
+                    }
+                }
                 Ok(before - state.pending.len())
             })?;
         self.surface.board_changed();
@@ -737,7 +1114,7 @@ impl Bridge {
             let event = state.record(event);
             if matches!(event.kind.as_str(), "expired" | "dismiss" | "not_shown") {
                 if let Some(id) = &event.bubble_id {
-                    state.bubble_sources.remove(id);
+                    state.forget_bubble(id);
                 }
             }
             Ok(event)
@@ -747,6 +1124,7 @@ impl Bridge {
     }
 
     pub fn say(&self, req: SayRequest) -> Result<AgentEvent, SpellcastError> {
+        let request_hash = feedback::fingerprint("say", &req)?;
         let text = req.text.trim().to_string();
         if text.is_empty() {
             return Err(SpellcastError::user("先写一句。"));
@@ -766,7 +1144,49 @@ impl Bridge {
         event.bubble_id = req.bubble_id;
         event.reply_id = req.reply_id;
         event.block_id = req.block_id;
+        event.request_id = req.request_id;
+        event.object_id = req.object_id;
+        event.anchors = req.anchors;
+        event.target_thread_id = req.target_thread_id;
         let stored = self.update(|state| {
+            if let Some(replay) =
+                self.replay_request(state, event.request_id.as_deref(), &request_hash)?
+            {
+                return Ok(replay);
+            }
+            if let Some(expected) = &event.target_thread_id {
+                if !state.bindings.iter().any(|binding| Some(binding.source_id.as_str()) == event.source_id.as_deref() && &binding.thread_id == expected) {
+                    return Err(SpellcastError::user("接收任务关联已变化，没有发送；请重新确认原任务。"));
+                }
+            }
+            if !event.anchors.is_empty() {
+                let source = event.source_id.as_deref().ok_or_else(|| SpellcastError::user("请选择一个接收请求的任务。"))?;
+                spellcast_core::reply::validate_id(source)?;
+                let known = state.bindings.iter().any(|b| b.source_id == source)
+                    || state.session.board.replies.iter().any(|r| r.source_id == source)
+                    || state.session.board.nodes.iter().any(|n| n.source_id.as_deref() == Some(source))
+                    || state.session.board.canvas.objects.iter().any(|o| o.source_id.as_deref() == Some(source))
+                    || self.status.lock().unwrap().sources.iter().any(|s| s.id == source);
+                if !known { return Err(SpellcastError::user("接收任务已经不存在，请重新选择。")); }
+                canvas::validate_anchors(&state.session, &event.anchors)?;
+                for anchor in &event.anchors { self.validate_input_anchor(&state.session, anchor)?; }
+                // Multiple sources are reference context; only source_id receives this request.
+                if event.object_id.is_some() || event.reply_id.is_some() || event.node_id.is_some() || event.block_id.is_some() || event.bubble_id.is_some() {
+                    return Err(SpellcastError::user("多位置反馈请只使用 anchors，避免与旧引用混淆。"));
+                }
+            }
+            if let Some(object_id) = &event.object_id {
+                match state.session.canvas_target(object_id, event.reply_id.as_deref(), event.node_id.as_deref())? {
+                    spellcast_core::CanvasContent::Reply { id } => event.reply_id = Some(id),
+                    spellcast_core::CanvasContent::Node { id } => event.node_id = Some(id),
+                    _ => {
+                        let object = state.session.board.canvas.object(object_id).unwrap();
+                        if event.source_id.as_deref() != object.source_id.as_deref() {
+                            return Err(SpellcastError::user("请选择该对象的原任务，或将它添加为多位置引用。"));
+                        }
+                    }
+                }
+            }
             if let Some(reply_id) = &event.reply_id {
                 let reply = state
                     .session
@@ -775,16 +1195,47 @@ impl Bridge {
                     .iter()
                     .find(|r| &r.id == reply_id)
                     .ok_or_else(|| SpellcastError::user("这块回复已经不在板上。"))?;
+                if event
+                    .source_id
+                    .as_deref()
+                    .is_some_and(|source| source != reply.source_id)
+                {
+                    return Err(SpellcastError::user(
+                        "这块回复属于另一个任务；没有把输入转交给其他来源。",
+                    ));
+                }
                 if let Some(block_id) = &event.block_id {
                     if !reply.blocks.iter().any(|b| b.id() == block_id) {
                         return Err(SpellcastError::user("这段内容已经不在回复里。"));
+                    }
+                }
+            } else if let Some(node_id) = &event.node_id {
+                let node = state
+                    .session
+                    .board
+                    .nodes
+                    .iter_mut()
+                    .find(|node| &node.id == node_id)
+                    .ok_or_else(|| SpellcastError::user("这块想法已经不在画布上。"))?;
+                if let Some(source) = &event.source_id {
+                    if node
+                        .source_id
+                        .as_ref()
+                        .is_some_and(|existing| existing != source)
+                    {
+                        return Err(SpellcastError::user("这块想法属于另一个任务。"));
+                    }
+                    if node.source_id.is_none() {
+                        node.source_id = Some(source.clone());
                     }
                 }
             }
             state
                 .session
                 .note_user(event.text.as_deref().unwrap_or_default());
-            Ok(state.record(event))
+            let event = state.record(event);
+            state.stamp_request(event.seq, request_hash);
+            Ok(event)
         })?;
         self.notify.notify_waiters();
         self.surface.board_changed();
@@ -841,14 +1292,25 @@ impl Bridge {
                     } else {
                         body
                     };
-                    state.session.add_node(NodeDraft {
-                        source_id: bubble.source_id.clone(),
-                        title,
-                        body,
-                        kind: Some(bubble.kind.as_str().to_string()),
-                        weight: Some("note".into()),
-                        ..Default::default()
-                    })
+                    let known = state.bubble_sources.contains_key(&bubble.id)
+                        || state.bubble_captures.contains_key(&bubble.id);
+                    let source_id = if known {
+                        state.bubble_sources.get(&bubble.id).cloned()
+                    } else {
+                        bubble.source_id.clone()
+                    };
+                    let captured = state.bubble_captures.get(&bubble.id).cloned();
+                    state.session.add_node_captured(
+                        NodeDraft {
+                            source_id,
+                            title,
+                            body,
+                            kind: Some(bubble.kind.as_str().to_string()),
+                            weight: Some("note".into()),
+                            ..Default::default()
+                        },
+                        captured,
+                    )
                 }
             };
             state.kept.insert(bubble.id.clone(), node.id.clone());
@@ -1024,14 +1486,53 @@ impl Bridge {
     }
 
     pub fn patch_node(&self, id: &str, patch: NodePatch) -> Result<BoardNode, SpellcastError> {
+        let request_hash = feedback::fingerprint("node", &(id, &patch))?;
+        let request_id = patch.request_id.clone();
         let moved_only = patch.title.is_none()
             && patch.body.is_none()
             && patch.kind.is_none()
             && patch.weight.is_none();
         let node = self.update(|state| {
+            if self
+                .replay_request(state, request_id.as_deref(), &request_hash)?
+                .is_some()
+            {
+                return state
+                    .session
+                    .board
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == id)
+                    .cloned()
+                    .ok_or_else(|| SpellcastError::user("请求已保存，但原想法已被删除。"));
+            }
+            let old_revision = state
+                .session
+                .board
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.revision);
             let node = state.session.patch_node(id, patch)?;
+            if !moved_only && old_revision != Some(node.revision) {
+                state.session.sync_canvas();
+                if let Some(object) = state.session.board.canvas.objects.iter_mut().find(|o| matches!(&o.content, spellcast_core::CanvasContent::Node { id: content_id } if content_id == id)) {
+                    object.user_edited = true;
+                }
+            }
+            let delivered_edit = old_revision != Some(node.revision) && node.source_id.is_some();
+            if delivered_edit {
+                let mut event = AgentEvent::new("canvas_state")
+                    .source(node.source_id.clone())
+                    .node(Some(node.id.clone()))
+                    .title(node.title.clone())
+                    .text("已在画布保存想法修改，尚未发送。");
+                event.request_id = request_id;
+                let event = state.record(event);
+                state.stamp_request(event.seq, request_hash);
+            }
             // Dragging a card around is not something the agent needs to hear about.
-            if !moved_only {
+            if !moved_only && !delivered_edit {
                 state.inbox.push(
                     AgentEvent::new("board_edit")
                         .node(Some(node.id.clone()))
@@ -1134,7 +1635,7 @@ mod tests {
 
     static NEXT_DB: AtomicUsize = AtomicUsize::new(0);
 
-    fn temp_db() -> std::path::PathBuf {
+    pub(super) fn temp_db() -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "spellcast-state-test-{}-{}.sqlite3",
             std::process::id(),
@@ -1170,6 +1671,21 @@ mod tests {
     pub(super) fn bridge() -> (Arc<Bridge>, Arc<Recording>) {
         let rec = Arc::new(Recording::default());
         (Arc::new(Bridge::new(rec.clone(), 0)), rec)
+    }
+
+    #[test]
+    fn observer_fields_missing_from_old_state_are_off() {
+        let value = serde_json::to_value(PersistedState::default()).unwrap();
+        let mut obj = value.as_object().unwrap().clone();
+        obj.remove("observer_enabled");
+        obj.remove("observer_policy_revision");
+        let restored: PersistedState =
+            serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
+        assert!(!restored.observer_enabled);
+        assert_eq!(restored.observer_policy_revision, 0);
+        assert!(!restored.paused);
+        assert!(value.get("bubble_sources").is_none());
+        assert!(value.get("bubble_captures").is_none());
     }
 
     async fn last_thrown(rec: &Recording) -> ThrownBubble {
@@ -1480,5 +1996,532 @@ mod tests {
             )
             .unwrap();
         assert_eq!(bridge.events_since(after_add).0.len(), 1);
+        assert!(bridge
+            .patch_node(
+                &node.id,
+                NodePatch {
+                    expected_revision: Some(0),
+                    body: Some("stale".into()),
+                    ..Default::default()
+                }
+            )
+            .is_err());
+        assert_eq!(bridge.board().nodes[0].title, "y");
+        assert_eq!(bridge.board().nodes[0].revision, 1);
+        assert!(bridge
+            .patch_node(
+                &node.id,
+                NodePatch {
+                    expected_revision: Some(1),
+                    body: Some("x".repeat(64_001)),
+                    ..Default::default()
+                }
+            )
+            .is_err());
+        assert_eq!(bridge.board().nodes[0].revision, 1);
+    }
+
+    fn observer_snapshot(source: &str, change: &str) -> crate::observer::CheckpointRequest {
+        crate::observer::CheckpointRequest {
+            source_id: source.into(),
+            snapshot: Some(crate::observer::ProjectSnapshot {
+                checkpoint_id: change.into(),
+                project: "calendar".into(),
+                goal: "A realistic week".into(),
+                change: change.into(),
+                facts: vec!["Friday demo at 15:00".into()],
+            }),
+        }
+    }
+
+    fn sample_binding(source: &str, thread: &str) -> crate::codex::CodexBinding {
+        crate::codex::CodexBinding {
+            source_id: source.into(),
+            thread_id: thread.into(),
+            cwd: "/tmp/isolated-proj".into(),
+            label: "codex".into(),
+            executable: std::path::PathBuf::from("/bin/true"),
+            protocol_agent: "codex".into(),
+            bound_at_ms: 1,
+        }
+    }
+
+    #[test]
+    fn observer_capture_roundtrip_keep_persist_and_guards() {
+        let path = temp_db();
+        let rec = Arc::new(Recording::default());
+        let expected = {
+            let bridge = Bridge::open(rec.clone(), 0, &path).unwrap();
+            bridge.set_observer_enabled(true).unwrap();
+            bridge
+                .update(|state| {
+                    state.bindings.push(sample_binding("other-source", "wrong-thread"));
+                    Ok(())
+                })
+                .unwrap();
+            let brief = bridge
+                .checkpoint(observer_snapshot("calendar-task", "Lunch resolved"))
+                .unwrap()
+                .brief
+                .unwrap();
+            let result = bridge
+                .complete_observation(crate::observer::ObserverCompletion {
+                    observer_id: brief.observer_id,
+                    thought: Some(crate::observer::ObserverThought {
+                        tease: "Leave Friday afternoon empty.".into(),
+                        body: "The demo is 15:00; a free hour can stay free.".into(),
+                        kind: None,
+                        shape: None,
+                    }),
+                })
+                .unwrap();
+            assert_eq!(result.status, "accepted");
+            let thrown = rec.thrown.lock().unwrap()[0].clone();
+            let encoded = serde_json::to_string(&thrown).unwrap();
+            let restored: ThrownBubble = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(
+                restored.captured_context.as_ref().map(|c| c.source_id.as_str()),
+                Some("calendar-task")
+            );
+            assert_eq!(
+                restored.captured_context.as_ref().map(|c| c.project.as_str()),
+                Some("calendar")
+            );
+            assert_eq!(
+                restored.captured_context.as_ref().map(|c| c.change.as_str()),
+                Some("Lunch resolved")
+            );
+            assert!(restored
+                .captured_context
+                .as_ref()
+                .unwrap()
+                .thread_id
+                .is_none());
+            assert!(restored.captured_context.as_ref().unwrap().cwd.is_none());
+            let value = serde_json::to_value(&restored).unwrap();
+            assert!(value["captured_context"].get("facts").is_none());
+            let (node, _) = bridge.keep(&restored).unwrap();
+            assert_eq!(node.captured_context, restored.captured_context);
+            node.captured_context
+        };
+
+        {
+            let restored = Bridge::open(Headless, 0, &path).unwrap();
+            assert_eq!(restored.board().nodes.len(), 1);
+            assert_eq!(restored.board().nodes[0].captured_context, expected);
+            assert_eq!(restored.board().nodes[0].title, "Leave Friday afternoon empty.");
+        }
+
+        let rec2 = Arc::new(Recording::default());
+        let bridge = Bridge::open(rec2.clone(), 0, &path).unwrap();
+        bridge.set_observer_enabled(true).unwrap();
+        bridge
+            .update(|state| {
+                state.bindings.push(sample_binding("calendar-task", "thread-real"));
+                Ok(())
+            })
+            .unwrap();
+        let brief = bridge
+            .checkpoint(observer_snapshot("calendar-task", "Open buffer"))
+            .unwrap()
+            .brief
+            .unwrap();
+        bridge
+            .complete_observation(crate::observer::ObserverCompletion {
+                observer_id: brief.observer_id,
+                thought: Some(crate::observer::ObserverThought {
+                    tease: "Keep the buffer.".into(),
+                    body: String::new(),
+                    kind: None,
+                    shape: None,
+                }),
+            })
+            .unwrap();
+        let matched = rec2.thrown.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(
+            matched.captured_context.as_ref().and_then(|c| c.thread_id.as_deref()),
+            Some("thread-real")
+        );
+        assert_eq!(
+            matched.captured_context.as_ref().and_then(|c| c.cwd.as_deref()),
+            Some("/tmp/isolated-proj")
+        );
+
+        let existing_id = bridge.board().nodes[0].id.clone();
+        let original_context = bridge.board().nodes[0].captured_context.clone();
+        bridge
+            .patch_node(
+                &existing_id,
+                NodePatch {
+                    title: Some("用户改过的标题".into()),
+                    body: Some("用户改过的正文".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut hijack = matched.clone();
+        hijack.node_id = Some(existing_id.clone());
+        hijack.title = "旁念想覆盖".into();
+        hijack.body = "旁念想覆盖正文".into();
+        hijack.captured_context = Some(spellcast_core::CapturedContext {
+            project: "other".into(),
+            goal: "no".into(),
+            change: "no".into(),
+            source_id: "other-source".into(),
+            captured_at_ms: 9,
+            thread_id: Some("wrong-thread".into()),
+            cwd: Some("/tmp/wrong".into()),
+        });
+        let kept = bridge.keep(&hijack).unwrap().0;
+        assert_eq!(kept.id, existing_id);
+        assert_eq!(kept.title, "用户改过的标题");
+        assert_eq!(kept.body, "用户改过的正文");
+        assert_eq!(kept.captured_context, original_context);
+
+        let after_patch = bridge
+            .patch_node(
+                &existing_id,
+                NodePatch {
+                    title: Some("再次改标题".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(after_patch.title, "再次改标题");
+        assert_eq!(after_patch.captured_context, original_context);
+
+        let ordinary = bridge
+            .bubble_now(BubbleRequest {
+                tease: "普通气泡".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(ordinary.bubble.captured_context.is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn null_stale_and_off_do_not_create_captured_nodes() {
+        let (bridge, surface) = bridge();
+        bridge.set_observer_enabled(true).unwrap();
+        let silent = bridge
+            .checkpoint(observer_snapshot("a", "Lunch resolved"))
+            .unwrap()
+            .brief
+            .unwrap();
+        assert_eq!(
+            bridge
+                .complete_observation(crate::observer::ObserverCompletion {
+                    observer_id: silent.observer_id,
+                    thought: None,
+                })
+                .unwrap()
+                .status,
+            "silent"
+        );
+        assert!(surface.thrown.lock().unwrap().is_empty());
+        assert!(bridge.board().nodes.is_empty());
+
+        assert_eq!(
+            bridge
+                .complete_observation(crate::observer::ObserverCompletion {
+                    observer_id: "missing".into(),
+                    thought: Some(crate::observer::ObserverThought {
+                        tease: "no".into(),
+                        body: String::new(),
+                        kind: None,
+                        shape: None,
+                    }),
+                })
+                .unwrap()
+                .status,
+            "stale"
+        );
+        assert!(bridge.board().nodes.is_empty());
+
+        let brief = bridge
+            .checkpoint(observer_snapshot("b", "Open buffer"))
+            .unwrap()
+            .brief
+            .unwrap();
+        bridge.set_observer_enabled(false).unwrap();
+        assert_eq!(
+            bridge
+                .complete_observation(crate::observer::ObserverCompletion {
+                    observer_id: brief.observer_id,
+                    thought: Some(crate::observer::ObserverThought {
+                        tease: "should not land".into(),
+                        body: String::new(),
+                        kind: None,
+                        shape: None,
+                    }),
+                })
+                .unwrap()
+                .status,
+            "stale"
+        );
+        assert!(surface.thrown.lock().unwrap().is_empty());
+        assert!(bridge.board().nodes.is_empty());
+    }
+
+    #[test]
+    fn persisted_nodes_without_context_are_not_backfilled() {
+        let json = serde_json::json!({
+            "id": "old",
+            "title": "旧点子",
+            "body": "用户原文",
+            "kind": "idea",
+            "weight": "note",
+            "x": 0,
+            "y": 0,
+            "z": 0
+        });
+        let node: BoardNode = serde_json::from_value(json).unwrap();
+        assert!(node.captured_context.is_none());
+        let encoded = serde_json::to_value(&node).unwrap();
+        assert!(encoded.get("captured_context").is_none());
+    }
+
+    fn evil_context() -> spellcast_core::CapturedContext {
+        spellcast_core::CapturedContext {
+            project: "forged".into(),
+            goal: "no".into(),
+            change: "no".into(),
+            source_id: "forged-source".into(),
+            captured_at_ms: 9,
+            thread_id: Some("wrong-thread".into()),
+            cwd: Some("/tmp/wrong".into()),
+        }
+    }
+
+    fn throw_observer(bridge: &Bridge, source: &str, change: &str, tease: &str) -> String {
+        bridge.set_observer_enabled(true).unwrap();
+        let brief = bridge
+            .checkpoint(observer_snapshot(source, change))
+            .unwrap()
+            .brief
+            .unwrap();
+        let result = bridge
+            .complete_observation(crate::observer::ObserverCompletion {
+                observer_id: brief.observer_id,
+                thought: Some(crate::observer::ObserverThought {
+                    tease: tease.into(),
+                    body: format!("{tease} body"),
+                    kind: None,
+                    shape: None,
+                }),
+            })
+            .unwrap();
+        assert_eq!(result.status, "accepted");
+        result.bubble_id.expect("dispatched bubble")
+    }
+
+    struct ThrowCount(usize);
+    impl Surface for ThrowCount {
+        fn agent_seen(&self, _: &str) {}
+        fn throw(&self, bubbles: &[ThrownBubble]) -> Result<usize, String> {
+            Ok(self.0.min(bubbles.len()))
+        }
+        fn presented(&self, _: &PresentResult) {}
+        fn board_changed(&self) {}
+        fn close_bubbles(&self) {}
+        fn focus(&self) {}
+    }
+
+    #[test]
+    fn keep_uses_server_capture_map_and_cleans_failures() {
+        let (host, rec) = bridge();
+        let id_a = throw_observer(&host, "calendar-task", "Lunch resolved", "Keep Friday free");
+        let thrown_a = rec
+            .thrown
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|bubble| bubble.id == id_a)
+            .cloned()
+            .unwrap();
+        let (source, captured) = host.test_bubble_maps(&thrown_a.id);
+        assert_eq!(source.as_deref(), thrown_a.source_id.as_deref());
+        assert_eq!(captured, thrown_a.captured_context);
+        assert_eq!(
+            captured.as_ref().map(|item| item.project.as_str()),
+            Some("calendar")
+        );
+
+        let kept_legal = host.keep(&thrown_a).unwrap().0;
+        assert_eq!(kept_legal.captured_context, thrown_a.captured_context);
+        assert_eq!(kept_legal.source_id, thrown_a.source_id);
+        let original = kept_legal.captured_context.clone();
+
+        let mut repeat = thrown_a.clone();
+        repeat.title = "overwrite".into();
+        repeat.body = "overwrite".into();
+        repeat.captured_context = Some(evil_context());
+        repeat.source_id = Some("forged-source".into());
+        let kept_repeat = host.keep(&repeat).unwrap().0;
+        assert_eq!(kept_repeat.id, kept_legal.id);
+        assert_eq!(kept_repeat.title, kept_legal.title);
+        assert_eq!(kept_repeat.body, kept_legal.body);
+        assert_eq!(kept_repeat.captured_context, original);
+
+        let id_b = throw_observer(&host, "other-source", "Other change", "Other tease");
+        let thrown_b = rec
+            .thrown
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|bubble| bubble.id == id_b)
+            .cloned()
+            .unwrap();
+        let mut cross = thrown_b.clone();
+        cross.captured_context = thrown_a.captured_context.clone();
+        cross.source_id = thrown_a.source_id.clone();
+        let kept_cross = host.keep(&cross).unwrap().0;
+        assert_eq!(kept_cross.captured_context, thrown_b.captured_context);
+        assert_eq!(kept_cross.source_id, thrown_b.source_id);
+        assert_eq!(
+            kept_cross.captured_context.as_ref().map(|item| item.source_id.as_str()),
+            Some("other-source")
+        );
+        assert_ne!(kept_cross.source_id, thrown_a.source_id);
+
+        let mut forged_known = thrown_b.clone();
+        forged_known.id = "fresh-known-clone".into();
+        // unknown id: client capture must not persist
+        forged_known.node_id = None;
+        forged_known.captured_context = Some(evil_context());
+        let unknown = host.keep(&forged_known).unwrap().0;
+        assert!(unknown.captured_context.is_none());
+        assert_eq!(unknown.title, forged_known.title);
+
+        let mut tamper = thrown_a.clone();
+        tamper.node_id = None;
+        // already kept via bubble id map — existing node path
+        tamper.captured_context = Some(evil_context());
+        tamper.source_id = Some("forged-source".into());
+        assert_eq!(host.keep(&tamper).unwrap().0.captured_context, original);
+
+        let headless = Bridge::new(Headless, 0);
+        headless.set_observer_enabled(true).unwrap();
+        let brief = headless
+            .checkpoint(observer_snapshot("calendar-task", "Headless fail"))
+            .unwrap()
+            .brief
+            .unwrap();
+        let failed = headless
+            .complete_observation(crate::observer::ObserverCompletion {
+                observer_id: brief.observer_id,
+                thought: Some(crate::observer::ObserverThought {
+                    tease: "failed throw".into(),
+                    body: "failed throw body".into(),
+                    kind: None,
+                    shape: None,
+                }),
+            })
+            .unwrap();
+        assert_eq!(failed.status, "not_shown");
+        let failed_id = failed.bubble_id.unwrap();
+        assert!(headless.test_bubble_maps(&failed_id).1.is_none());
+        let outcome = headless
+            .bubble_now_captured(
+                BubbleRequest {
+                    tease: "direct fail".into(),
+                    body: Some("direct fail body".into()),
+                    source_id: Some("calendar-task".into()),
+                    wait: Some(0),
+                    ..Default::default()
+                },
+                Some(evil_context()),
+            )
+            .unwrap();
+        assert_eq!(outcome.outcome, "not_shown");
+        assert!(headless.test_bubble_maps(&outcome.bubble.id).1.is_none());
+        let mut forged_fail = outcome.bubble.clone();
+        forged_fail.captured_context = Some(evil_context());
+        assert!(headless.keep(&forged_fail).unwrap().0.captured_context.is_none());
+
+        let partial = Bridge::new(ThrowCount(0), 0);
+        partial.set_observer_enabled(true).unwrap();
+        let brief = partial
+            .checkpoint(observer_snapshot("calendar-task", "Partial skip"))
+            .unwrap()
+            .brief
+            .unwrap();
+        let skipped = partial
+            .complete_observation(crate::observer::ObserverCompletion {
+                observer_id: brief.observer_id,
+                thought: Some(crate::observer::ObserverThought {
+                    tease: "partial".into(),
+                    body: "partial body".into(),
+                    kind: None,
+                    shape: None,
+                }),
+            })
+            .unwrap();
+        assert_eq!(skipped.status, "not_shown");
+        let skipped_id = skipped.bubble_id.unwrap();
+        assert!(partial.test_bubble_maps(&skipped_id).0.is_none());
+        assert!(partial.test_bubble_maps(&skipped_id).1.is_none());
+
+        let (live, rec_live) = bridge();
+        let live_id = throw_observer(&live, "calendar-task", "Dismiss me", "dismiss tease");
+        let live_bubble = rec_live
+            .thrown
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|bubble| bubble.id == live_id)
+            .cloned()
+            .unwrap();
+        assert!(live.test_bubble_maps(&live_id).1.is_some());
+        live.dismiss(&live_id).unwrap();
+        assert!(live.test_bubble_maps(&live_id).1.is_none());
+        let mut after_dismiss = live_bubble.clone();
+        after_dismiss.node_id = None;
+        after_dismiss.captured_context = Some(evil_context());
+        assert!(live.keep(&after_dismiss).unwrap().0.captured_context.is_none());
+
+        let (exp, rec_exp) = bridge();
+        let exp_id = throw_observer(&exp, "calendar-task", "Expire me", "expire tease");
+        let exp_bubble = rec_exp
+            .thrown
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|bubble| bubble.id == exp_id)
+            .cloned()
+            .unwrap();
+        exp.user_event(AgentEvent::new("expired").bubble(exp_id.clone()))
+            .unwrap();
+        assert!(exp.test_bubble_maps(&exp_id).1.is_none());
+        let mut after_exp = exp_bubble.clone();
+        after_exp.node_id = None;
+        after_exp.captured_context = Some(evil_context());
+        assert!(exp.keep(&after_exp).unwrap().0.captured_context.is_none());
+
+        let (hidden, rec_hidden) = bridge();
+        let hidden_id = throw_observer(&hidden, "calendar-task", "Hide me", "hide tease");
+        let hidden_bubble = rec_hidden
+            .thrown
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|bubble| bubble.id == hidden_id)
+            .cloned()
+            .unwrap();
+        hidden
+            .user_event(AgentEvent::new("not_shown").bubble(hidden_id.clone()))
+            .unwrap();
+        assert!(hidden.test_bubble_maps(&hidden_id).1.is_none());
+        let mut after_hidden = hidden_bubble.clone();
+        after_hidden.node_id = None;
+        after_hidden.captured_context = Some(evil_context());
+        assert!(hidden
+            .keep(&after_hidden)
+            .unwrap()
+            .0
+            .captured_context
+            .is_none());
     }
 }

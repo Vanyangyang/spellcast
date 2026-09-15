@@ -143,9 +143,25 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| text.contains(n))
 }
 
+/// Background captured when an Observer aside is kept. Not instructions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapturedContext {
+    pub project: String,
+    pub goal: String,
+    pub change: String,
+    pub source_id: String,
+    pub captured_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardNode {
     pub id: String,
+    #[serde(default)]
+    pub revision: u64,
     #[serde(default)]
     pub source_id: Option<String>,
     pub title: String,
@@ -157,13 +173,32 @@ pub struct BoardNode {
     pub z: f32,
     #[serde(default)]
     pub parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured_context: Option<CapturedContext>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// How a board edge was recorded. Missing on old data means unconfirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeRelation {
+    #[default]
+    Unconfirmed,
+    Parent,
+}
+
+impl EdgeRelation {
+    pub fn is_unconfirmed(&self) -> bool {
+        matches!(self, Self::Unconfirmed)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BoardEdge {
     pub id: String,
     pub from: String,
     pub to: String,
+    #[serde(default, skip_serializing_if = "EdgeRelation::is_unconfirmed")]
+    pub relation: EdgeRelation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -413,6 +448,8 @@ pub struct ThrownBubble {
     pub linger_ms: u32,
     pub delay_ms: u32,
     pub screen: ScreenAim,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captured_context: Option<CapturedContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -515,7 +552,15 @@ pub struct BubbleRequest {
 pub struct SayRequest {
     pub text: String,
     #[serde(default)]
+    pub anchors: Vec<crate::inbox::CanvasAnchor>,
+    #[serde(default)]
+    pub object_id: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
     pub source_id: Option<String>,
+    #[serde(default)]
+    pub target_thread_id: Option<String>,
     #[serde(default)]
     pub reply_id: Option<String>,
     #[serde(default)]
@@ -536,6 +581,8 @@ pub struct BoardSnapshot {
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub replies: Vec<crate::reply::BoardReply>,
+    #[serde(default)]
+    pub canvas: crate::canvas::CanvasLayout,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -556,6 +603,7 @@ impl Default for BoardSnapshot {
             edges: Vec::new(),
             messages: Vec::new(),
             replies: Vec::new(),
+            canvas: crate::canvas::CanvasLayout::default(),
         }
     }
 }
@@ -592,6 +640,12 @@ pub struct NodeDraft {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NodePatch {
+    #[serde(default)]
+    pub object_id: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<u64>,
+    #[serde(default)]
+    pub request_id: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]

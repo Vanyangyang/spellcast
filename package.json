@@ -7,6 +7,12 @@
   "scripts": {
     "start": "node scripts/start.mjs",
     "plugin": "node scripts/install-spellcast-plugin.mjs",
+    "package:codex": "node scripts/package-codex-plugin.mjs",
+    "prepare:codex-plugin": "node scripts/prepare-codex-plugin-resource.mjs",
+    "check:complete-setup-ui": "node scripts/check-complete-setup-ui.mjs",
+    "check:complete-setup-preview": "node scripts/check-complete-setup-preview.mjs",
+    "check:content-organization": "node scripts/check-content-organization.mjs",
+    "check:content-organization-preview": "node scripts/check-content-organization-preview.mjs",
     "dev": "vite --host 127.0.0.1 --port 47193",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 47193",
@@ -17,12 +23,19 @@
   "dependencies": {
     "@antv/x6": "3.1.8",
     "@tauri-apps/api": "^2.2.0",
+    "fflate": "0.8.3",
     "three": "^0.170.0",
     "tslib": "2.8.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.2.7",
     "@types/three": "^0.170.0",
+    "echarts": "6.1.0",
+    "esbuild": "0.28.2",
+    "katex": "0.18.7",
+    "marked": "16.4.2",
+    "mermaid": "11.17.2",
+    "tabulator-tables": "6.5.2",
     "typescript": "^5.7.3",
     "vite": "^6.1.0"
   }

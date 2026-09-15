@@ -1,61 +1,66 @@
 # Spellcast
 
-**An everything board for AI.**
+**A stage of its own.** Desktop asides and a Canvas for ideas you can develop with Codex.
 
 > **Spellcast is in early development.** Early demo · Experimental preview.
 > What you see here is a preview build for trying the idea, not a finished product. Stay tuned for the full release.
 
 Want Astra to roast your project? Remember what you meant to come back to? Give you an idea you were not expecting?
 
-Your agent keeps working on your task. Its asides appear as bubbles on the display you are currently using, above your work without bringing the agent window forward. Keep a thought, bring it onto the board, and develop it with text, comparisons, relationships, and storyboards.
+Your agent keeps working on your task. Its asides appear as bubbles on the display you are currently using, above your work without bringing the agent window forward. Keep a thought, bring it onto the Canvas, and develop it with text, images, comparisons, relationships, steps, and interactive works.
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows only tested)](https://github.com/Vanyangyang/spellcast/releases/latest)
 
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
-In the demo I am building a calendar app with Codex CLI. Spellcast pops up ideas I had not thought of as desktop bubbles; I star one, drag it, and take it to the everything board to brainstorm and develop it. Real Windows desktop, real mouse input, waits trimmed, nothing synthesized.
+In this earlier demo I am building a calendar app with Codex CLI. Spellcast pops up ideas I had not thought of as desktop bubbles; I star one, drag it, and take it to the Canvas to brainstorm and develop it. Real Windows desktop, real mouse input, waits trimmed, nothing synthesized. The current direct-feedback workflow uses Codex Desktop.
 
 ## Where the preview stands
 
 - **Published build:** [0.3.0](https://github.com/Vanyangyang/spellcast/releases/tag/v0.3.0) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. **Windows is the only tested platform.** The macOS builds are unsigned CI packaging output that nobody has run; they are not guaranteed to work.
-- **In `main`, not yet in a build:** bubbles follow the display of your foreground window; a kept bubble stays where you drop it, an unkept one pauses five seconds after a drag and then keeps rising; double-clicking a bubble opens exactly that thought on the board. Immediate rise, star → stays at the top, drag a kept bubble → stays put, ignore → fades, double-click → board with that node selected have passed with real mouse input; the five-second pause after dragging an unkept bubble and un-starring are still untested. Details in [docs/reviews](docs/reviews/2026-09-06-bubble-acceptance-record.md).
+- **Current source and locally tested Windows runtime:** editable Canvas components and named Idea compositions; workspace/task organization; direct feedback to the original Codex Desktop task; one-step Codex integration; a request-based replies panel. These updates are not included in the published 0.3.0 installers. See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md).
+- **Known gaps:** component granularity is not uniform, a component cannot belong to multiple Idea compositions, and historical requests with incomplete provenance need clearer classification. The replies/history interface still needs simplification. See [the next improvement brief](docs/next-improvement-prompt.md).
 - **Expect rough edges.** Layout, copy, and the agent Skill are still changing between previews. Feedback and issues are welcome.
 
 ## From a spark to something you can work with
 
 1. **A thought meets you where you work.** Your agent's task supplies the context; your foreground window determines the display. A sparse bubble carries an objection, a reminder, or a creative detour. Leave it alone, drag it, or open it.
-2. **Keep the idea.** The star saves its words onto your board, with the originating task attached.
-3. **Give it room.** Ask the agent to develop it. The board becomes the reply surface, with a composition that fits the idea.
-4. **Make it yours.** Choose a direction, edit a block, move a relationship, or add a constraint. Your feedback returns to the task that owns it.
+2. **Keep the idea.** The star saves its words onto your Canvas, with the originating task attached when known.
+3. **Give it room.** Combine components into an Idea with a title and purpose. The Canvas becomes the reply surface, with a composition that fits the idea.
+4. **Make it yours.** Choose a direction, edit components, or add a constraint. These changes stay on the Canvas until you explicitly click **Send to Codex**; the request then goes to its original task. Redirecting it requires confirmation.
 
 | Expression | What you can do |
 | --- | --- |
 | Text | Read complete explanations, edit them, and ask about a specific block |
+| Images and shapes | Arrange reference images, rectangles, ellipses, and annotations |
 | Comparison | Inspect alternatives against the same criteria and choose one |
 | Relationship graph | Follow labeled connections, inspect nodes, drag, pan, and zoom |
 | Storyboard | Explore ordered steps, their actions and feedback, and reorder them |
+| Interactive works | Use locally stored Web tools supplied by the agent, with declared inputs and outputs |
 
-Replies can mix these forms. Agents can update one block without replacing everything else. Conflicting edits are rejected so your draft can be reconciled instead of silently overwritten.
+Ideas can combine these forms, with ordered members and nested compositions. Each member currently belongs to one composition. Agents can update individual content; version conflicts and protected user edits become reviewable proposals. Data connections are limited to declared work outputs feeding text or another work's input, not arbitrary connections between all components.
 
-Switch to another application and desktop bubbles resume while the board keeps its mode and content. An explicit pause remains paused.
+Switch to another application and desktop bubbles resume while the Canvas keeps its mode and content. An explicit pause remains paused.
 
 ## Your agent stays where it already works
 
 Spellcast is a local desktop app, connected through MCP. It does not run a model or require a model API key. Your agent continues to use its existing host and model.
 
-Feedback remains queued until the originating task reads and acknowledges it. **An inactive host is not automatically awakened.** The bundled Skill teaches the agent when to check feedback, when a bubble is worth showing, and when to reply on the board.
+An explicit Canvas submission goes directly to the corresponding task through the running **Codex Desktop** app, including an idle task. The result can update the original Canvas content. A closed app, deleted task, unavailable tools, or failed delivery is not reported as successful execution. The integration includes MCP, Hooks, and behavior guidance; receiving a request and completing it are tracked separately.
 
-0.3.0 adds **independent asides**. Enable them for a task, and the host offers a short project snapshot at a meaningful checkpoint. A fresh subagent with no conversation-history fork decides whether there is anything worth saying; silence is valid. It submits directly to Spellcast and returns only a compact status to the main task. Checkpoint tickets limit repetition and reject expired or superseded work. This needs a host with isolated subagents and native MCP access; it does not install a background model service. See the [observer implementation and verification](docs/reviews/2026-09-06-independent-observer.md) for the current evidence boundary.
+**Independent asides** follow the switch in Spellcast. With asides enabled, the host supplies brief context when substantive new project information appears. A fresh isolated observer decides whether there is anything useful to add; silence is valid. This needs host support for isolated subagents and native MCP tools. Hooks do not guarantee an aside on every turn, and no separate model service is installed. See [Codex hooks and verification boundaries](docs/codex-observer-hooks.md).
 
 Kept ideas and replies survive restart. Durable memory is separate: save only what you choose, inspect it in **Memory**, search it, and forget individual entries. Keeping a bubble does not automatically create a memory.
 
 ## Get started
 
-1. Download and run the latest **Windows x64 preview build** from [Releases](https://github.com/Vanyangyang/spellcast/releases/latest), or build from source (below).
-2. Open **Settings**, choose your host, and review its MCP configuration. Supported writers merge only Spellcast's entry and back up the original file. Other hosts get a configuration snippet.
-3. Install the bundled **Skill**, reload your host's agent, and ask it to use Spellcast.
+1. Build the current source (below) for the workflow described here. The [published Windows preview](https://github.com/Vanyangyang/spellcast/releases/latest) is an older snapshot.
+2. Open **Settings** and click **Install / update Spellcast integration** for Codex. This installs the bundled MCP, Hooks, and behavior Skill together, with backups and conflict checks.
+3. Reload Codex and follow any Hooks trust instructions shown by the integration status. Enable independent asides using the Spellcast switch when desired.
 
-The desktop app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. Connection setup supports Cursor, Codex, Windsurf, Claude Code, and generic MCP clients; runtime behavior still depends on the host's tool and lifecycle support.
+Integration details: [docs/codex-observer-hooks.md](docs/codex-observer-hooks.md) and the packaged [hooks/INSTALL.md](hooks/INSTALL.md).
+
+The Spellcast app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. **Only Codex is currently supported in the setup UI.** Cursor, Claude Code, Windsurf, and Other remain visible but disabled.
 
 The release workflow also produces Apple Silicon and Intel macOS builds, but [only Windows has been tested](docs/releases/0.3.0.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures.
 
@@ -65,12 +70,13 @@ The release workflow also produces Apple Silicon and Intel macOS builds, but [on
 git clone https://github.com/Vanyangyang/spellcast.git
 cd spellcast
 npm ci
+npm run prepare:codex-plugin
 npm run desktop
 ```
 
 Use Node.js 22+, the repository's Rust toolchain, and the platform's Tauri prerequisites. Windows builds require Visual Studio C++ build tools, Windows SDK, and WebView2.
 
-`npm start` opens a browser preview of the board. OS bubbles require `npm run desktop` or the installed app.
+`npm start` opens a browser preview of the Canvas. OS bubbles require `npm run desktop` or the installed app. Browser acceptance scripts under `scripts/` include local development harnesses; some require the Codex-bundled Playwright runtime. Their fixture results are not proof of a real Codex model turn.
 
 ```sh
 npm run build
@@ -81,6 +87,6 @@ npm run tauri -- build --bundles nsis
 
 ## Built with Astra
 
-Astra helped challenge the product assumptions, build and integrate the bubble → board → feedback loop, test the interactions, and produce this demo. The graph canvas uses [AntV X6](https://github.com/antvis/X6); the desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
+Astra helped challenge the product assumptions, build and integrate the bubble → Canvas → feedback loop, test the interactions, and produce this demo. The graph canvas uses [AntV X6](https://github.com/antvis/X6); the desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
 
 [Agent behavior](skills/spellcast/SKILL.md) · [Release notes and verification](docs/releases/) · [AGPL-3.0 license](LICENSE)
