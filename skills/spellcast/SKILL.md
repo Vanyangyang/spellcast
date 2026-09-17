@@ -9,11 +9,12 @@ Spellcast gives the user's existing Agent two surfaces: sparse desktop bubbles a
 
 ## Boundaries
 
-- Use one stable `source_id` per host task (for example `codex:task-uuid`) when sending bubbles, publishing Canvas replies, or listening for that task's feedback. Keep it across those turns. A model name is not a task identifier. If those tools are unavailable, report the connection gap; a successful direct HTTP test is not host registration.
+- Use one stable `source_id` per host task (for example `codex:task-uuid` or `grok:<session-or-task-id>`) when sending bubbles, publishing Canvas replies, or listening for that task's feedback. Keep it across those turns. A model name is not a task identifier. If those tools are unavailable, report the connection gap; a successful direct HTTP test is not host registration.
 - In Codex, bind the current `CODEX_THREAD_ID` from the host's native execution environment, or the current task ID from host startup metadata, via `spellcast_bind_codex` with that UUID, your source, and cwd — only when publishing task-owned bubbles or Canvas replies, or when handling that task's feedback. Never substitute another task or the most recent conversation. Memory-only work does not bind a task.
+- Grok Build hosts use a stable `source_id` such as `grok:<session-or-task-id>`. There is no binding tool; do not invent one or reuse `spellcast_bind_codex`.
 - When working on the board, `surface` is the selected presentation mode and `board_focused` is actual window focus. If the board is in focus and the user is working there, make the board the reply surface; a short host acknowledgement is enough.
 - Independent asides: the App switch is the authority. If the current context already contains the complete native hook protocol, execute it via native MCP and do not narrate checkpoint, spawn, or complete as chat progress. Otherwise follow [references/asides.md](references/asides.md). unknown is not OFF. Memory-only work does not start aside checks.
-- When modifying existing Canvas content, read current versions first. User-edited content and user-adjusted layout stay protected; a conflict remains a reviewable proposal. Do not replace an entire reply to evade that protection. Do not clear a board the user edited without permission.
+- When modifying existing Canvas content, read current versions first. User-edited content and user-adjusted layout stay protected; a conflict remains a reviewable proposal. Do not replace an entire reply to evade that protection. Do not clear a board the user edited without permission. Host tools publish and update this source's content; layout, grouping, annotations, selection and send stay in the Spellcast window.
 - Follow the user's host role/model selection; Spellcast does not choose a model and does not promise automatic asides in every host.
 
 ## When to read more

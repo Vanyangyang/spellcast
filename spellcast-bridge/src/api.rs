@@ -42,8 +42,10 @@ pub fn router(bridge: Shared) -> Router {
         .route("/api/canvas", post(patch_canvas).delete(delete_canvas_item))
         .route("/api/canvas/restore", post(restore_canvas_item))
         .route("/api/canvas/content", axum::routing::delete(delete_canvas_content))
-        .route("/api/canvas/batch", post(canvas_batch))
-        .route("/api/canvas/blocks/:id/action", post(canvas_block_action))
+        // A fixed inline image can be up to 2 MB before base64 encoding and may
+        // appear both as the source object and as its reference in one transaction.
+        .route("/api/canvas/batch", post(canvas_batch).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
+        .route("/api/canvas/blocks/:id/action", post(canvas_block_action).layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024)))
         .route("/api/canvas/proposals/:id", post(canvas_proposal))
         .route("/api/nodes", post(create_node))
         .route(
@@ -51,7 +53,7 @@ pub fn router(bridge: Shared) -> Router {
             axum::routing::patch(patch_node).delete(delete_node),
         )
         .route("/api/import", post(import))
-        .route("/api/say", post(say))
+        .route("/api/say", post(say).layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024)))
         .route("/api/poke", post(poke))
         .route("/api/dismiss", post(dismiss))
         .route("/api/keep", post(keep))
@@ -66,9 +68,9 @@ pub fn router(bridge: Shared) -> Router {
         .route("/api/present", post(present))
         .route("/api/bubble", post(bubble))
         .route("/api/listen", get(listen))
-        .route("/api/replies", post(write_reply))
-        .route("/api/replies/patch", post(patch_reply))
-        .route("/api/replies/action", post(reply_action))
+        .route("/api/replies", post(write_reply).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
+        .route("/api/replies/patch", post(patch_reply).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
+        .route("/api/replies/action", post(reply_action).layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024)))
         .route("/api/artifacts", post(publish_artifact))
         .route("/api/artifacts/state", post(artifact_state))
         .route(
@@ -616,6 +618,45 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
+    fn tagged_op_names(schema: &Value) -> Vec<String> {
+        let mut names = Vec::new();
+        fn walk(value: &Value, names: &mut Vec<String>) {
+            match value {
+                Value::Object(map) => {
+                    if let Some(op) = map.get("properties").and_then(|p| p.get("op")) {
+                        if let Some(name) = op.get("const").and_then(Value::as_str) {
+                            names.push(name.to_string());
+                        }
+                        if let Some(items) = op.get("enum").and_then(Value::as_array) {
+                            for item in items {
+                                if let Some(name) = item.as_str() {
+                                    names.push(name.to_string());
+                                }
+                            }
+                        }
+                    }
+                    for child in map.values() {
+                        walk(child, names);
+                    }
+                }
+                Value::Array(items) => {
+                    for child in items {
+                        walk(child, names);
+                    }
+                }
+                _ => {}
+            }
+        }
+        walk(schema, &mut names);
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    fn mcp_call_failed(reply: &Value) -> bool {
+        reply["error"].is_object() || reply["result"]["isError"] == true
+    }
+
     async fn rpc(app: &Router, id: u64, method: &str, params: Value) -> Value {
         let res = app
             .clone()
@@ -688,6 +729,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_initialize_records_grok_cli_client_info() {
+        let app = router(Arc::new(Bridge::new(crate::Headless, 0)));
+        let res = app
+            .clone()
+            .oneshot(
+                Request::post("/mcp")
+                    .header("host", "127.0.0.1:47194")
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream")
+                    .body(Body::from(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "initialize",
+                            "params": {
+                                "protocolVersion": mcp::PROTOCOL_VERSION,
+                                "clientInfo": { "name": "grok-cli", "version": "1.0" },
+                                "capabilities": {}
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let health = app
+            .oneshot(Request::get("/api/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let bytes = health.into_body().collect().await.unwrap().to_bytes();
+        let status: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(status["client"], "grok-cli 1.0");
+        assert_eq!(status["agents"][0]["client"], "grok-cli 1.0");
+        assert!(status["agents"][0]["last_call_ms"].as_u64().unwrap() > 0);
+    }
+
+    #[tokio::test]
     async fn mcp_initialize_keeps_recent_agents() {
         let app = router(Arc::new(Bridge::new(crate::Headless, 0)));
         let params = |name: &str, version: &str| {
@@ -730,6 +811,27 @@ mod tests {
         for name in ["source_id", "request_id", "reads", "operations", "feedback_sequences"] {
             assert!(tool["inputSchema"]["properties"][name].is_object(), "{tool}");
         }
+        assert!(
+            tool["description"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Spellcast window"),
+            "{tool}"
+        );
+        let names: Vec<&str> = listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(!names.contains(&"spellcast_present"), "{names:?}");
+        let ops = tagged_op_names(&tool["inputSchema"]);
+        for name in ["create", "patch_content", "compose"] {
+            assert!(ops.iter().any(|op| op == name), "{ops:?}");
+        }
+        for name in ["place", "arrange", "annotate", "remove_annotation", "ungroup"] {
+            assert!(!ops.iter().any(|op| op == name), "{ops:?}");
+        }
         let arguments = json!({"source_id":"naming-task","request_id":"names","operations":[
             {"op":"create","id":"first-name","content":{"type":"text","title":"雾港档案","text":"从消失的地名追踪一座港口。"},"placement":{"x":10,"y":20}},
             {"op":"create","id":"second-name","content":{"type":"text","title":"灯塔失语","text":"最后一盏灯不再指向归航者。"},"placement":{"x":460,"y":20}},
@@ -742,13 +844,44 @@ mod tests {
         assert_eq!(bridge.board().canvas.objects.len(), 2);
         let before = bridge.board().canvas.items;
         let stale = rpc(&app, 4, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":{
-            "source_id":"naming-task","request_id":"stale-arrangement","operations":[
-                {"op":"place","id":"first-name","expected_revision":0,"fields":{"x":999}},
-                {"op":"place","id":"second-name","expected_revision":1,"fields":{"x":999}}
+            "source_id":"naming-task","request_id":"stale-title","operations":[
+                {"op":"patch_content","id":"first-name","expected_revision":0,"fields":{"title":"错版"}}
             ]
         }})).await;
         assert_eq!(stale["result"]["structuredContent"]["result"]["status"], "proposed", "{stale}");
         assert_eq!(bridge.board().canvas.items, before);
+    }
+
+    #[tokio::test]
+    async fn mcp_canvas_batch_rejects_window_operations() {
+        let app = router(Arc::new(Bridge::new(crate::Headless, 0)));
+        rpc(&app, 1, "initialize", json!({
+            "protocolVersion": mcp::PROTOCOL_VERSION,
+            "clientInfo": { "name": "Cursor", "version": "1.0" },
+            "capabilities": {}
+        })).await;
+        rpc(&app, 2, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":{
+            "source_id":"naming-task","request_id":"seed","operations":[
+                {"op":"create","id":"note","content":{"type":"text","title":"雾港","text":"原文"},"placement":{"x":10,"y":20}}
+            ]
+        }})).await;
+        let placed = rpc(&app, 3, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":{
+            "source_id":"naming-task","request_id":"move","operations":[
+                {"op":"place","id":"note","expected_revision":1,"fields":{"x":999}}
+            ]
+        }})).await;
+        assert!(mcp_call_failed(&placed), "{placed}");
+        assert_ne!(placed["result"]["structuredContent"]["result"]["status"], "applied");
+        let annotated = rpc(&app, 4, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":{
+            "source_id":"naming-task","request_id":"mark","operations":[
+                {"op":"annotate","id":"mark","expected_revision":0,"anchor":{"object_id":"note","content_revision":1},"text":"批注"}
+            ]
+        }})).await;
+        assert!(mcp_call_failed(&annotated), "{annotated}");
+        let presented = rpc(&app, 5, "tools/call", json!({"name":"spellcast_present","arguments":{
+            "reply":"keep","nodes":[{"title":"碎片"}]
+        }})).await;
+        assert!(mcp_call_failed(&presented), "{presented}");
     }
 
     #[tokio::test]
@@ -767,6 +900,7 @@ mod tests {
         ] {
             assert!(tools.iter().any(|t| t["name"] == name));
         }
+        assert!(!tools.iter().any(|t| t["name"] == "spellcast_present"));
         let update_schema = tools
             .iter()
             .find(|t| t["name"] == "spellcast_update")

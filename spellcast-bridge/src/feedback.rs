@@ -188,10 +188,16 @@ fn handling(event: &AgentEvent) -> Vec<String> {
     if !event.anchors.is_empty() {
         steps.push("读取全部 anchors 指定的内容版本和选区，结果只回到本请求的 source_id。使用 spellcast_canvas_batch 时，在 reads 中声明全部锚定对象及可用输入来源对象的实际读取版本。".into());
     }
+    if event.anchors.iter().any(|anchor| anchor.target.is_some()) {
+        steps.push("target 的 kind 与 id 指定用户讨论的方案、步骤或关系；按稳定 ID 定位，不按标题或当前排列猜测。image 是提交时的固定画面，region 是该画面的局部；原图更新不表示用户同意换图。仅修改请求所指的内容。".into());
+    }
     if event.anchors.iter().any(|anchor| !anchor.compositions.is_empty()) {
         steps.push("此请求引用了 idea 组合；核对组合版本及成员依赖，不把引用的其他任务成员改为接收任务。".into());
     }
-    if event.artifact_context.is_some() || event.anchors.iter().any(|anchor| anchor.artifact.is_some() || anchor.inputs.is_some()) {
+    if !event.annotation_context.is_empty() {
+        steps.push("annotation_context 是发送当时保存的注释正文与锚点快照，原版本可以早于当前对象。先按注释理解请求，再读取当前对象，只处理留言要求的范围；提交 batch 时在 reads 中声明相应 annotation 版本。".into());
+    }
+    if event.artifact_context.is_some() || event.anchors.iter().any(|anchor| anchor.artifact.is_some() || anchor.artifact_reference.is_some() || anchor.inputs.is_some()) {
         steps.push("此请求包含作品或连接输入；读取指定 bundle、state_revision、选区和输入快照。内容版本与参数状态版本分别核对，不猜测 iframe 内部状态。".into());
     }
     if event.node_id.is_some() {
@@ -699,7 +705,16 @@ impl Bridge {
                     && current.is_some_and(|r| {
                         r.phase == DeliveryPhase::Dispatching
                             && r.event.object_id.as_ref().is_none_or(|id| state.session.board.canvas.object(id).is_some())
-                            && r.event.anchors.iter().all(|anchor| state.session.board.canvas.object(&anchor.object_id).is_some())
+                            && r.event.anchors.iter().all(|anchor| {
+                                state.session.board.canvas.object(&anchor.object_id).is_some()
+                                    || (!anchor.annotations.is_empty()
+                                        && anchor.annotations.iter().all(|reference| {
+                                            r.event.annotation_context.iter().any(|annotation| {
+                                                annotation.id == reference.id
+                                                    && annotation.revision == reference.revision
+                                            })
+                                        }))
+                            })
                             && r.event.reply_id.as_ref().is_none_or(|id| {
                                 state.session.board.replies.iter().any(|p| &p.id == id)
                             })
@@ -775,7 +790,7 @@ mod tests {
         assert!(!plain.contains("bundle"));
         assert!(!plain.contains("组合"));
         assert!(!plain.contains("spellcast_canvas_batch"));
-        event.anchors.push(spellcast_core::inbox::CanvasAnchor {
+        event.anchors.push(spellcast_core::inbox::CanvasAnchor { target: None, image: None, artifact_reference: None, annotations: vec![],
             object_id: "object-a".into(), content_revision: 3, block_id: None, selection: None, region: None, artifact: None, inputs: None,
             compositions: vec![spellcast_core::inbox::CanvasCompositionAnchor { id: "idea-a".into(), revision: 2 }],
         });

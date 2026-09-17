@@ -244,6 +244,22 @@ pub struct CanvasOrigin {
     pub label: String,
 }
 
+/// A durable note with a backend-captured snapshot of the exact content it discussed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct CanvasAnnotation {
+    pub id: String,
+    pub revision: u64,
+    pub anchor: crate::inbox::CanvasAnchor,
+    pub snapshot: serde_json::Value,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<CanvasOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default)]
+    pub removed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct CanvasObject {
     pub id: String,
@@ -262,6 +278,17 @@ pub struct CanvasObject {
     pub user_edited: bool,
 }
 
+/// The saved placement intent for a composition. It never moves presentations by itself.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasArrangement {
+    #[default]
+    Free,
+    SideBySide,
+    FigureCaption,
+    Sequence,
+}
+
 /// A stable group of objects or nested compositions. Each member has at most one parent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct CanvasComposition {
@@ -272,6 +299,8 @@ pub struct CanvasComposition {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub arrangement: CanvasArrangement,
     pub members: Vec<String>,
     #[serde(default)]
     pub source_id: Option<String>,
@@ -285,6 +314,10 @@ pub enum CanvasAppearance {
     Plain,
     #[default]
     Card,
+}
+
+fn default_content_scale() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -303,6 +336,9 @@ pub struct CanvasPlacement {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    /// Presentation-only uniform scale for the object's rendered content.
+    #[serde(default = "default_content_scale")]
+    pub content_scale: f64,
     /// Set when the user moved, resized, restyled or hid this presentation.
     #[serde(default)]
     pub user_modified: bool,
@@ -319,9 +355,13 @@ impl CanvasPlacement {
             || !self.height.is_finite()
             || !(48.0..=2400.0).contains(&self.width)
             || !(48.0..=2400.0).contains(&self.height)
+            || !self.content_scale.is_finite()
+            || !(0.01..=100.0).contains(&self.content_scale)
             || self.z.abs_diff(0) > 1_000_000
         {
-            return Err(SpellcastError::user("画布位置或尺寸超出可用范围。"));
+            return Err(SpellcastError::user(
+                "画布位置、尺寸或内容缩放超出可用范围。",
+            ));
         }
         Ok(())
     }
@@ -344,6 +384,8 @@ pub struct CanvasLayout {
     pub items: Vec<CanvasPlacement>,
     #[serde(default)]
     pub compositions: Vec<CanvasComposition>,
+    #[serde(default)]
+    pub annotations: Vec<CanvasAnnotation>,
     /// Pending proposals plus applied/dismissed receipts, located by request_id.
     #[serde(default)]
     pub proposals: Vec<CanvasProposal>,
@@ -386,6 +428,10 @@ impl CanvasLayout {
             .find(|composition| composition.id == id)
     }
 
+    pub fn annotation(&self, id: &str) -> Option<&CanvasAnnotation> {
+        self.annotations.iter().find(|annotation| annotation.id == id)
+    }
+
     /// The single composition that lists `member_id`, if any.
     pub fn parent_of(&self, member_id: &str) -> Option<&CanvasComposition> {
         self.compositions
@@ -421,6 +467,7 @@ impl CanvasLayout {
             CanvasTargetKind::Composition => {
                 self.composition(id).map(|composition| composition.revision)
             }
+            CanvasTargetKind::Annotation => self.annotation(id).map(|annotation| annotation.revision),
         }
     }
 
@@ -575,6 +622,7 @@ impl CanvasLayout {
                 y: 48.0,
                 width,
                 height,
+                content_scale: 1.0,
                 user_modified: false,
             };
             if let Some(parent) = origin
@@ -795,6 +843,7 @@ impl Session {
                 item.z = current.z;
                 item.removed = current.removed;
                 item.appearance = current.appearance;
+                item.content_scale = current.content_scale;
             }
             if item.revision != current.revision || item.removed != current.removed {
                 return Err(SpellcastError::user(
@@ -993,6 +1042,80 @@ mod tests {
             }
         );
         assert!(object.bindings.is_empty() && object.user_edited);
+    }
+
+    #[test]
+    fn content_scale_defaults_round_trips_and_layout_patches_preserve_and_validate_it() {
+        let old: CanvasPlacement = serde_json::from_value(serde_json::json!({
+            "item_id": "old-object",
+            "x": 12.0,
+            "y": 24.0,
+            "width": 320.0,
+            "height": 180.0
+        }))
+        .unwrap();
+        assert_eq!(old.content_scale, 1.0);
+
+        let mut session = Session::default();
+        let node = session.add_node(NodeDraft {
+            title: "缩放内容".into(),
+            ..Default::default()
+        });
+        session.sync_canvas();
+        let object_id = session.board.canvas.objects[0].id.clone();
+        let mut scaled = session.board.canvas.placement(&object_id).unwrap().clone();
+        scaled.content_scale = 1.75;
+        session
+            .patch_canvas(CanvasPatch {
+                expected_revision: None,
+                items: vec![scaled],
+            })
+            .unwrap();
+
+        // A legacy identity/layout save omits the new field. Preserve the current scale while
+        // accepting its geometry update.
+        let legacy_patch: CanvasPlacement = serde_json::from_value(serde_json::json!({
+            "item_id": format!("node:{}", node.id),
+            "x": 420.0,
+            "y": 24.0,
+            "width": 320.0,
+            "height": 180.0
+        }))
+        .unwrap();
+        let revision = session.board.canvas.revision;
+        session
+            .patch_canvas(CanvasPatch {
+                expected_revision: Some(revision),
+                items: vec![legacy_patch],
+            })
+            .unwrap();
+        let current = session.board.canvas.placement(&object_id).unwrap();
+        assert_eq!((current.x, current.content_scale), (420.0, 1.75));
+
+        let saved = serde_json::to_string(&session).unwrap();
+        let restored: Session = serde_json::from_str(&saved).unwrap();
+        assert_eq!(
+            restored
+                .board
+                .canvas
+                .placement(&object_id)
+                .unwrap()
+                .content_scale,
+            1.75
+        );
+
+        for invalid in [f64::NAN, f64::INFINITY, 0.0, 0.009, 100.01] {
+            let before = session.board.canvas.clone();
+            let mut item = before.placement(&object_id).unwrap().clone();
+            item.content_scale = invalid;
+            assert!(session
+                .patch_canvas(CanvasPatch {
+                    expected_revision: None,
+                    items: vec![item],
+                })
+                .is_err());
+            assert_eq!(session.board.canvas, before);
+        }
     }
 
     #[test]

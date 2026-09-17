@@ -8,8 +8,9 @@ export const SETUP_KIND_MESSAGE: Record<SetupKind, MessageKey> = {
   not_installed: "setup.status.notInstalled",
   installing: "setup.status.installing",
   installed_pending_trust: "setup.status.pendingTrust",
+  installed_unverified: "setup.status.installedUnverified",
   pending_reload: "setup.status.pendingReload",
-  verified: "setup.status.unverified",
+  verified: "setup.status.verified",
   conflict_custom: "setup.status.conflictCustom",
   conflict_endpoint: "setup.status.conflictEndpoint",
   failed: "setup.status.failed",
@@ -22,8 +23,9 @@ export const SETUP_KIND_HINT: Record<SetupKind, MessageKey> = {
   not_installed: "setup.hint.notInstalled",
   installing: "setup.hint.installing",
   installed_pending_trust: "setup.hint.pendingTrust",
+  installed_unverified: "setup.hint.installedUnverified",
   pending_reload: "setup.hint.pendingReload",
-  verified: "setup.hint.unverified",
+  verified: "setup.hint.verified",
   conflict_custom: "setup.hint.conflictCustom",
   conflict_endpoint: "setup.hint.conflictEndpoint",
   failed: "setup.hint.failed",
@@ -103,7 +105,7 @@ export function statusReadFailedReport(client: string, message: string): SetupRe
   return {
     client,
     kind: "failed",
-    complete_supported: client === "codex",
+    complete_supported: client === "codex" || client === "grok",
     installed: false,
     note: "",
     done: [],
@@ -136,6 +138,14 @@ export function installingReport(client: string): SetupReport {
 
 function mainHintKey(report: SetupReport): MessageKey {
   if (report.ui === "status-read-failed") return "setup.hint.readFailed";
+  if (report.client === "grok") {
+    if (report.kind === "verified") return "setup.hint.grokVerified";
+    if (report.kind === "not_installed") {
+      return report.mcp_url ? "setup.hint.grokNotInstalled" : "setup.hint.desktopPreview";
+    }
+  }
+  if (report.hook_trust === "modified") return "setup.hint.modified";
+  if (report.hook_trust === "disabled") return "setup.hint.disabled";
   if (report.kind === "not_installed" && report.complete_supported && !report.source_path) {
     return "setup.hint.desktopPreview";
   }
@@ -148,12 +158,57 @@ function setText(id: string, text: string) {
 }
 
 export function paintSetupView(report: SetupReport, t: Translate) {
-  const status = t(SETUP_KIND_MESSAGE[report.kind] ?? "setup.status.unverified");
+  const grok = report.client === "grok";
+  const status = grok && report.kind === "verified"
+    ? t("setup.status.grokVerified")
+    : t(report.hook_trust === "disabled" ? "setup.status.hooksDisabled"
+    : report.hook_trust === "modified" ? "setup.status.hooksModified"
+    : SETUP_KIND_MESSAGE[report.kind] ?? "setup.status.unverified");
   const hint = t(mainHintKey(report));
   setText("#agent-setup-status", status);
   setText("#settings-setup-status", status);
   setText("#agent-setup-hint", hint);
   setText("#settings-setup-hint", hint);
+  document.querySelectorAll<HTMLElement>("[data-setup-title]").forEach((el) => {
+    el.textContent = t(grok ? "setup.titleGrok" : "setup.title");
+  });
+  document.querySelectorAll<HTMLElement>("[data-setup-body]").forEach((el) => {
+    el.textContent = t("settings.body");
+  });
+  document.querySelectorAll<HTMLElement>("[data-setup-hooks-desc]").forEach((el) => {
+    el.textContent = t("setup.hooksDescription");
+  });
+  document.querySelectorAll<HTMLElement>("[data-setup-skill-desc]").forEach((el) => {
+    el.textContent = t("setup.skillDescription");
+  });
+  document.querySelectorAll<HTMLElement>("[data-setup-mcp-desc]").forEach((el) => {
+    el.textContent = t(grok ? "setup.mcpDescriptionGrok" : "setup.mcpDescription");
+  });
+  document.querySelectorAll<HTMLButtonElement>("#agent-complete-setup, #settings-complete-setup").forEach(button => {
+    button.textContent = t(report.kind === "installing" ? "setup.installing"
+      : grok ? (report.installed ? "setup.updateGrok" : "setup.installGrok")
+      : report.installed ? "setup.update"
+      : "setup.install");
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-setup-refresh]").forEach(button => {
+    button.disabled = report.kind === "installing"; button.textContent = t("setup.check");
+  });
+  document.querySelectorAll<HTMLElement>("[data-setup-component]").forEach(element => {
+    let key: MessageKey = report.installed ? "setup.component.installed" : report.kind === "not_installed" ? "setup.component.missing" : "setup.component.unknown";
+    let tone = report.installed ? "done" : "quiet";
+    if (element.dataset.setupComponent === "hooks" && grok) {
+      key = "setup.component.unknown";
+      tone = "quiet";
+    } else if (element.dataset.setupComponent === "hooks" && report.installed) {
+      const trust = report.hook_trust || "unknown";
+      key = `setup.hooks.${trust}` as MessageKey;
+      tone = trust === "trusted" ? "done" : trust === "unknown" ? "quiet" : "attention";
+    }
+    element.textContent = t(key); element.dataset.tone = tone;
+  });
+  document.querySelectorAll<HTMLElement>(".setup-summary").forEach(element => {
+    element.dataset.tone = report.kind === "verified" ? "done" : "quiet";
+  });
   const paths = reportDetailLines(report);
   const details = [
     report.note,
@@ -194,6 +249,10 @@ export function createSetupController(opts: {
       if (session.state().inflight) return;
       const token = session.beginPreview(client, url);
       if (!token) return;
+      const checking = (on: boolean) => document.querySelectorAll<HTMLButtonElement>("[data-setup-refresh]").forEach(button => {
+        button.disabled = on; button.textContent = opts.t(on ? "setup.checking" : "setup.check");
+      });
+      checking(true);
       try {
         const report = await opts.status(client, url);
         if (!session.canApplyPreview(token, opts.getClient(), opts.getUrl())) return;
@@ -202,6 +261,8 @@ export function createSetupController(opts: {
         if (!session.canApplyPreview(token, opts.getClient(), opts.getUrl())) return;
         const message = error instanceof Error ? error.message : String(error);
         paint(statusReadFailedReport(client, message));
+      } finally {
+        if (token.generation === session.state().generation) checking(false);
       }
     },
     async install(client: string, url: string) {

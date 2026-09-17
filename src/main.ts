@@ -1,5 +1,6 @@
 import "./styles.css";
 import "./board-workspace.css";
+import "./setup.css";
 import {
   createNode,
   actOnCanvasBlock,
@@ -35,7 +36,7 @@ import { mountCanvas, type CanvasSelection } from "./canvas";
 import { CanvasRecipient, originalTask } from "./canvas-recipient";
 import type { DeliveryReceipt } from "./types";
 import { createCanvasNav } from "./canvas-nav";
-import { resolveNavObjectId, type ContentNavTarget } from "./content-organization";
+import { resolveNavObjectId, textLabel, type ContentNavTarget } from "./content-organization";
 import "./canvas-studio.css";
 import { ct } from "./i18n/canvas";
 import { replyDrafts, draftKey, contentKey, type DraftRecord } from "./reply-drafts";
@@ -185,6 +186,7 @@ const replyBoard = mountCanvas(replyHost, {
     const object = board.canvas?.objects.find(object => object.id === id);
     const result = await actOnCanvasBlock(id, { expected_revision, block_id: request.block_id, action: request.action,
       request_id: request.request_id, option_id: request.option_id, text: request.text,
+      anchors: request.anchors,
       source_id: object?.source_id || recipient.value || object?.origin?.source_id || null });
     board = result.board; void boardTools.refreshFeedback(); return board;
   },
@@ -420,7 +422,11 @@ const shell = createShell({
   onFavorite: (item, kept) => onFavoriteChanged(item, kept),
 });
 
-type ConfigClient = "cursor" | "claude-code" | "codex" | "windsurf" | "generic";
+type ConfigClient = "cursor" | "claude-code" | "codex" | "grok" | "windsurf" | "generic";
+
+function isCompleteClient(client: string | undefined): client is "codex" | "grok" {
+  return client === "codex" || client === "grok";
+}
 
 function setupButtons() {
   return [
@@ -433,9 +439,9 @@ function setSetupLocked(locked: boolean) {
   agentUrl.readOnly = locked;
   settingsUrl.readOnly = locked;
   document.querySelectorAll<HTMLButtonElement>("[data-client]").forEach((button) => {
-    button.disabled = locked || button.dataset.client !== "codex";
+    button.disabled = locked || !isCompleteClient(button.dataset.client);
   });
-  const supported = selectedClient === "codex";
+  const supported = isCompleteClient(selectedClient);
   setupButtons().forEach((button) => {
     button.disabled = locked || !supported;
   });
@@ -449,13 +455,13 @@ function setPickedClient(client: string) {
 }
 
 async function previewClient(client: ConfigClient) {
-  if (client !== "codex" || setupController.session.state().inflight) return;
+  if (!isCompleteClient(client) || setupController.session.state().inflight) return;
   const currentUrl = manualConnectionUrl ?? `http://127.0.0.1:${bridgeStatus?.port ?? 47194}/mcp`;
   selectedClient = client;
   agentUrl.value = currentUrl;
   settingsUrl.value = currentUrl;
   setPickedClient(client);
-  const supported = client === "codex";
+  const supported = isCompleteClient(client);
   setupButtons().forEach((button) => {
     button.disabled = !supported;
   });
@@ -473,7 +479,7 @@ function schedulePreviewFromUrl(url: string) {
 }
 
 async function installCompleteSetup() {
-  if (selectedClient !== "codex") return;
+  if (!isCompleteClient(selectedClient)) return;
   await setupController.install(selectedClient, settingsUrl.value.trim());
 }
 
@@ -489,34 +495,28 @@ function ageText(seconds: number) {
 }
 
 function paintConnection() {
-  let state = "away";
-  let fallback = t("agent.none");
-  let agents: { client: string; last_call_ms: number }[] = [];
-  if (!bridgeReachable) {
-    fallback = t("agent.unreachable");
-  } else {
-    agents =
-      bridgeStatus?.agents && bridgeStatus.agents.length > 0
-        ? bridgeStatus.agents
-        : bridgeStatus?.client && bridgeStatus.last_call_ms
-          ? [{ client: bridgeStatus.client, last_call_ms: bridgeStatus.last_call_ms }]
-          : [];
-    if (agents.length > 0) {
-      const now = Date.now();
-      state = agents.some((agent) => (now - agent.last_call_ms) / 1000 <= 45)
-        ? "live"
-        : "stale";
-    } else {
-      state = "ready";
-    }
-  }
-  for (const prefix of ["agent", "settings-agent"]) {
+  const allAgents = bridgeStatus?.agents?.length
+    ? bridgeStatus.agents
+    : bridgeStatus?.client && bridgeStatus.last_call_ms
+      ? [{ client: bridgeStatus.client, last_call_ms: bridgeStatus.last_call_ms }]
+      : [];
+  // A generic transport label is useful for diagnostics, not an Agent identity.
+  // This only controls presentation; it does not establish trust or origin.
+  const namedAgents = allAgents.filter(
+    ({ client }) => !/^rmcp(?:\s+\d+\.\d+\.\d+(?:[-+][\w.-]+)?)?$/i.test(client.trim()),
+  );
+  for (const prefix of ["agent", "settings-agent", "settings-agent-details"]) {
+    const agents = prefix === "settings-agent-details" ? allAgents : namedAgents;
+    const state = !bridgeReachable ? "away"
+      : agents.length === 0 ? "ready"
+      : agents.some((agent) => (Date.now() - agent.last_call_ms) / 1000 <= 45) ? "live" : "stale";
     const dot = document.querySelector<HTMLElement>(`#${prefix}-dot`)!;
     const label = document.querySelector<HTMLElement>(`#${prefix}-seen`)!;
     dot.className = `agent-dot ${state}`;
     label.replaceChildren();
     if (!bridgeReachable || agents.length === 0) {
-      label.textContent = fallback;
+      label.textContent = !bridgeReachable ? t("agent.unreachable")
+        : allAgents.length > 0 ? t("agent.ready") : t("agent.none");
       continue;
     }
     const chips = document.createElement("div");
@@ -674,6 +674,7 @@ async function boot() {
   paint();
   paintActivity();
   paintObserver();
+  setSetupLocked(false);
   await refreshStatus();
   void previewClient(selectedClient as ConfigClient);
   window.setInterval(() => void refreshStatus(), 15_000);
@@ -731,7 +732,7 @@ async function boot() {
 
 document.querySelectorAll<HTMLButtonElement>("[data-client]").forEach((button) => {
   button.addEventListener("click", () => {
-    if (button.disabled || button.dataset.client !== "codex" || setupController.session.state().inflight) return;
+    if (button.disabled || !isCompleteClient(button.dataset.client) || setupController.session.state().inflight) return;
     void previewClient(button.dataset.client as ConfigClient);
   });
 });
@@ -747,6 +748,9 @@ for (const field of [agentUrl, settingsUrl]) {
 
 document.querySelector("#agent-complete-setup")?.addEventListener("click", () => void installCompleteSetup());
 document.querySelector("#settings-complete-setup")?.addEventListener("click", () => void installCompleteSetup());
+document.querySelectorAll("[data-setup-refresh]").forEach(button => {
+  button.addEventListener("click", () => void previewClient(selectedClient as ConfigClient));
+});
 document.querySelector<HTMLButtonElement>("#agent-copy-url")?.addEventListener("click", (event) => {
   void copyUrl(event.currentTarget as HTMLButtonElement);
 });
@@ -1039,15 +1043,17 @@ function paintComposerContext() {
   const reply = focus ? board.replies?.find((item) => item.id === focus.reply_id) : null;
   const node = !reply && selected ? board.nodes.find((item) => item.id === selected) : null;
   const nativeTitles = focus?.anchors?.map(anchor => {
+    const annotation = board.canvas?.annotations?.find(note => anchor.annotations?.some(ref => ref.id === note.id));
+    if (annotation) return textLabel(annotation.text);
     const object = board.canvas?.objects.find(item => item.id === anchor.object_id);
     if (!object) return "";
     const content = object.content;
-    if (content.type === "block") return content.block.title;
-    if ("title" in content) return content.title;
+    if (content.type === "block") return targetLabel(content.block, anchor.target) || content.block.title || (content.block.type === "text" ? textLabel(content.block.text) : "") || ct("untitledBlock");
+    if ("title" in content) return content.title || (content.type === "text" ? textLabel(content.text) : "") || ct("untitledBlock");
     if (content.type === "reply") {
       const reply = board.replies?.find(reply => reply.id === content.id);
       const block = reply?.blocks.find(block => block.id === anchor.block_id);
-      return block ? block.title?.trim() || ct("untitledBlock") : reply?.title;
+      return block ? targetLabel(block, anchor.target) || block.title?.trim() || ct("untitledBlock") : reply?.title;
     }
     return board.nodes.find(node => node.id === content.id)?.title;
   }).filter(Boolean).join(" + ");
@@ -1533,3 +1539,4 @@ function escape(text: string) {
 }
 
 boot();
+import { targetLabel } from "./reply-image";

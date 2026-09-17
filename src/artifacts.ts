@@ -1,15 +1,15 @@
 import { zipSync, strToU8 } from "fflate";
 import { apiBase, fetchBoard, fetchArtifact, fetchArtifactHistory, saveArtifactState, editArtifactFile } from "./api";
-import type { ArtifactBundle, BoardReply, ReplyArtifactBlock } from "./reply-types";
+import type { ArtifactBundle, ArtifactStatePreview, BoardReply, ReplyArtifactBlock } from "./reply-types";
 import { CanvasDataflow, type CanvasFrameToken } from "./canvas-dataflow";
 import { currentLocale } from "./i18n";
 import { contentKey } from "./reply-drafts";
 import "./artifacts.css";
 
 const words = {
-  "zh-CN": { run: "运行", stop: "停止", reload: "重新运行", export: "导出作品", source: "源码与版本", restore: "恢复这个版本", save: "保存源码", loading: "正在打开作品…", ready: "运行中", stopped: "已停止", saving: "正在保存参数…", saved: "参数已保存", selection: "当前选择", none: "未选择对象", retry: "重试保存", recover: "查看未保存的参数", conflict: "有未保存的参数，保留在本机。请核对最新状态后再重试。", file: "资源文件", current: "当前版本", version: "历史版本", edit: "可直接修改 HTML、CSS、JavaScript 和数据。构建源文件需在宿主重建后重新发布。", pending: "源文件草稿已保留", download: "下载此文件" },
-  en: { run: "Run", stop: "Stop", reload: "Restart", export: "Export work", source: "Source and versions", restore: "Restore this version", save: "Save source", loading: "Opening work…", ready: "Running", stopped: "Stopped", saving: "Saving parameters…", saved: "Parameters saved", selection: "Selection", none: "No object selected", retry: "Retry save", recover: "Inspect unsaved parameters", conflict: "Unsaved parameters are kept locally. Compare the latest state before retrying.", file: "Asset file", current: "Current version", version: "Past version", edit: "Edit HTML, CSS, JavaScript and data directly. Rebuild original build sources in the host and publish again.", pending: "Source draft preserved", download: "Download file" },
-  ja: { run: "実行", stop: "停止", reload: "再実行", export: "作品を出力", source: "ソースと履歴", restore: "この版を復元", save: "ソースを保存", loading: "作品を開いています…", ready: "実行中", stopped: "停止中", saving: "パラメータを保存中…", saved: "パラメータを保存済み", selection: "選択", none: "未選択", retry: "保存を再試行", recover: "未保存のパラメータ", conflict: "未保存のパラメータを端末に保持しています。最新状態と比較してから再試行してください。", file: "素材ファイル", current: "現在の版", version: "以前の版", edit: "HTML、CSS、JavaScript、データを編集できます。ビルド元はホストで再ビルドして公開してください。", pending: "ソース下書きを保持", download: "ファイルを保存" },
+  "zh-CN": { run: "运行", stop: "停止", reload: "重新运行", export: "导出作品", source: "源码与版本", restore: "恢复这个版本", save: "保存源码", loading: "正在打开作品…", ready: "运行中", stopped: "已停止", saving: "正在保存参数…", saved: "参数已保存", selection: "当前选择", none: "未选择对象", retry: "重试保存", recover: "查看未保存的参数", conflict: "有未保存的参数，保留在本机。请核对最新状态后再重试。", file: "资源文件", current: "当前版本", version: "历史版本", edit: "可直接修改 HTML、CSS、JavaScript 和数据。构建源文件需在宿主重建后重新发布。", pending: "源文件草稿已保留", download: "下载此文件", operations: "作品操作", compact: "紧凑显示", full: "完整显示", snapshot: "保存当前状态画面", capturing: "正在捕获当前状态画面…", noSnapshot: "作品没有提供画面捕获；仍可引用已保存的参数。", snapshotStopped: "画面捕获在作品停止前未完成。", snapshotChanged: "参数在画面捕获期间变化，未保存旧画面。", snapshotInvalid: "画面格式或大小不符合保存要求。", snapshotMissing: "保存后的作品已不包含此作品块。" },
+  en: { run: "Run", stop: "Stop", reload: "Restart", export: "Export work", source: "Source and versions", restore: "Restore this version", save: "Save source", loading: "Opening work…", ready: "Running", stopped: "Stopped", saving: "Saving parameters…", saved: "Parameters saved", selection: "Selection", none: "No object selected", retry: "Retry save", recover: "Inspect unsaved parameters", conflict: "Unsaved parameters are kept locally. Compare the latest state before retrying.", file: "Asset file", current: "Current version", version: "Past version", edit: "Edit HTML, CSS, JavaScript and data directly. Rebuild original build sources in the host and publish again.", pending: "Source draft preserved", download: "Download file", operations: "Work actions", compact: "Compact display", full: "Full display", snapshot: "Save current state image", capturing: "Capturing the current state image…", noSnapshot: "This work has no image capture handler. Its saved parameters can still be referenced.", snapshotStopped: "The image capture did not finish before the work stopped.", snapshotChanged: "Parameters changed while the image was captured, so the old image was not saved.", snapshotInvalid: "The captured image format or size cannot be saved.", snapshotMissing: "The saved work no longer contains this artifact." },
+  ja: { run: "実行", stop: "停止", reload: "再実行", export: "作品を出力", source: "ソースと履歴", restore: "この版を復元", save: "ソースを保存", loading: "作品を開いています…", ready: "実行中", stopped: "停止中", saving: "パラメータを保存中…", saved: "パラメータを保存済み", selection: "選択", none: "未選択", retry: "保存を再試行", recover: "未保存のパラメータ", conflict: "未保存のパラメータを端末に保持しています。最新状態と比較してから再試行してください。", file: "素材ファイル", current: "現在の版", version: "以前の版", edit: "HTML、CSS、JavaScript、データを編集できます。ビルド元はホストで再ビルドして公開してください。", pending: "ソース下書きを保持", download: "ファイルを保存", operations: "作品の操作", compact: "コンパクト表示", full: "完全表示", snapshot: "現在の状態画像を保存", capturing: "現在の状態画像を取得しています…", noSnapshot: "この作品には画像取得ハンドラーがありません。保存済みの値は参照できます。", snapshotStopped: "作品を停止する前に画像取得が完了しませんでした。", snapshotChanged: "画像取得中に値が変わったため、古い画像は保存しませんでした。", snapshotInvalid: "取得した画像の形式またはサイズは保存できません。", snapshotMissing: "保存後の作品にこの作品ブロックはありません。" },
 };
 type Word = keyof typeof words.en;
 let framePolicy: Promise<void> | null = null;
@@ -38,7 +38,24 @@ function stateObject(value: unknown): value is Record<string, unknown> {
   try { return new TextEncoder().encode(JSON.stringify(value)).length <= 64_000; } catch { return false; }
 }
 
-/** A frame can report only its own data. It cannot send host commands or enqueue model work. */
+const MAX_PREVIEW_BYTES = 256 * 1024;
+function previewObject(value: unknown): value is ArtifactStatePreview {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const preview = value as Partial<ArtifactStatePreview>;
+  if (typeof preview.src !== "string" || typeof preview.alt !== "string" || preview.alt.length > 2000) return false;
+  if (new TextEncoder().encode(preview.src).length > MAX_PREVIEW_BYTES) return false;
+  return /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]*={0,2}$/i.test(preview.src) || preview.src.startsWith("/artifacts/");
+}
+
+type SnapshotResult = { state: Record<string, unknown>; preview: ArtifactStatePreview | null };
+type SnapshotWaiter = {
+  requestId: string;
+  timer: number;
+  resolve: (result: SnapshotResult) => void;
+  reject: (error: Error) => void;
+};
+
+/** A frame reports its own data and unused wheel input. Neither can enqueue model work. */
 export class ArtifactFrame {
   private reply!: BoardReply;
   private block!: ReplyArtifactBlock;
@@ -55,6 +72,11 @@ export class ArtifactFrame {
   private stateRevision = 0;
   private storageKey = "";
   private legacyStorageKey = "";
+  private presentationKey = "";
+  private presentation: "compact" | "full" = "full";
+  private presentationExplicit = false;
+  private naturalHeight = 480;
+  private presentationTicket = 0;
   private failed = false;
   private conflict = false;
   private sourceEpoch = 0;
@@ -65,18 +87,32 @@ export class ArtifactFrame {
   private deliveredInputRevision = -1;
   private stateGeneration = 0;
   private outputCandidate: { generation: number; revision: number; values: unknown } | null = null;
+  private captureAttempt: Promise<void> | null = null;
+  private captureSaving: Promise<void> | null = null;
+  private snapshotWaiter: SnapshotWaiter | null = null;
+  private readonly shell = el("section", "artifact-shell is-full");
   private readonly view = el("div", "artifact-viewport");
   private readonly status = el("span", "artifact-status");
+  private readonly notice = el("div", "artifact-inline-notice");
+  private readonly noticeText = el("span");
+  private readonly resume = button(t("run"), () => void this.start().catch(e => this.fail(e)));
   private readonly selection = el("p", "artifact-selection");
   private readonly description = el("p", "artifact-description");
   private readonly controls = el("div", "artifact-controls");
+  private readonly operations = el("details", "artifact-operations");
+  private readonly operationBody = el("div", "artifact-operation-body");
   private readonly sources = el("details", "artifact-sources");
   private readonly sourceBody = el("div", "artifact-source-body");
   private readonly toggle = button(t("stop"), () => { if (this.running) this.stop(); else void this.start().catch(e => this.fail(e)); });
+  private readonly reload = button(t("reload"), () => { this.stop(); void this.start().catch(e => this.fail(e)); });
+  private readonly exportWork = button(t("export"), () => void this.export().catch(e => this.fail(e)));
+  private readonly snapshot = button(t("snapshot"), () => void this.captureSnapshot().catch(e => this.fail(e)));
+  private readonly presentationToggle = button(t("compact"), () => this.setPresentation(this.presentation === "compact" ? "full" : "compact", true));
   private readonly retry = button(t("retry"), () => { this.failed = false; void this.flush().catch(e => this.fail(e)); });
   private readonly recover = button(t("recover"), () => void this.inspectState().catch(e => this.fail(e)));
   private readonly ready = (event: MessageEvent) => {
     if (!this.frame || event.source !== this.frame.contentWindow || event.data?.type !== "spellcast:ready") return;
+    this.abortSnapshot(t("snapshotStopped"));
     this.port?.close();
     const channel = new MessageChannel();
     const epoch = this.epoch;
@@ -84,22 +120,41 @@ export class ArtifactFrame {
     channel.port1.onmessage = event => { if (!this.dead && epoch === this.epoch) this.receive(event.data); };
     const inputs = this.inputs();
     this.deliveredInputRevision = inputs.revision;
-    this.frame.contentWindow!.postMessage({ type: "spellcast:init", state: this.local, inputs }, "*", [channel.port2]);
+    this.frame.contentWindow!.postMessage({ type: "spellcast:init", state: this.local, inputs, canvasWheel: Boolean(this.onCanvasWheel) }, "*", [channel.port2]);
     channel.port1.start();
   };
 
   constructor(private host: HTMLElement, private onReply: (reply: BoardReply) => void, private onError: (message: string) => void,
-    private restore: (bundle: string) => Promise<void>, private dataflow?: CanvasDataflow) {
+    private restore: (bundle: string) => Promise<void>, private dataflow?: CanvasDataflow,
+    private onPresentationChange?: (height: number, mode: "compact" | "full", explicit: boolean) => void,
+    private onCanvasWheel?: (clientX: number, clientY: number, deltaY: number) => void) {
     this.status.setAttribute("role", "status");
-    this.controls.append(this.toggle, button(t("reload"), () => { this.stop(); void this.start().catch(e => this.fail(e)); }),
-      button(t("export"), () => void this.export().catch(e => this.fail(e))), this.status, this.retry, this.recover);
+    this.notice.setAttribute("role", "status"); this.notice.hidden = true;
+    this.notice.append(this.noticeText, this.resume);
+    this.controls.append(this.toggle, this.status, this.presentationToggle);
     this.retry.hidden = this.recover.hidden = true;
     this.selection.setAttribute("aria-live", "polite");
     this.sources.append(el("summary", "", t("source")), this.sourceBody);
     this.sources.addEventListener("toggle", () => { if (this.sources.open && !this.sourceBody.childElementCount) void this.showSources().catch(e => this.fail(e)); });
-    this.host.append(this.description, this.controls, this.view, this.selection, this.sources);
+    this.operations.append(el("summary", "", t("operations")), this.operationBody);
+    this.operationBody.append(this.reload, this.exportWork, this.snapshot, this.retry, this.recover, this.sources);
+    this.shell.append(this.description, this.controls, this.view, this.selection, this.operations, this.notice);
+    this.host.append(this.shell);
     window.addEventListener("message", this.ready);
     this.unsubscribeData = this.dataflow?.subscribe(() => this.deliverInputs()) ?? null;
+  }
+
+  /** Only controls move into management; the live iframe stays in its original DOM position. */
+  manageIn(host: HTMLElement | null) {
+    if (host) host.append(this.description, this.controls, this.selection, this.operations);
+    else { this.shell.prepend(this.description, this.controls); this.shell.append(this.selection, this.operations); }
+  }
+
+  private setStatus(message: string, attention = false) {
+    this.status.textContent = message;
+    this.notice.hidden = !attention && this.running;
+    this.noticeText.textContent = !this.running && !attention ? t("stopped") : message;
+    this.resume.hidden = this.running || this.conflict;
   }
 
   update(reply: BoardReply, block: ReplyArtifactBlock) {
@@ -108,6 +163,11 @@ export class ArtifactFrame {
     this.description.textContent = block.description; this.description.hidden = !block.description.trim();
     this.legacyStorageKey = `spellcast.artifact-state.${JSON.stringify([reply.source_id, reply.id, block.id])}`;
     this.storageKey = reply.object_id ? `spellcast.artifact-state.${JSON.stringify([reply.object_id, block.id])}` : this.legacyStorageKey;
+    const nextPresentationKey = `spellcast.artifact-presentation.${JSON.stringify([reply.object_id ? "object" : "reply", reply.object_id ?? reply.id, block.id])}`;
+    if (this.presentationKey !== nextPresentationKey) {
+      this.presentationKey = nextPresentationKey;
+      this.restorePresentation();
+    }
     let legacyConflict = false;
     try {
       if (this.storageKey !== this.legacyStorageKey) {
@@ -127,7 +187,7 @@ export class ArtifactFrame {
         if (saved && stateObject(saved.state)) {
           if (saved.bundle === block.bundle_id && saved.revision === block.state_revision && !saved.merge_draft) {
             this.pending = this.local = saved.state;
-          } else { this.failed = this.conflict = true; this.running = false; this.toggle.textContent = t("run"); this.status.textContent = t("conflict"); this.recover.hidden = false; }
+          } else { this.failed = this.conflict = true; this.running = false; this.toggle.textContent = t("run"); this.setStatus(t("conflict"), true); this.recover.hidden = false; }
         }
       } catch (e) { this.failed = this.conflict = true; this.running = false; this.toggle.textContent = t("run"); this.recover.hidden = false; this.fail(e); }
       this.sourceEpoch++;
@@ -152,37 +212,127 @@ export class ArtifactFrame {
     }
     if (legacyConflict) {
       this.failed = this.conflict = true; this.running = false; this.stopFrame();
-      this.toggle.textContent = t("run"); this.status.textContent = t("conflict"); this.recover.hidden = false;
+      this.toggle.textContent = t("run"); this.setStatus(t("conflict"), true); this.recover.hidden = false;
     }
     this.paintSelection();
   }
 
+  private restorePresentation() {
+    this.presentationExplicit = false;
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(this.presentationKey); } catch { /* Natural sizing is safe when local storage is unavailable. */ }
+    if (saved === "compact" || saved === "full") {
+      this.presentationExplicit = true;
+      this.presentation = saved;
+      this.applyPresentation();
+      this.reportPresentation(false);
+      return;
+    }
+    this.setPresentation(this.naturalHeight <= 280 ? "compact" : "full", false);
+  }
+
+  private setPresentation(mode: "compact" | "full", explicit: boolean) {
+    if (!explicit && this.presentationExplicit) return;
+    if (explicit) {
+      this.presentationExplicit = true;
+      try { localStorage.setItem(this.presentationKey, mode); } catch { /* This affects only display preference. */ }
+    }
+    const changed = this.presentation !== mode;
+    this.presentation = mode;
+    this.applyPresentation();
+    if (changed || explicit) this.reportPresentation(explicit);
+  }
+
+  private applyPresentation() {
+    this.shell.classList.toggle("is-compact", this.presentation === "compact");
+    this.shell.classList.toggle("is-full", this.presentation === "full");
+    this.presentationToggle.textContent = this.presentation === "compact" ? t("full") : t("compact");
+    if (this.presentation === "compact") this.operations.open = false;
+    this.applyFrameHeight();
+  }
+
+  private applyFrameHeight() {
+    if (!this.frame) return;
+    const min = this.presentation === "compact" ? 80 : 360;
+    this.frame.style.height = `${Math.max(min, Math.min(2400, Math.ceil(this.naturalHeight)))}px`;
+  }
+
+  private reportPresentation(explicit: boolean) {
+    if (!this.onPresentationChange) return;
+    const ticket = ++this.presentationTicket;
+    window.requestAnimationFrame(() => {
+      if (this.dead || ticket !== this.presentationTicket || !this.onPresentationChange) return;
+      if (this.shell.closest(".rb-work-block")) {
+        // Canvas coordinates must not include screen zoom or the component's visual scale.
+        this.onPresentationChange(Math.max(this.presentation === "compact" ? 80 : 360, Math.min(2400, this.naturalHeight)), this.presentation, explicit);
+        return;
+      }
+      const shell = Math.ceil(this.shell.getBoundingClientRect().height);
+      const frame = Math.ceil(this.frame?.getBoundingClientRect().height ?? 0);
+      const fallback = Math.max(80, Math.min(2400, this.naturalHeight + 112));
+      const height = Math.max(80, Math.min(2400, shell || (frame ? frame + 112 : fallback)));
+      this.onPresentationChange(height, this.presentation, explicit);
+    });
+  }
+
   private fail(error: unknown) {
+    if (this.dead) return;
     const message = error instanceof Error ? error.message : String(error);
-    this.status.textContent = message; this.onError(message);
+    this.setStatus(message, true); this.onError(message);
   }
 
   private receive(message: unknown) {
     if (!message || typeof message !== "object") return;
     const data = message as { type: string; value: unknown };
-    if (data.type === "size" && typeof data.value === "number" && Number.isFinite(data.value)) {
-      if (this.frame) this.frame.style.height = `${Math.max(360, Math.min(2400, Math.ceil(data.value)))}px`;
+    if (data.type === "wheel") {
+      const wheel = data.value as { x?: unknown; y?: unknown; deltaY?: unknown } | null;
+      if (!this.onCanvasWheel || !this.frame?.matches(":hover") || !this.shell.closest(".canvas-frame.is-active") || document.querySelector("dialog[open]")) return;
+      if (!wheel || typeof wheel.x !== "number" || !Number.isFinite(wheel.x) || wheel.x < 0 || wheel.x > 1 ||
+        typeof wheel.y !== "number" || !Number.isFinite(wheel.y) || wheel.y < 0 || wheel.y > 1 || (wheel.deltaY !== -1 && wheel.deltaY !== 1)) return;
+      const rect = this.frame.getBoundingClientRect();
+      if (rect.width && rect.height) this.onCanvasWheel(rect.left + wheel.x * rect.width, rect.top + wheel.y * rect.height, wheel.deltaY);
       return;
     }
-    if (data.type === "ready") { if (this.dataToken) this.dataflow?.ready(this.dataToken); if (!this.failed) this.status.textContent = t("ready"); return; }
-    if (data.type === "error" && typeof data.value === "string") {
-      if (this.dataToken) this.dataflow?.error(this.dataToken, data.value);
-      this.fail(data.value.slice(0, 2000)); return;
+    if (data.type === "size" && typeof data.value === "number" && Number.isFinite(data.value)) {
+      this.naturalHeight = Math.max(0, Math.ceil(data.value));
+      if (!this.presentationExplicit) this.setPresentation(this.naturalHeight <= 280 ? "compact" : "full", false);
+      this.applyFrameHeight();
+      return;
+    }
+    if (data.type === "ready") { if (this.dataToken) this.dataflow?.ready(this.dataToken); if (!this.failed) this.setStatus(t("ready")); return; }
+    if (data.type === "snapshot") {
+      const value = data.value as { request_id?: unknown; state?: unknown; preview?: unknown } | null;
+      const waiter = this.snapshotWaiter;
+      if (!waiter || !value || value.request_id !== waiter.requestId) return;
+      this.clearSnapshotWaiter(waiter);
+      if (!stateObject(value.state)) { waiter.reject(new Error(t("snapshotInvalid"))); return; }
+      waiter.resolve({ state: value.state, preview: value.preview === null ? null : value.preview as ArtifactStatePreview });
+      return;
+    }
+    if (data.type === "error") {
+      const value = data.value as { request_id?: unknown; message?: unknown } | null;
+      const waiter = this.snapshotWaiter;
+      if (waiter && value && value.request_id === waiter.requestId && typeof value.message === "string") {
+        this.clearSnapshotWaiter(waiter);
+        waiter.reject(new Error(value.message === "State changed before the snapshot completed." ? t("snapshotChanged") : value.message.slice(0, 2000)));
+        return;
+      }
+      if (typeof data.value === "string") {
+        if (this.dataToken) this.dataflow?.error(this.dataToken, data.value);
+        this.fail(data.value.slice(0, 2000));
+      }
+      return;
     }
     if (data.type === "outputs") {
       const output = data.value as { revision?: unknown; values?: unknown } | null;
       if (!output || !Number.isSafeInteger(output.revision) || (output.revision as number) < 0) return;
       const candidate = { generation: this.stateGeneration, revision: output.revision as number, values: output.values };
-      if (this.pending || this.saving) this.outputCandidate = candidate;
+      if (this.pending || this.saving || this.captureSaving) this.outputCandidate = candidate;
       else if (this.dataToken) this.dataflow?.publish(this.dataToken, candidate.revision, candidate.values);
       return;
     }
     if (data.type !== "state" || !stateObject(data.value)) return;
+    this.abortSnapshot(t("snapshotChanged"));
     this.stateGeneration++; this.outputCandidate = null;
     if (this.dataToken) this.dataflow?.invalidate(this.dataToken, "work state changed");
     this.local = structuredClone(data.value); this.pending = this.local; this.paintSelection();
@@ -196,10 +346,11 @@ export class ArtifactFrame {
   async flush(): Promise<void> {
     window.clearTimeout(this.timer);
     if (this.conflict) throw new Error(t("conflict"));
+    if (this.captureSaving) { await this.captureSaving; if (this.pending) await this.flush(); return; }
     if (this.saving) { await this.saving; if (this.pending) await this.flush(); return; }
     if (!this.pending) { if (this.failed) throw new Error(t("conflict")); return; }
     const state = this.pending, block = this.block, reply = this.reply, key = this.storageKey, generation = this.stateGeneration;
-    this.status.textContent = t("saving");
+    this.setStatus(t("saving"));
     this.saving = (async () => {
       try {
         const result = await saveArtifactState({ object_id: reply.object_id, reply_id: reply.id, block_id: block.id, bundle_id: block.bundle_id,
@@ -215,7 +366,7 @@ export class ArtifactFrame {
           try { localStorage.setItem(key, JSON.stringify({ bundle: block.bundle_id, revision: this.stateRevision, state: this.pending })); } catch { /* The most recent in-memory parameters remain available. */ }
         }
         this.failed = false; this.retry.hidden = this.recover.hidden = true;
-        this.status.textContent = t("saved"); this.onReply(result);
+        this.setStatus(t("saved")); this.onReply(result);
         const candidate = this.outputCandidate;
         if (!this.pending && candidate?.generation === generation && this.dataToken &&
           this.dataflow?.publish(this.dataToken, candidate.revision, candidate.values)) this.outputCandidate = null;
@@ -226,6 +377,86 @@ export class ArtifactFrame {
     })();
     await this.saving;
     if (this.pending && !this.failed) await this.flush();
+  }
+
+  private captureSnapshot(): Promise<void> {
+    if (this.captureAttempt) return this.captureAttempt;
+    const attempt = this.captureSnapshotNow();
+    this.captureAttempt = attempt;
+    const clear = () => { if (this.captureAttempt === attempt) this.captureAttempt = null; };
+    void attempt.then(clear, clear);
+    return attempt;
+  }
+
+  private async captureSnapshotNow(): Promise<void> {
+    await this.flush();
+    if (this.dead || !this.running || !this.frame || !this.port) throw new Error(t("snapshotStopped"));
+    const captured = { bundle: this.block.bundle_id, revision: this.stateRevision, generation: this.stateGeneration };
+    const work = (async () => {
+      this.setStatus(t("capturing"));
+      const result = await this.requestSnapshot();
+      if (result.preview === null) { this.setStatus(t("noSnapshot")); return; }
+      if (!previewObject(result.preview)) throw new Error(t("snapshotInvalid"));
+      if (this.dead || this.block.bundle_id !== captured.bundle || this.stateRevision !== captured.revision ||
+        this.stateGeneration !== captured.generation || this.pending || this.saving || contentKey(result.state) !== contentKey(this.local)) {
+        throw new Error(t("snapshotChanged"));
+      }
+      this.setStatus(t("saving"));
+      const reply = await saveArtifactState({ object_id: this.reply.object_id, reply_id: this.reply.id, block_id: this.block.id,
+        bundle_id: captured.bundle, expected_state_revision: captured.revision, state: result.state, preview: result.preview });
+      if (this.dead || this.block.bundle_id !== captured.bundle) return;
+      const updated = reply.blocks.find((block): block is ReplyArtifactBlock => block.id === this.block.id && block.type === "artifact");
+      if (!updated) throw new Error(t("snapshotMissing"));
+      this.stateRevision = updated.state_revision;
+      if (this.dataToken) this.dataflow?.commit(this.dataToken, this.stateRevision);
+      if (this.pending) {
+        try { localStorage.setItem(this.storageKey, JSON.stringify({ bundle: captured.bundle, revision: this.stateRevision, state: this.pending })); }
+        catch { /* The latest parameters are still held in memory. */ }
+      }
+      this.setStatus(t("saved"));
+      this.onReply(reply);
+    })();
+    this.captureSaving = work;
+    try {
+      await work;
+    } finally {
+      if (this.captureSaving === work) this.captureSaving = null;
+      if (this.pending && !this.failed && !this.dead) void this.flush().catch(error => this.fail(error));
+    }
+  }
+
+  private requestSnapshot(): Promise<SnapshotResult> {
+    const port = this.port;
+    if (!port) return Promise.reject(new Error(t("snapshotStopped")));
+    const requestId = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `snapshot-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise<SnapshotResult>((resolve, reject) => {
+      const waiter: SnapshotWaiter = {
+        requestId,
+        timer: window.setTimeout(() => {
+          if (this.snapshotWaiter === waiter) {
+            this.snapshotWaiter = null;
+            reject(new Error(t("snapshotStopped")));
+          }
+        }, 12_000),
+        resolve,
+        reject,
+      };
+      this.snapshotWaiter = waiter;
+      try { port.postMessage({ type: "snapshot", request_id: requestId }); }
+      catch (error) { this.clearSnapshotWaiter(waiter); reject(error instanceof Error ? error : new Error(String(error))); }
+    });
+  }
+
+  private clearSnapshotWaiter(waiter: SnapshotWaiter) {
+    window.clearTimeout(waiter.timer);
+    if (this.snapshotWaiter === waiter) this.snapshotWaiter = null;
+  }
+
+  private abortSnapshot(message: string) {
+    const waiter = this.snapshotWaiter;
+    if (!waiter) return;
+    this.clearSnapshotWaiter(waiter);
+    waiter.reject(new Error(message));
   }
 
   private paintSelection() {
@@ -253,7 +484,7 @@ export class ArtifactFrame {
     if (this.dead || !this.block) return;
     if (this.conflict) throw new Error(t("conflict"));
     this.stopFrame(); this.running = true; this.toggle.textContent = t("stop");
-    if (!this.failed) this.status.textContent = t("loading");
+    if (!this.failed) this.setStatus(t("loading"));
     const epoch = this.epoch, id = this.block.bundle_id;
     const [bundle, base] = await Promise.all([fetchArtifact(id), apiBase(), constrainFrames()]);
     if (this.dead || epoch !== this.epoch || id !== this.block.bundle_id) return;
@@ -264,12 +495,13 @@ export class ArtifactFrame {
     frame.sandbox.add("allow-scripts", "allow-forms", "allow-downloads");
     frame.referrerPolicy = "no-referrer";
     frame.allow = "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'";
-    frame.src = `${base}/artifacts/${encodeURIComponent(id)}/${bundle.entry.split("/").map(encodeURIComponent).join("/")}`;
-    this.frame = frame; this.view.replaceChildren(frame);
+    frame.src = `${base}/artifacts/${encodeURIComponent(id)}/${bundle.entry.split("/").map(encodeURIComponent).join("/")}?__spellcast_shell=wheel-1`;
+    this.frame = frame; this.view.replaceChildren(frame); this.applyFrameHeight();
     if (this.pending && !this.failed) void this.flush().catch(e => this.fail(e));
   }
 
   private stopFrame() {
+    this.abortSnapshot(t("snapshotStopped"));
     if (this.dataToken) this.dataflow?.unregister(this.dataToken);
     this.dataToken = null; this.deliveredInputRevision = -1; this.outputCandidate = null;
     this.epoch++; this.port?.close(); this.port = null;
@@ -277,7 +509,7 @@ export class ArtifactFrame {
   }
 
   private stop() {
-    this.running = false; this.stopFrame(); this.toggle.textContent = t("run"); this.status.textContent = t("stopped");
+    this.running = false; this.stopFrame(); this.toggle.textContent = t("run"); this.setStatus(t("stopped"), true);
     if (this.pending && !this.failed) void this.flush().catch(e => this.fail(e));
   }
 
@@ -331,7 +563,7 @@ export class ArtifactFrame {
           this.failed = this.conflict = false; this.pending = null;
           const updated = next.blocks.find(b => b.id === block.id) as ReplyArtifactBlock;
           this.local = structuredClone(updated.state ?? {}); this.stateRevision = updated.state_revision;
-          this.retry.hidden = this.recover.hidden = true; this.status.textContent = t("saved"); this.sourceBody.replaceChildren(); this.sources.open = false; this.sourceMode = "files"; this.sources.querySelector("summary")!.textContent = t("source"); this.onReply(next);
+          this.retry.hidden = this.recover.hidden = true; this.setStatus(t("saved")); this.sourceBody.replaceChildren(); this.sources.open = false; this.sourceMode = "files"; this.sources.querySelector("summary")!.textContent = t("source"); this.onReply(next);
         }).catch(e => this.fail(e)).finally(() => { apply.disabled = false; });
     });
     this.sourceBody.replaceChildren(el("p", "", t("conflict")), current, text, apply, button(t("download"), () => download(text.value, "unsaved-parameters.json", "application/json")));

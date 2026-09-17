@@ -340,8 +340,7 @@ try {
   const published = await board();
   const workObject = published.canvas.objects.find(item => item.content.type === 'reply' && item.content.id === workReply.id);
   const workPose = published.canvas.items.find(item => item.item_id === workObject.id);
-  const placedWork = await call('spellcast_canvas_batch', {
-    source_id: 'states-studio',
+  const placedWork = await api('/api/canvas/batch', 'POST', {
     request_id: 'states-place-work',
     operations: [{ op: 'place', id: workObject.id, expected_revision: workPose.revision, fields: { x: 400, y: 48, width: 560, height: 380 } }],
   });

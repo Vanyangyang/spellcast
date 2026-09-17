@@ -87,6 +87,7 @@ export async function fetchBoard(): Promise<BoardSnapshot> {
 
 export async function actOnCanvasBlock(id: string, request: {
   expected_revision: number; block_id: string; action: "ask" | "select";
+  anchors?: CanvasAnchor[];
   request_id?: string; source_id?: string | null; option_id?: string; text?: string;
 }): Promise<{ board: BoardSnapshot; event: AgentEvent }> {
   return requestOnce(`canvas-block:${id}`, request, value => post(`/api/canvas/blocks/${encodeURIComponent(id)}/action`, value).then(read<{ board: BoardSnapshot; event: AgentEvent }>));
@@ -191,6 +192,7 @@ export async function describeClient(client: string, url: string): Promise<Clien
   const snippets: Record<string, string> = {
     cursor: JSON.stringify({ mcpServers: { spellcast: { type: "http", url } } }, null, 2),
     codex: `[mcp_servers.spellcast]\nenabled = true\nurl = ${JSON.stringify(url)}\n`,
+    grok: `[mcp_servers.spellcast]\nenabled = true\nurl = ${JSON.stringify(url)}\n`,
     windsurf: JSON.stringify({ mcpServers: { spellcast: { serverUrl: url } } }, null, 2),
     "claude-code": JSON.stringify({ mcpServers: { spellcast: { type: "http", url } } }, null, 2),
     generic: JSON.stringify({ mcpServers: { spellcast: { url } } }, null, 2),
@@ -219,7 +221,7 @@ export async function installClientSkill(client: string): Promise<SkillInstall> 
 
 export async function completeSetupStatus(client: string, url: string): Promise<SetupReport> {
   if (!inTauri()) {
-    const desktop = client === "codex";
+    const desktop = client === "codex" || client === "grok";
     return {
       client,
       kind: desktop ? "not_installed" : "unsupported",
@@ -269,7 +271,7 @@ export async function editArtifactFile(req: { object_id?: string; reply_id: stri
   return requestOnce("artifact-edit", req, async request => read(await post("/api/artifacts/edit", request)));
 }
 
-export async function saveArtifactState(req: { object_id?: string; reply_id: string; block_id: string; bundle_id: string; expected_state_revision: number; state: Record<string, unknown> }): Promise<BoardReply> {
+export async function saveArtifactState(req: { object_id?: string; reply_id: string; block_id: string; bundle_id: string; expected_state_revision: number; state: Record<string, unknown>; preview?: import("./reply-types").ArtifactStatePreview }): Promise<BoardReply> {
   return read(await post("/api/artifacts/state", req));
 }
 

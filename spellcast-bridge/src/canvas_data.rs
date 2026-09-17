@@ -48,6 +48,12 @@ impl Bridge {
 
     /// The host validates declarations and version provenance, not an iframe's computation.
     pub(crate) fn validate_input_anchor(&self, session: &Session, anchor: &CanvasAnchor) -> Result<(), SpellcastError> {
+        if session.board.canvas.object(&anchor.object_id).is_none()
+            && anchor.inputs.is_none()
+            && !anchor.annotations.is_empty()
+        {
+            return Ok(());
+        }
         let ports = self.input_ports(session, anchor)?;
         let Some(snapshot) = &anchor.inputs else {
             return if ports.is_empty() { Ok(()) } else { Err(error("反馈需要携带当前连接输入；请重新选择对象。")) };

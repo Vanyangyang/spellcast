@@ -1,0 +1,79 @@
+/* Persistent, canvas-only annotation panel. The list scrolls while editor actions stay available. */
+.board-dialog.canvas-annotations {
+  width: min(760px, calc(100vw - 32px));
+  height: min(850px, calc(100vh - 32px));
+  max-height: calc(100vh - 32px);
+  box-sizing: border-box;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--studio-line, rgba(28, 26, 22, .14));
+  border-radius: 16px;
+  background: var(--studio-paper, #fffcf7);
+  color: var(--studio-ink, #1c1a16);
+  box-shadow: var(--studio-shadow, 0 18px 54px rgba(28, 26, 22, .18));
+  font: 14px/1.55 var(--font, system-ui, sans-serif);
+}
+.board-dialog.canvas-annotations[open] { display: flex; flex-direction: column; }
+.board-dialog.canvas-annotations::backdrop { background: rgba(22, 20, 18, .36); backdrop-filter: blur(4px); }
+.canvas-annotations-head { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 22px 0; }
+.canvas-annotations-head h2 { margin: 0; font: 600 21px/1.25 var(--font, system-ui, sans-serif); }
+.canvas-annotations-close { flex: none; width: 32px; min-height: 32px; padding: 0; border: 1px solid var(--studio-line, rgba(28, 26, 22, .14)); border-radius: 8px; background: var(--studio-canvas, #f7f6f2); color: var(--studio-soft, #5c574e); font-size: 20px; line-height: 1; cursor: pointer; }
+.board-dialog.canvas-annotations > .canvas-annotations-help { flex: none; margin: 7px 0 0; padding-inline: 22px; color: var(--studio-soft, #5c574e); font-size: 13px; }
+.canvas-annotations-controls { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 7px; padding: 14px 22px 12px; border-bottom: 1px solid var(--studio-line, rgba(28, 26, 22, .12)); }
+.canvas-annotations-controls button, .canvas-annotation-actions button, .canvas-annotation-editor-actions button { min-height: 32px; padding: 0 10px; border: 1px solid var(--studio-line, rgba(28, 26, 22, .14)); border-radius: 8px; background: var(--studio-canvas, #f7f6f2); color: var(--studio-ink, #1c1a16); font: 500 12px/1 var(--font, system-ui, sans-serif); cursor: pointer; }
+.canvas-annotations-controls button:hover:not(:disabled), .canvas-annotation-actions button:hover:not(:disabled), .canvas-annotation-editor-actions button:hover:not(:disabled), .canvas-annotations-close:hover:not(:disabled) { border-color: var(--studio-line-strong, rgba(28, 26, 22, .27)); background: var(--studio-canvas-2, #efeee7); }
+.canvas-annotations-controls button:focus-visible, .canvas-annotation-actions button:focus-visible, .canvas-annotation-editor-actions button:focus-visible, .canvas-annotations-close:focus-visible, .canvas-annotation-input:focus-visible { outline: 2px solid var(--studio-lilac, #9e7cc0); outline-offset: 2px; }
+.canvas-annotations-controls button:disabled, .canvas-annotation-actions button:disabled, .canvas-annotation-editor-actions button:disabled, .canvas-annotations-close:disabled { opacity: .55; cursor: not-allowed; }
+.canvas-annotations-scope[aria-pressed=true] { border-color: var(--studio-mint, #2a8a78); background: var(--studio-mint-soft, #d8ebe4); }
+.canvas-annotations-secondary { color: var(--studio-soft, #5c574e) !important; }
+.canvas-annotations-add { margin-left: auto; border-color: var(--studio-mint, #2a8a78) !important; background: var(--studio-mint, #2a8a78) !important; color: var(--studio-paper, #fffcf7) !important; }
+.canvas-annotations-list { display: grid; flex: 1 1 auto; min-height: 0; align-content: start; gap: 10px; overflow: auto; padding: 14px 22px 18px; overscroll-behavior: contain; scrollbar-color: var(--studio-line-strong, #c9c4b8) transparent; }
+.canvas-annotations-empty { margin: 24px 0; padding: 26px 14px; border: 1px dashed var(--studio-line, rgba(28, 26, 22, .18)); border-radius: 10px; color: var(--studio-soft, #5c574e); text-align: center; }
+.canvas-annotation-card { min-width: 0; padding: 14px; border: 1px solid var(--studio-line, rgba(28, 26, 22, .14)); border-radius: 12px; background: var(--studio-canvas, #f7f6f2); }
+.canvas-annotation-card.is-editing { border-color: var(--studio-lilac, #9e7cc0); box-shadow: inset 3px 0 var(--studio-lilac, #9e7cc0); }
+.canvas-annotation-card.is-located { animation: canvas-annotation-locate 1.8s ease-out both; }
+.canvas-annotation-card.is-removed { opacity: .76; }
+.canvas-annotation-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.canvas-annotation-source { min-width: 0; margin: 0; overflow-wrap: anywhere; font: 600 14px/1.4 var(--font, system-ui, sans-serif); }
+.canvas-annotation-meta { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 5px; max-width: 48%; }
+.canvas-annotation-author, .canvas-annotation-state { padding: 2px 6px; border-radius: 999px; color: var(--studio-soft, #5c574e); background: var(--studio-canvas-2, #edede7); font-size: 11px; line-height: 1.4; white-space: nowrap; }
+.canvas-annotation-state.is-updated { color: #725824; background: #f6ecd2; }
+.canvas-annotation-state.is-removed, .canvas-annotation-state.is-unavailable { color: #8b4c35; background: #f9e3dc; }
+.canvas-annotation-original, .canvas-annotation-body { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--studio-line, rgba(28, 26, 22, .1)); }
+.canvas-annotation-kicker { display: block; margin-bottom: 4px; color: var(--studio-mute, #80796e); font-size: 11px; }
+.canvas-annotation-original-text { margin: 0; color: var(--studio-soft, #5c574e); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.canvas-annotation-rendered { min-width: 0; color: var(--studio-ink, #1c1a16); overflow-wrap: anywhere; }
+.canvas-annotation-rendered > :first-child { margin-top: 0; }
+.canvas-annotation-rendered > :last-child { margin-bottom: 0; }
+.canvas-annotation-media { display: grid; gap: 8px; margin-top: 10px; }
+.canvas-annotation-media .rb-image-reference { max-width: 340px; margin: 0; }
+.canvas-annotation-media .rb-image-pixels { max-height: 190px; }
+.canvas-annotation-artifact { margin: 0; padding: 8px 10px; border-left: 3px solid var(--studio-lilac, #9e7cc0); border-radius: 0 7px 7px 0; background: var(--studio-canvas-2, #efeee8); color: var(--studio-soft, #5c574e); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.canvas-annotation-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.canvas-annotation-actions .canvas-annotation-discuss { border-color: #9ac4b7; background: #e8f1ec; color: #255d50; }
+.canvas-annotation-actions .canvas-annotation-danger { margin-left: auto; color: #8a4032; }
+.canvas-annotation-editor { display: grid; flex: none; gap: 8px; max-height: min(46vh, 380px); overflow: auto; padding: 14px 22px 16px; border-top: 1px solid var(--studio-line, rgba(28, 26, 22, .14)); background: var(--studio-paper, #fffcf7); }
+.canvas-annotation-editor[hidden] { display: none; }
+.canvas-annotation-editor h3 { margin: 0; font: 600 15px/1.35 var(--font, system-ui, sans-serif); }
+.canvas-annotation-target { margin: 0; color: var(--studio-soft, #5c574e); font-size: 12px; overflow-wrap: anywhere; }
+.canvas-annotation-input { width: 100%; min-height: 92px; box-sizing: border-box; resize: vertical; padding: 9px 11px; border: 1px solid var(--studio-line, rgba(28, 26, 22, .16)); border-radius: 9px; background: var(--studio-canvas, #f7f6f2); color: var(--studio-ink, #1c1a16); font: 14px/1.55 var(--font, system-ui, sans-serif); }
+.canvas-annotation-input[readonly] { color: var(--studio-soft, #5c574e); background: var(--studio-canvas-2, #efeee8); }
+.canvas-annotation-count { color: var(--studio-mute, #80796e); font-size: 11px; text-align: right; }
+.canvas-annotation-error { margin: 0; padding: 7px 9px; border: 1px solid rgba(177, 69, 43, .32); border-radius: 8px; background: rgba(177, 69, 43, .08); color: #8c3728; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.canvas-annotation-error[hidden] { display: none; }
+.canvas-annotation-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.canvas-annotation-editor-actions .canvas-annotations-save { margin-left: auto; border-color: var(--studio-mint, #2a8a78); background: var(--studio-mint, #2a8a78); color: var(--studio-paper, #fffcf7); }
+.canvas-annotations-footer { flex: none; margin: 0; padding: 9px 22px 13px; border-top: 1px solid var(--studio-line, rgba(28, 26, 22, .1)); color: var(--studio-mute, #80796e); background: var(--studio-paper, #fffcf7); font-size: 11px; line-height: 1.45; }
+@keyframes canvas-annotation-locate { 0%, 55% { border-color: var(--studio-mint, #2a8a78); box-shadow: 0 0 0 4px color-mix(in srgb, var(--studio-mint, #2a8a78) 28%, transparent); } 100% { border-color: var(--studio-line, rgba(28, 26, 22, .14)); box-shadow: none; } }
+@media (max-width: 620px) {
+  .board-dialog.canvas-annotations { width: calc(100vw - 18px); height: calc(100vh - 18px); max-height: calc(100vh - 18px); border-radius: 12px; }
+  .canvas-annotations-head { padding: 15px 15px 0; }
+  .board-dialog.canvas-annotations > .canvas-annotations-help { padding-inline: 15px; }
+  .canvas-annotations-controls { padding-inline: 15px; }
+  .canvas-annotations-add { margin-left: 0; }
+  .canvas-annotations-list { padding-inline: 15px; }
+  .canvas-annotation-editor { padding-inline: 15px; }
+  .canvas-annotations-footer { padding-inline: 15px; }
+  .canvas-annotation-card-head { display: grid; gap: 7px; }
+  .canvas-annotation-meta { justify-content: flex-start; max-width: none; }
+}

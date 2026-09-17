@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 pub struct CanvasAnchor {
     pub object_id: String,
     pub content_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<CanvasSubtarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<crate::reply::ReplyImageReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_reference: Option<crate::reply::ReplyArtifactReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<CanvasAnnotationAnchor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub compositions: Vec<CanvasCompositionAnchor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -20,6 +28,21 @@ pub struct CanvasAnchor {
     pub artifact: Option<CanvasArtifactAnchor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs: Option<CanvasInputSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct CanvasAnnotationAnchor {
+    pub id: String,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CanvasSubtarget {
+    Option { id: String },
+    Step { id: String },
+    GraphNode { id: String },
+    GraphEdge { id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -38,7 +61,10 @@ pub struct CanvasInputSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum CanvasPortStatus { Available, Unavailable }
+pub enum CanvasPortStatus {
+    Available,
+    Unavailable,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -99,6 +125,9 @@ pub struct AgentEvent {
     pub object_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub anchors: Vec<CanvasAnchor>,
+    /// Backend-copied annotation snapshots used to interpret this exact send.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotation_context: Vec<crate::canvas::CanvasAnnotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -173,6 +202,7 @@ impl AgentEvent {
             object_id: None,
             object_revision: None,
             anchors: Vec::new(),
+            annotation_context: Vec::new(),
             reply_id: None,
             block_id: None,
             option_id: None,

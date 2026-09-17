@@ -778,6 +778,16 @@ body.mode-focus #desktop {
   line-height: 1.45;
 }
 
+.observer-points {
+  margin: 0;
+  padding-left: 1.15em;
+  color: var(--mute);
+  font-size: 12px;
+  line-height: 1.5;
+  display: grid;
+  gap: 4px;
+}
+
 .agent-url,
 .agent-result,
 .settings-file,

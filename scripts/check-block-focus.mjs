@@ -51,14 +51,14 @@ try {
   });
   const page = await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror', error => report.errors.push(error.message));
   await page.goto(origin); await page.locator('.canvas-frame').waitFor({ state: 'attached' });
-  await page.waitForFunction(()=>document.querySelector('#send').textContent==='发送到 Codex' && document.querySelector('#recipient-workspace').options.length>1);
+  await page.waitForFunction(()=>document.querySelector('#send').textContent==='发送' && document.querySelector('#recipient-workspace').options.length>1);
   await page.mouse.click(1280,420);
   await page.waitForFunction(()=>document.querySelector('#form-reason').textContent.includes('先选择'));
   assert.equal(await page.locator('#send').isDisabled(),true);
   assert.equal(await page.locator('#input').isDisabled(),true);
   assert.equal(await page.locator('#recipient').isDisabled(),true);
   assert.deepEqual(await page.locator('#recipient option').evaluateAll(options=>options.map(o=>o.value)),['']);
-  assert.equal(await page.locator('#send').textContent(),'发送到 Codex');
+  assert.equal(await page.locator('#send').textContent(),'发送');
   assert.equal(await page.locator('#recipient-route').isHidden(),true);
   await page.selectOption('#canvas-workspace-select', 'all');
   const frame = page.locator('.canvas-frame[data-item-id="object"]');

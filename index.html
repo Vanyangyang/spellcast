@@ -115,7 +115,7 @@
 
       <div class="agent-observer">
         <label class="observer-switch" for="agent-observer-enabled">
-          <span class="observer-switch-title" data-i18n="observer.title"></span>
+          <span class="observer-switch-title" data-i18n="observer.enable"></span>
           <span class="observer-switch-side">
             <input id="agent-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
             <span class="observer-switch-track" aria-hidden="true"></span>
@@ -125,6 +125,11 @@
             </span>
           </span>
         </label>
+        <p class="agent-observer-hint" data-i18n="observer.lead"></p>
+        <ul class="observer-points">
+          <li data-i18n="observer.onMeans"></li>
+          <li data-i18n="observer.offMeans"></li>
+        </ul>
         <p class="agent-observer-hint" data-i18n="observer.body"></p>
         <p id="agent-observer-error" class="hint has-warning" role="alert" hidden></p>
       </div>
@@ -138,19 +143,21 @@
       </div>
 
       <div id="agent-clients" class="agent-clients" data-i18n-aria="agent.connect">
-        <button type="button" data-client="cursor" disabled>Cursor</button>
+        <button type="button" data-client="cursor">Cursor</button>
         <button type="button" data-client="claude-code" disabled>Claude Code</button>
         <button type="button" data-client="codex">Codex</button>
+        <button type="button" data-client="grok">Grok Build</button>
         <button type="button" data-client="windsurf" disabled>Windsurf</button>
         <button type="button" data-client="generic" disabled data-i18n="agent.client.other"></button>
       </div>
 
       <div id="agent-result" class="agent-result" hidden>
-        <p class="hint" data-i18n="setup.codexOnly"></p>
+        <p class="hint" data-i18n="settings.body" data-setup-body></p>
         <p id="agent-setup-status" class="setup-status"></p>
         <p id="agent-setup-hint" class="hint"></p>
         <div class="config-actions">
           <button type="button" id="agent-complete-setup" class="primary" data-i18n="setup.install"></button>
+          <button type="button" data-setup-refresh class="ghost" data-i18n="setup.check"></button>
         </div>
         <details class="setup-details" hidden>
           <summary data-i18n="setup.details"></summary>
@@ -168,36 +175,105 @@
     <dialog id="settings" class="settings" aria-labelledby="settings-title" tabindex="-1" hidden>
       <section class="settings-sheet">
         <header class="settings-head">
-          <p class="eyebrow" data-i18n="settings.eyebrow"></p>
+          <h2 id="settings-title" data-i18n="settings.title"></h2>
           <button type="button" id="settings-close" class="ghost" data-i18n="settings.close"></button>
         </header>
-        <h2 id="settings-title" data-i18n="settings.title"></h2>
+
+        <section class="setup-card" aria-labelledby="settings-connection-title">
+          <div class="setup-card-heading">
+            <h3 id="settings-connection-title" data-i18n="setup.title" data-setup-title></h3>
+            <span class="setup-required" data-i18n="setup.required"></span>
+          </div>
+          <div class="agent-status setup-connection-status">
+            <span id="settings-agent-dot" class="agent-dot" aria-hidden="true"></span>
+            <div id="settings-agent-seen" data-i18n="agent.none"></div>
+          </div>
+          <p class="settings-body" data-i18n="settings.body" data-setup-body></p>
+          <div class="setup-clients">
+            <p class="setup-clients-label" data-i18n="agent.connect"></p>
+            <div class="agent-clients">
+              <button type="button" data-client="cursor">Cursor</button>
+              <button type="button" data-client="codex">Codex</button>
+              <button type="button" data-client="grok">Grok Build</button>
+            </div>
+            <p class="hint" data-i18n="setup.clientsHint" data-setup-clients-hint></p>
+          </div>
+          <ul class="setup-components">
+            <li>
+              <div>
+                <div class="setup-component-name">
+                  <strong data-i18n="setup.hooksName"></strong>
+                  <span class="setup-component-term">Hooks</span>
+                </div>
+                <p data-i18n="setup.hooksDescription" data-setup-hooks-desc></p>
+              </div>
+              <span data-setup-component="hooks" class="setup-component-status">—</span>
+            </li>
+            <li>
+              <div>
+                <div class="setup-component-name">
+                  <strong data-i18n="setup.skillName"></strong>
+                  <span class="setup-component-term">Skill</span>
+                </div>
+                <p data-i18n="setup.skillDescription" data-setup-skill-desc></p>
+              </div>
+              <span data-setup-component="skill" class="setup-component-status">—</span>
+            </li>
+            <li>
+              <div>
+                <div class="setup-component-name">
+                  <strong data-i18n="setup.mcpName"></strong>
+                  <span class="setup-component-term">MCP</span>
+                </div>
+                <p data-i18n="setup.mcpDescription" data-setup-mcp-desc></p>
+              </div>
+              <span data-setup-component="mcp" class="setup-component-status">—</span>
+            </li>
+          </ul>
+          <div class="setup-summary" aria-live="polite" aria-atomic="true">
+            <p id="settings-setup-status" class="setup-status"></p>
+            <p id="settings-setup-hint" class="hint"></p>
+          </div>
+          <div class="config-actions setup-actions">
+            <button type="button" id="settings-complete-setup" class="primary" data-i18n="setup.install"></button>
+            <button type="button" data-setup-refresh class="ghost" data-i18n="setup.check"></button>
+          </div>
+        </section>
 
         <section class="settings-observer" aria-labelledby="settings-observer-title">
-          <h3 id="settings-observer-title" data-i18n="observer.title"></h3>
-          <p class="settings-body" data-i18n="observer.body"></p>
-          <label class="observer-switch" for="settings-observer-enabled">
-            <span class="observer-switch-title" data-i18n="observer.title"></span>
-            <span class="observer-switch-side">
-              <input id="settings-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
-              <span class="observer-switch-track" aria-hidden="true"></span>
-              <span class="observer-switch-state">
-                <span class="observer-state-on" data-i18n="observer.on"></span>
-                <span class="observer-state-off" data-i18n="observer.off"></span>
+          <div class="setup-card-heading setup-observer-head">
+            <div class="setup-observer-title">
+              <h3 id="settings-observer-title" data-i18n="observer.title"></h3>
+              <span class="setup-required" data-i18n="setup.optional"></span>
+            </div>
+            <label class="observer-switch" for="settings-observer-enabled">
+              <span class="observer-switch-title" data-i18n="observer.enable"></span>
+              <span class="observer-switch-side">
+                <input id="settings-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
+                <span class="observer-switch-track" aria-hidden="true"></span>
+                <span class="observer-switch-state">
+                  <span class="observer-state-on" data-i18n="observer.on"></span>
+                  <span class="observer-state-off" data-i18n="observer.off"></span>
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+          </div>
+          <p class="settings-body" data-i18n="observer.lead"></p>
+          <ul class="observer-points">
+            <li data-i18n="observer.onMeans"></li>
+            <li data-i18n="observer.offMeans"></li>
+          </ul>
+          <p class="settings-body" data-i18n="observer.body"></p>
           <p id="settings-observer-error" class="hint has-warning" role="alert" hidden></p>
         </section>
 
-        <p class="eyebrow" data-i18n="settings.eyebrow"></p>
-        <p class="settings-body" data-i18n="settings.body"></p>
-
+        <details class="settings-connection-details">
+          <summary data-i18n="setup.connectionDetails"></summary>
+          <div class="settings-connection-content">
         <div class="agent-status">
-          <span id="settings-agent-dot" class="agent-dot"></span>
-          <span id="settings-agent-seen" data-i18n="agent.none"></span>
+          <span id="settings-agent-details-dot" class="agent-dot" aria-hidden="true"></span>
+          <div id="settings-agent-details-seen" data-i18n="agent.none"></div>
         </div>
-
         <label for="settings-mcp-url" data-i18n="agent.url"></label>
         <div class="config-line">
           <input id="settings-mcp-url" value="http://127.0.0.1:47194/mcp" spellcheck="false" />
@@ -206,22 +282,20 @@
 
         <label data-i18n="agent.connect"></label>
         <div id="settings-clients" class="agent-clients">
-          <button type="button" data-client="cursor" disabled>Cursor</button>
+          <button type="button" data-client="cursor">Cursor</button>
           <button type="button" data-client="claude-code" disabled>Claude Code</button>
           <button type="button" data-client="codex">Codex</button>
+          <button type="button" data-client="grok">Grok Build</button>
           <button type="button" data-client="windsurf" disabled>Windsurf</button>
           <button type="button" data-client="generic" disabled data-i18n="agent.client.other"></button>
         </div>
 
-        <p class="hint" data-i18n="setup.codexOnly"></p>
-        <p id="settings-setup-status" class="setup-status"></p>
-        <p id="settings-setup-hint" class="hint"></p>
-        <div class="config-actions">
-          <button type="button" id="settings-complete-setup" class="primary" data-i18n="setup.install"></button>
-        </div>
+        <p class="hint" data-i18n="setup.clientsHint" data-setup-clients-hint></p>
         <details class="setup-details" hidden>
           <summary data-i18n="setup.details"></summary>
           <pre id="settings-setup-details-body" class="setup-details-body"></pre>
+        </details>
+          </div>
         </details>
       </section>
     </dialog>
@@ -276,6 +350,8 @@
         <details id="feedback-diagnostics" class="feedback-diagnostics">
           <summary data-board-text="diagnostics"></summary>
           <div id="feedback-task-list"></div>
+        </details>
+          </div>
         </details>
       </div>
     </dialog>

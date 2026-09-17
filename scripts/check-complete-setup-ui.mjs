@@ -37,7 +37,8 @@ const {
   createSetupSession,
 } = await import(pathToFileURL(esmOut).href);
 
-assert.equal(SETUP_KIND_MESSAGE.verified, "setup.status.unverified");
+assert.equal(SETUP_KIND_MESSAGE.verified, "setup.status.verified");
+assert.equal(SETUP_KIND_MESSAGE.installed_unverified, "setup.status.installedUnverified");
 assert.equal(SETUP_KIND_MESSAGE.installed_pending_trust, "setup.status.pendingTrust");
 assert.notEqual(SETUP_KIND_MESSAGE.verified, "setup.verified");
 
@@ -51,7 +52,7 @@ assert.equal(s.canApplyPreview(preview2, "codex", "http://127.0.0.1:48001/mcp"),
 
 const install = s.beginInstall("codex", "http://127.0.0.1:47194/mcp");
 assert.ok(install);
-assert.equal(s.beginPreview("cursor", "http://127.0.0.1:47194/mcp"), null, "preview blocked while installing");
+assert.equal(s.beginPreview("windsurf", "http://127.0.0.1:47194/mcp"), null, "preview blocked while installing");
 assert.equal(s.beginInstall("codex", "http://127.0.0.1:47194/mcp"), null, "second install blocked");
 assert.equal(s.canApplyPreview(preview2, "codex", "http://127.0.0.1:48001/mcp"), false, "preview cannot overwrite installing");
 assert.equal(s.canApplyInstall(install), true);
@@ -66,7 +67,7 @@ s.endInstall();
 
 const errPreview = s.beginPreview("codex", "http://127.0.0.1:9/mcp");
 assert.ok(errPreview);
-const next = s.beginPreview("cursor", "http://127.0.0.1:9/mcp");
+const next = s.beginPreview("windsurf", "http://127.0.0.1:9/mcp");
 assert.ok(next);
 assert.equal(s.canApplyPreview(errPreview, "codex", "http://127.0.0.1:9/mcp"), false, "error from old client must not apply");
 
@@ -106,6 +107,9 @@ await context.route("**/*", async (route, request) => {
 const page = await context.newPage();
 await page.setContent(`<!doctype html>
 <html lang="zh-CN"><body>
+  <button id="agent-complete-setup"></button><button id="settings-complete-setup"></button>
+  <h3 data-setup-title></h3>
+  <button data-setup-refresh></button><span data-setup-component="hooks"></span><span data-setup-component="skill"></span>
   <p id="agent-setup-status"></p>
   <p id="agent-setup-hint"></p>
   <details class="setup-details" hidden><summary>安装详情</summary><pre id="agent-setup-details-body"></pre></details>
@@ -128,6 +132,33 @@ const result = await page.evaluate(async () => {
     "setup.status.installing": "正在安装",
     "setup.status.pendingTrust": "已安装，待信任",
     "setup.status.unverified": "未验证",
+    "setup.status.verified": "已安装 · Hooks 已信任",
+    "setup.status.hooksDisabled": "已安装 · Hooks 已停用",
+    "setup.status.hooksModified": "已安装 · 需重新信任 Hooks",
+    "setup.status.installedUnverified": "已安装 · 信任状态待核验",
+    "setup.hint.verified": "Codex 已确认当前两项 Hook 已启用并信任。",
+    "setup.hint.installedUnverified": "暂时无法核验信任状态；已信任时无需重复安装。",
+    "setup.hint.modified": "Hook 已更新，请重新信任。",
+    "setup.hint.disabled": "请在 Codex 启用 Hook。",
+    "setup.hooks.trusted": "已信任",
+    "setup.hooks.unknown": "信任未核验",
+    "setup.hooks.modified": "需重新信任",
+    "setup.hooks.disabled": "已停用",
+    "setup.component.installed": "已安装",
+    "setup.update": "更新 Hooks + Skill",
+    "setup.install": "安装 Hooks + Skill（必需）",
+    "setup.title": "Codex 接入",
+    "settings.body": "先选宿主，再一键装好连接和用法。",
+    "setup.hooksDescription": "旁念上下文",
+    "setup.skillDescription": "画布用法",
+    "setup.mcpDescription": "连接 Codex",
+    "setup.mcpDescriptionGrok": "连接 Grok Build",
+    "setup.titleGrok": "Grok Build 接入",
+    "setup.installGrok": "安装 MCP + Skill",
+    "setup.updateGrok": "更新 MCP + Skill",
+    "setup.hint.grokNotInstalled": "可一次写入 MCP 与 Skill。",
+    "setup.hint.grokVerified": "MCP 与 Skill 已写入 Grok Build 配置。",
+    "setup.status.grokVerified": "已安装 · MCP + Skill",
     "setup.status.failed": "未完成",
     "setup.hint.unsupported": "此客户端不能完整接入，未执行安装。",
     "setup.hint.notInstalled": "可一次安装 MCP、hooks 与 Skill。",
@@ -176,19 +207,58 @@ const result = await page.evaluate(async () => {
   paintSetupView(base({
     kind: "verified",
     installed: true,
+    hook_trust: "trusted",
     note: "backend report in English should not occupy the main hint",
     source_path: "C:/Users/x/plugins/spellcast",
     cache_path: "C:/Users/x/.codex/plugins/cache/personal/spellcast/0.3.0",
     marketplace_path: "C:/Users/x/.agents/plugins/marketplace.json",
   }), t);
   let snap = view();
-  check(snap.status === "未验证", `verified paints unverified, got ${snap.status}`);
-  check(snap.hint === "尚未核验为运行时已生效。", `main hint localized, got ${snap.hint}`);
+  check(snap.status === "已安装 · Hooks 已信任", `native verified result is shown, got ${snap.status}`);
+  check(snap.hint === "Codex 已确认当前两项 Hook 已启用并信任。", `main hint localized, got ${snap.hint}`);
+  check(document.querySelector('[data-setup-component="hooks"]').textContent === "已信任", "trusted component");
+  check(document.querySelector('#settings-complete-setup').textContent === "更新 Hooks + Skill", "installed action names Hooks and Skill");
+
+  paintSetupView(base({
+    client: "grok",
+    kind: "verified",
+    installed: true,
+    note: "Grok files verified",
+  }), t);
+  snap = view();
+  check(snap.status === "已安装 · MCP + Skill", `grok verified status ${snap.status}`);
+  check(snap.hint === "MCP 与 Skill 已写入 Grok Build 配置。", `grok verified hint ${snap.hint}`);
+  check(document.querySelector('#settings-complete-setup').textContent === "更新 MCP + Skill", "grok update names MCP and Skill");
+  check([...document.querySelectorAll("[data-setup-title]")].every((el) => el.textContent === "Grok Build 接入"), "grok title");
+  paintSetupView(base({ client: "grok", kind: "not_installed", mcp_url: "http://127.0.0.1:47194/mcp" }), t);
+  check(view().hint.includes("可一次写入 MCP 与 Skill"), "native grok not-installed hint");
+  paintSetupView(base({ client: "grok", kind: "not_installed" }), t);
+  check(view().hint.includes("浏览器为只读预览"), "browser grok preview stays desktop-only");
+  paintSetupView(base({
+    kind: "verified",
+    installed: true,
+    hook_trust: "trusted",
+    note: "backend report in English should not occupy the main hint",
+    source_path: "C:/Users/x/plugins/spellcast",
+    cache_path: "C:/Users/x/.codex/plugins/cache/personal/spellcast/0.3.0",
+    marketplace_path: "C:/Users/x/.agents/plugins/marketplace.json",
+  }), t);
+  snap = view();
   check(!/verified|not_installed|C:\\\\Users|plugins\/spellcast/i.test(snap.status + snap.hint), "raw kind or paths on main");
   check(snap.details.includes("C:/Users/x/plugins/spellcast"), "paths belong in details");
   check(snap.details.includes("backend report in English"), "raw report in details");
   check(!snap.detailsHidden, "details visible when body exists");
   check(!snap.detailsOpen, "details stay collapsed");
+
+  paintSetupView(base({ kind: "installed_unverified", installed: true, hook_trust: "unknown" }), t);
+  snap = view();
+  check(!snap.status.includes("待信任") && snap.hint.includes("无需重复安装"), "unknown is not untrusted");
+  check(document.querySelector('[data-setup-component="skill"]').textContent === "已安装", "trust read failure preserves installation");
+  paintSetupView(base({ kind: "installed_pending_trust", installed: true, hook_trust: "modified" }), t);
+  check(view().hint.includes("重新信任"), "changed hashes need new trust");
+  paintSetupView(base({ kind: "installed_unverified", installed: true, hook_trust: "disabled" }), t);
+  check(view().hint.includes("启用 Hook"), "disabled is not untrusted");
+  check(view().status.includes("已停用"), "disabled is not unknown");
 
   paintSetupView(statusReadFailedReport("codex", "invoke failed"), t);
   snap = view();
@@ -306,16 +376,16 @@ const result = await page.evaluate(async () => {
         await wait(40);
         throw new Error("old client fail");
       }
-      return base({ client: "cursor", kind: "unsupported", complete_supported: false });
+      return base({ client: "windsurf", kind: "unsupported", complete_supported: false });
     },
     install: async () => base({ kind: "failed" }),
     getClient: () => client,
     getUrl: () => url,
   });
   const oldFail = clientChange.preview("codex", url);
-  client = "cursor";
-  const cursorPreview = clientChange.preview("cursor", url);
-  await Promise.all([oldFail, cursorPreview]);
+  client = "windsurf";
+  const otherPreview = clientChange.preview("windsurf", url);
+  await Promise.all([oldFail, otherPreview]);
   snap = view();
   check(snap.status === "不支持完整接入", `client-change status ${snap.status}`);
   check(snap.hint === "此客户端不能完整接入，未执行安装。", `client-change hint ${snap.hint}`);

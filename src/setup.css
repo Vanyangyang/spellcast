@@ -1,0 +1,62 @@
+#settings {
+  --setup-text: var(--studio-ink, #f4f1ea);
+  --setup-muted: var(--studio-soft, #aaa9b2);
+  --setup-bg: var(--studio-paper, #11131a);
+  --setup-subtle: var(--studio-canvas, #191c25);
+  --setup-border: var(--studio-line, #343743);
+  --setup-accent: var(--studio-mint, #8fe2cb);
+  width: min(680px, calc(100vw - 32px));
+  color: var(--setup-text);
+  border-radius: 20px;
+  font-family: "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+}
+#settings .settings-sheet { padding: 0 28px 24px; gap: 20px; background: var(--setup-bg); color: var(--setup-text); }
+#settings .settings-head { position: sticky; top: 0; z-index: 2; margin: 0 -4px; padding: 22px 4px 12px; background: var(--setup-bg); }
+#settings h2, #settings h3, #settings button, #settings label { font-family: inherit; }
+#settings h2 { font-size: 23px; font-weight: 600; }
+#settings h3 { margin: 0; font-size: 17px; font-weight: 600; }
+#settings .setup-card { display: grid; gap: 16px; }
+#settings .setup-card-heading { display: flex; align-items: center; gap: 10px; }
+#settings .setup-observer-head { justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+#settings .setup-observer-title { display: flex; align-items: center; gap: 10px; }
+#settings .setup-observer-head .observer-switch { flex: 1 1 220px; }
+#settings .setup-required { padding: 2px 8px; border-radius: 6px; background: var(--setup-subtle); color: var(--setup-muted); font-size: 12px; }
+#settings .setup-clients { display: grid; gap: 8px; }
+#settings .setup-clients-label { margin: 0; color: var(--setup-muted); font-size: 12px; font-weight: 600; }
+#settings .observer-points { margin: 0; padding-left: 1.15em; color: var(--setup-muted); font-size: 13px; line-height: 1.7; display: grid; gap: 6px; }
+#settings .settings-body, #settings .hint { margin: 0; color: var(--setup-muted); font-size: 13px; line-height: 1.7; }
+#settings .setup-components { margin: 0; padding: 0; list-style: none; border: 1px solid var(--setup-border); border-radius: 12px; overflow: hidden; }
+#settings .setup-components li { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 14px; }
+#settings .setup-components li + li { border-top: 1px solid var(--setup-border); }
+#settings .setup-component-name { display: flex; align-items: baseline; gap: 8px; }
+#settings .setup-components strong { font-weight: 600; }
+#settings .setup-component-term { color: var(--setup-muted); font-size: 12px; font-weight: 500; }
+#settings .setup-components p { margin: 4px 0 0; color: var(--setup-muted); font-size: 12px; line-height: 1.65; }
+#settings .setup-component-status { flex: 0 0 auto; font-size: 12px; color: var(--setup-muted); padding-top: 2px; }
+#settings [data-tone="done"] { color: var(--setup-accent); }
+#settings [data-tone="attention"] { color: var(--studio-ink, #efc275); }
+#settings .setup-summary { display: grid; gap: 5px; padding: 12px 14px; background: var(--setup-subtle); border-radius: 10px; }
+#settings .setup-status { font-size: 14px; font-weight: 600; }
+#settings .setup-actions { justify-content: flex-start; flex-wrap: wrap; gap: 10px; }
+#settings .setup-actions button { min-height: 40px; padding: 8px 16px; font-size: 13px; }
+#settings .settings-observer { gap: 10px; border: 0; border-top: 1px solid var(--setup-border); padding: 16px 0 0; }
+#settings .settings-observer .observer-switch { color: var(--setup-text); padding: 10px 12px; }
+#settings .settings-observer .observer-switch-title { font-weight: 500; }
+#settings .settings-connection-details { border-top: 1px solid var(--setup-border); padding-top: 14px; }
+#settings .settings-connection-details > summary { color: var(--setup-muted); cursor: pointer; font-size: 13px; }
+#settings .settings-connection-content { display: grid; gap: 12px; padding-top: 14px; }
+#settings .settings-connection-content > label { color: var(--setup-muted); font-size: 12px; }
+#settings .config-line input, #settings .setup-details-body { font-family: Consolas, monospace; font-size: 11px; }
+#settings .setup-details-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+#settings .agent-status { margin: 0; font-size: 12px; }
+#settings .setup-connection-status { padding: 12px 14px; border: 1px solid var(--setup-border); border-radius: 10px; background: var(--setup-subtle); color: var(--setup-text); }
+#settings .setup-connection-status .agent-last { color: var(--setup-muted); }
+#settings button:focus-visible, #settings summary:focus-visible { outline: 2px solid var(--setup-accent); outline-offset: 3px; }
+@media (max-width: 560px) {
+  #settings .settings-sheet { padding: 0 18px 20px; }
+  #settings .settings-head { padding-top: 16px; }
+  #settings .setup-components li { gap: 10px; padding: 11px 12px; }
+  #settings .setup-actions button { flex: 1 1 auto; }
+}

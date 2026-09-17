@@ -170,6 +170,8 @@ body.mode-focus.view-replies .composer-task {
 .composer-destination #recipient-change { flex-shrink: 0; padding: 3px 8px; min-height: 26px; font-size: 12px; }
 .composer-route-options { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-top: 8px; }
 body.mode-focus.view-replies #recipient-summary { color: var(--studio-soft); }
+#recipient-summary.is-unavailable { opacity: 0.55; }
+.composer-route-field option:disabled { color: var(--studio-mute, #8a8478); }
 
 .composer-route-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .composer-route-field > span { font-size: 11px; font-weight: 500; }
@@ -440,6 +442,7 @@ body.mode-focus.view-replies .settings-observer .observer-switch,
 body.mode-focus.view-replies .settings-observer .observer-switch-title,
 body.mode-focus.view-replies .settings-observer .observer-switch-state,
 body.mode-focus.view-replies .settings-observer .observer-switch:has(input:checked) .observer-switch-state,
+body.mode-focus.view-replies .observer-points,
 body.mode-focus.view-replies .setup-status,
 body.mode-focus.view-replies .setup-details-body {
   color: var(--studio-ink);
@@ -845,7 +848,7 @@ body.mode-focus.view-replies .artifact-viewport {
   border-color: var(--studio-line);
   background: var(--studio-paper);
 }
-body.mode-focus.view-replies .canvas-frame.is-active .rb-block:has(.artifact-sources[open]) .artifact-viewport {
+ body.mode-focus.view-replies .canvas-frame.is-active:not(.is-work) .rb-block:has(.artifact-sources[open]) .artifact-viewport {
   flex: 0 1 auto;
   height: auto;
   min-height: 72px;
@@ -858,6 +861,37 @@ body.mode-focus.view-replies .canvas-frame.is-idea-note .rb-block-title {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+/* In the reading view, pictures and their meaning lead; controls return on activation. */
+body.mode-focus.view-replies .canvas-frame.is-plain:not(.is-active) .rb-cmp-card {
+  background: transparent; border-color: transparent; padding: 8px 12px;
+}
+body.mode-focus.view-replies .canvas-frame.is-plain:not(.is-active) .rb-cmp-card + .rb-cmp-card { border-left-color: var(--studio-line); border-radius: 0; }
+body.mode-focus.view-replies .canvas-frame.is-plain:not(.is-active) .rb-cmp-card.is-selected { border-color: var(--studio-lilac); border-radius: 12px; }
+body.mode-focus.view-replies .canvas-frame.is-plain:not(.is-active) .rb-image-reference[data-state="saved"] figcaption,
+body.mode-focus.view-replies .canvas-frame.is-plain:not(.is-active) .rb-image-reference > .rb-quiet { display: none; }
+
+/* Entering a standalone work changes input ownership, never the work's viewport or layout. */
+body.mode-focus.view-replies .canvas-frame.is-work > .canvas-frame-content { overflow: hidden; }
+body.mode-focus.view-replies .canvas-frame.is-work .rb-doc { padding: 0; }
+body.mode-focus.view-replies .canvas-frame.is-work .rb-work-block {
+  padding: 0; border: 0; border-radius: inherit; background: transparent; box-shadow: none;
+}
+body.mode-focus.view-replies .canvas-frame.is-work .rb-work-block > .rb-block-body {
+  position: relative; flex: 1; height: 100%; min-height: 0;
+}
+body.mode-focus.view-replies .canvas-frame.is-work .artifact-shell { position: absolute; inset: 0; }
+body.mode-focus.view-replies .canvas-frame.is-work .artifact-viewport {
+  position: absolute; inset: 0; height: auto; min-height: 0; border: 0; border-radius: inherit;
+}
+body.mode-focus.view-replies .canvas-frame.is-work .artifact-frame { height: 100% !important; min-height: 0; }
+body.mode-focus.view-replies .canvas-frame.is-work .artifact-inline-notice:not([hidden]) {
+  position: absolute; bottom: 10px; left: 10px; right: 10px; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--studio-line); border-radius: 10px;
+  background: var(--studio-paper); color: var(--studio-ink); font-size: 13px; overflow-wrap: anywhere;
+}
+body.mode-focus.view-replies .canvas-frame.is-work .artifact-inline-notice button { flex: none; }
 
 @media (max-width: 720px) {
   .canvas-tool-camera { right: 10px; bottom: 10px; }

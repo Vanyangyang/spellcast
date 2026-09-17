@@ -17,7 +17,7 @@ export type DraftRecord = {
   block?: ReplyBlock;
   base_block?: ReplyBlock;
   text?: string;
-  context?: { label: string; prefix: string; artifact_context?: import("./reply-types").ArtifactFeedback } | null;
+  context?: { label: string; prefix: string; artifact_context?: import("./reply-types").ArtifactFeedback; anchors?: CanvasAnchor[] } | null;
   focus_id?: string | null;
 };
 
@@ -30,6 +30,7 @@ export function draftKey(record: Pick<DraftRecord, "object_id" | "source_id" | "
   const target = record.object_id ? ["object", record.object_id] : [record.source_id, record.reply_id];
   return JSON.stringify([...target, record.block_id, record.block_type, record.kind, record.kind === "ask" ? record.context?.prefix ?? "" : "", record.channel ?? "block",
     ...(record.kind === "ask" && record.context?.artifact_context ? [contentKey(record.context.artifact_context)] : []),
+    ...(record.kind === "ask" && record.context?.anchors ? [contentKey(record.context.anchors)] : []),
     ...(record.kind === "ask" && record.anchors?.length ? [contentKey(record.anchors), record.target_source_id ?? ""] : [])]);
 }
 

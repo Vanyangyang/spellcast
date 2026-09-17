@@ -149,7 +149,24 @@ try {
   await page.evaluate(() => { state.selection = { object_id: 'native', object_ids: ['native'] }; control.resetChoice(); window.render(); });
   assert.equal(await confirmation.count(), 0); assert.equal(await value(), 'b');
   check('Switching Canvas content dismisses pending confirmation before it can change another object');
-  await page.evaluate(() => { state.selection = { object_id: 'legacy', object_ids: ['legacy'] }; control.resetChoice(); window.render(); });
+  await page.evaluate(() => {
+    state.board.nodes[0].source_id = 'cursor:task';
+    state.selection = { object_id: 'legacy', object_ids: ['legacy'] };
+    control.resetChoice();
+    window.render();
+  });
+  assert.equal(await value(), 'cursor:task');
+  assert.equal(await page.locator('#send').isDisabled(), true);
+  assert.equal(await page.locator('#recipient option[value="cursor:task"]').isDisabled(), true);
+  assert.equal(await page.locator('#recipient-summary').evaluate(el => el.classList.contains('is-unavailable')), true);
+  assert.match(await page.locator('#status').textContent(), /还不能接收画布回发/);
+  assert.match(await page.evaluate(async () => control.verify().then(() => 'ok', error => error.message)), /还不能接收画布回发/);
+  check('Hosts without a bound send-back path stay visible, dimmed, and cannot be sent to');
+  await page.evaluate(() => {
+    state.board.nodes[0].source_id = 'a';
+    control.resetChoice();
+    window.render();
+  });
   await choose('b'); await confirmation.waitFor();
   await page.evaluate(() => { state.bindings[1].thread_id = 'replacement-b'; window.render(); });
   assert.equal(await confirmation.count(), 0); assert.equal(await value(), 'a');

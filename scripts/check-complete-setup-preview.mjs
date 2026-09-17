@@ -330,30 +330,53 @@ try {
   assert.match(home.hint, /桌面应用|desktop app|デスクトップアプリ/);
   assert.equal(home.detailsOpen, false, "install details must start collapsed");
   assert.equal(/插件源|Install cache|Skill|C:\\\\Users/.test(home.status + home.hint), false);
-  assert.match(home.button, /安装 \/ 更新 Spellcast 接入|Install \/ update|インストール \/ 更新/);
+  assert.match(home.button, /安装 Hooks \+ Skill|Install Hooks \+ Skill|Hooks \+ Skill をインストール/);
 
-  await page.click('[data-client="cursor"]');
-  await page.waitForFunction(() => (document.querySelector("#agent-setup-status")?.textContent ?? "").includes("不支持")
-    || (document.querySelector("#agent-setup-status")?.textContent ?? "").toLowerCase().includes("unsupported")
-    || (document.querySelector("#agent-setup-status")?.textContent ?? "").includes("未対応"));
-  const cursor = await page.evaluate(() => ({
+  const cursorDisabled = await page.evaluate(() => ({
+    button: document.querySelector('[data-client="cursor"]')?.disabled ?? false,
+  }));
+  assert.equal(cursorDisabled.button, true, "Cursor client stays unavailable");
+
+  const grokHome = await page.evaluate(() => ({
+    grokDisabled: document.querySelector('[data-client="grok"]')?.disabled ?? true,
+    windsurfDisabled: document.querySelector('[data-client="windsurf"]')?.disabled ?? false,
+    claudeDisabled: document.querySelector('[data-client="claude-code"]')?.disabled ?? false,
+    genericDisabled: document.querySelector('[data-client="generic"]')?.disabled ?? false,
+  }));
+  assert.equal(grokHome.grokDisabled, false, "Grok Build client is available");
+  assert.equal(grokHome.windsurfDisabled, true, "Windsurf stays unavailable");
+  assert.equal(grokHome.claudeDisabled, true, "Claude Code stays unavailable");
+  assert.equal(grokHome.genericDisabled, true, "generic stays unavailable");
+
+  await page.click('[data-client="grok"]');
+  await page.waitForFunction(() => {
+    const title = [...document.querySelectorAll("[data-setup-title]")].map((el) => el.textContent ?? "").join(" ");
+    const button = document.querySelector("#agent-complete-setup")?.textContent ?? "";
+    return title.includes("Grok Build") && /MCP \+ Skill/.test(button);
+  });
+  const grokPreview = await page.evaluate(() => ({
+    title: [...document.querySelectorAll("[data-setup-title]")].map((el) => el.textContent ?? "").join(" "),
     status: document.querySelector("#agent-setup-status")?.textContent ?? "",
     hint: document.querySelector("#agent-setup-hint")?.textContent ?? "",
-    disabled: document.querySelector("#agent-complete-setup")?.disabled ?? false,
+    button: document.querySelector("#agent-complete-setup")?.textContent ?? "",
+    disabled: document.querySelector("#agent-complete-setup")?.disabled ?? true,
   }));
-  assert.match(cursor.status, /不支持完整接入|Complete integration unsupported|完全導入未対応/);
-  assert.match(cursor.hint, /不能完整接入|cannot complete integration|完全導入できません/);
-  assert.equal(cursor.disabled, true);
-  assert.equal(noRawKind(cursor.status + cursor.hint), true, `cursor raw: ${cursor.status}`);
+  assert.match(grokPreview.title, /Grok Build/);
+  assert.match(grokPreview.status, /未安装|Not installed|未インストール/);
+  assert.match(grokPreview.hint, /桌面应用|desktop app|デスクトップアプリ/);
+  assert.match(grokPreview.button, /MCP \+ Skill/);
+  assert.equal(grokPreview.disabled, false, "Grok Build install is available in preview");
+  await page.click('[data-client="codex"]');
+  await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("桌面"));
 
   await page.selectOption("#locale", "en");
-  await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("cannot complete"));
+  await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("desktop app"));
   const enHint = await page.locator("#agent-setup-hint").innerText();
-  assert.match(enHint, /cannot complete integration/i);
+  assert.match(enHint, /desktop app/i);
   await page.selectOption("#locale", "ja");
-  await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("完全導入"));
+  await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("デスクトップ"));
   const jaHint = await page.locator("#agent-setup-hint").innerText();
-  assert.match(jaHint, /完全導入できません/);
+  assert.match(jaHint, /デスクトップアプリ/);
   await page.selectOption("#locale", "zh-CN");
   await page.click('[data-client="codex"]');
   await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("桌面"));
@@ -379,10 +402,44 @@ try {
 
   await openSettings(page);
   await assertSettingsOpen(page);
-  const intro = await page.locator('[data-i18n="settings.body"]').innerText();
+  const intro = await page.locator("#settings [data-setup-body]").innerText();
   assert.equal(/半套|half-installed|途中まで/.test(intro), false, `policy copy leaked: ${intro}`);
-  assert.match(intro, /连接你的 Agent|Connect your agent|Agent を接続/);
+  assert.match(intro, /先选你正在用的软件|Choose the app you are using|使っているソフトを選び/);
+  const components = await page.evaluate(() => ({
+    names: [...document.querySelectorAll("#settings .setup-component-name")].map((el) => el.textContent?.replace(/\s+/g, " ").trim() ?? ""),
+    desc: [...document.querySelectorAll("#settings .setup-components p")].map((el) => el.textContent ?? ""),
+    observer: document.querySelector(".settings-observer")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+    switchInHead: Boolean(document.querySelector(".setup-observer-head .observer-switch")),
+  }));
+  assert.equal(components.switchInHead, true, "aside switch must sit next to the 旁念 title");
+  assert.match(components.names.join(" | "), /旁念触发.*Hooks|Aside trigger.*Hooks|傍らの起動.*Hooks/);
+  assert.match(components.names.join(" | "), /画布用法.*Skill|Canvas guide.*Skill|キャンバスの使い方.*Skill/);
+  assert.match(components.names.join(" | "), /本机连接.*MCP|Local connection.*MCP|この端末の接続.*MCP/);
+  assert.match(components.desc.join("\n"), /旁念开了也不会自己出现|will not start them by itself|自分では出ません/);
+  assert.match(components.observer, /主对话之外|Outside the main chat|主会話の外/);
+  assert.match(components.observer, /开：|On:|オン：/);
+  assert.match(components.observer, /关：|Off:|オフ：/);
+  assert.equal(/观察者|observer with no chat history|観察者を/.test(components.observer), false, `aside copy still too technical: ${components.observer}`);
   await page.screenshot({ path: path.join(out, "settings-dark-1280.png") });
+  const cursorSettings = await page.evaluate(() => ({
+    title: document.querySelector("#settings [data-setup-title]")?.textContent ?? "",
+    hint: document.querySelector("#settings [data-setup-clients-hint]")?.textContent ?? "",
+    cursorDisabled: document.querySelector('#settings .setup-clients [data-client="cursor"]')?.disabled ?? false,
+    grokDisabled: document.querySelector('#settings .setup-clients [data-client="grok"]')?.disabled ?? true,
+    installDisabled: document.querySelector("#settings-complete-setup")?.disabled ?? true,
+  }));
+  assert.match(cursorSettings.title, /Codex/);
+  assert.match(cursorSettings.hint, /Codex.*Grok Build|Grok Build.*Codex/);
+  assert.equal(cursorSettings.cursorDisabled, true, "settings Cursor button stays unavailable");
+  assert.equal(cursorSettings.grokDisabled, false, "settings Grok Build button is available");
+  await page.locator(".settings-observer").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(out, "settings-observer-dark-1280.png") });
+  await page.evaluate(() => {
+    const settings = document.querySelector("#settings");
+    if (settings) settings.scrollTop = 0;
+    const sheet = document.querySelector(".settings-sheet");
+    if (sheet) sheet.scrollTop = 0;
+  });
   await page.keyboard.press("Escape");
 
   await page.setViewportSize({ width: 880, height: 640 });
@@ -413,10 +470,13 @@ try {
   assert.equal(lightColor.setupTheme, "", "must not use test-only setupTheme");
   assert.equal(lightColor.paper && lightColor.replies, true);
   assert.ok(luminance(lightColor.title) < 0.45, `canvas light switch foreground too bright: ${lightColor.title}`);
+  await page.locator(".settings-observer").scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(out, "canvas-light-settings-1280.png") });
 
+  await page.locator("#settings-observer-enabled").scrollIntoViewIfNeeded();
   await page.locator("#settings-observer-enabled").click();
   await page.waitForFunction(() => document.querySelector("#settings-observer-enabled")?.checked === true);
+  await page.locator(".settings-observer").scrollIntoViewIfNeeded();
   const onColors = await page.evaluate(() => {
     const title = document.querySelector(".settings-observer .observer-switch-title");
     const state = document.querySelector(".settings-observer .observer-switch-state");
@@ -497,6 +557,7 @@ try {
         shots: [
           "home-dark-1280",
           "settings-dark-1280",
+          "settings-observer-dark-1280",
           "home-dark-880",
           "settings-dark-880",
           "canvas-light-settings-1280",

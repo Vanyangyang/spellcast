@@ -1,12 +1,17 @@
 import { Graph, Shape, Transform, History, type Node } from "@antv/x6";
 import { mountReplyBoard, type ReplyBoardHandle, type ReplyBoardHandlers } from "./replies";
 import type { BoardReply, ReplyBlock, ReplyPatchRequest, ReplyActionInput } from "./reply-types";
-import type { BoardNode, BoardSnapshot, CanvasAnchor, CanvasBatchRequest, CanvasComposition, CanvasContent, CanvasContentFields, CanvasLayout, CanvasObject, CanvasPlacement, CanvasProposal, CanvasRead, CodexBinding } from "./types";
-import { filterOverviewItems, overviewItemFromObject, overviewPaintKey } from "./content-organization";
-import { originForObject, originMatches, type ContentOrigin } from "./content-origin";
+import type { BoardNode, BoardSnapshot, CanvasAnchor, CanvasAnnotation, CanvasBatchRequest, CanvasComposition, CanvasContent, CanvasContentFields, CanvasLayout, CanvasObject, CanvasPlacement, CanvasProposal, CanvasRead, CodexBinding } from "./types";
+import { filterOverviewItems, overviewItemFromObject, overviewPaintKey, textLabel } from "./content-organization";
+import { originForObject, originMatches, resolveContentOrigin, type ContentOrigin } from "./content-origin";
 import { blockReply } from "./canvas-blocks";
+import { targetImage } from "./reply-image";
+import { targetArtifact } from "./reply-artifact";
+import { canvasAnnotations } from "./canvas-annotations";
+import { annotationLabel, annotationSelected } from "./canvas-annotation-markers";
 import { canvasInsert } from "./canvas-insert";
 import { canvasIdea, type IdeaMember } from "./canvas-idea";
+import { arrangementPreview, arrangementText as at } from "./canvas-arrangement";
 import { replyDrafts, draftKey, draftText, contentKey, type DraftRecord } from "./reply-drafts";
 import { isNativeCanvasContent, NativeCanvasContent } from "./canvas-native";
 import { ct } from "./i18n/canvas";
@@ -16,6 +21,8 @@ import { CanvasDataflow } from "./canvas-dataflow";
 import { canvasConnections } from "./canvas-connections";
 import { initialFocusKey, type LocateIntent } from "./canvas-nav";
 import { savedViewIsPlausible, viewShouldRecover, viewportIsUsable } from "./canvas-view";
+import { scaledPresentation } from "./canvas-scale";
+import { contentUsesWheel, wheelScale } from "./canvas-wheel";
 import "./canvas.css";
 
 /** object_id is the canonical canvas identity; reply/block/node ids stay for existing callers. */
@@ -50,7 +57,7 @@ type Frame = {
 const MIN_SIZE = 48, MAX_SIZE = 2400, EDGE_Z = -2_000_000;
 const isLegacyContent = (content: Content): content is LegacyContent => content.type === "node" || content.type === "reply";
 const legacyKey = (content: Content) => isLegacyContent(content) ? `${content.type}:${content.id}` : content.type;
-const titleFor = (object: CanvasObject, reply?: BoardReply) => reply?.title ?? (isNativeCanvasContent(object.content) ? object.content.title : "");
+const titleFor = (object: CanvasObject, reply?: BoardReply) => reply?.title || (isNativeCanvasContent(object.content) ? object.content.title || (object.content.type === "text" ? textLabel(object.content.text) : "") : object.content.type === "block" && object.content.block.type === "text" ? textLabel(object.content.block.text) : "") || ct("untitledBlock");
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = "") {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
@@ -108,6 +115,15 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     queueMicrotask(() => { dataQueued = false; if (destroyed) return; paintData(); if (selectedUnits.size) handlers.onSelect(getSelection()); });
   });
   const html = new Map<string, HTMLElement>();
+  // Keep content in logical coordinates while scaling the whole presentation with its frame.
+  function sizeHtml(cell: Node, frame = html.get(cell.id), initial?: CanvasPlacement) {
+    if (!frame) return;
+    const held = frames.get(cell.id);
+    const base = initial ?? (held ? currentPlacement(held) : cell.getSize());
+    const { width, height, scale } = scaledPresentation(cell.getSize(), base);
+    frame.style.width = `${width}px`; frame.style.height = `${height}px`;
+    frame.style.transform = `scale(${scale})`;
+  }
   const shape = `spellcast-frame-${crypto.randomUUID()}`;
   Shape.HTML.register({ shape, html: cell => html.get(cell.id)!, effect: [], markup: [
     { tagName: "rect", selector: "body" },
@@ -119,12 +135,36 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     grid: { visible: true, type: "dot", size: 24, args: { color: "#c9c4b8", thickness: 1.15 } }, background: { color: "#f7f6f2" },
     panning: { enabled: true, eventTypes: ["leftMouseDown", "rightMouseDown", "mouseWheelDown"] },
     scaling: { min: 0.01, max: 1.5 },
-    mousewheel: { enabled: true, zoomAtMousePosition: true },
+    mousewheel: { enabled: false },
     connecting: { allowBlank: false, allowNode: false, allowEdge: false },
     interacting: () => ({ nodeMovable: !panning(), edgeMovable: false, edgeLabelMovable: false }), preventDefaultContextMenu: false,
   });
   Object.defineProperty(graphHost, "__spellcastEdgeModelIds", { configurable: true, get: () => graph.getEdges().map(edge => edge.id) });
-  graph.use(new Transform({ resizing: { enabled: true, minWidth: MIN_SIZE, minHeight: MIN_SIZE, maxWidth: MAX_SIZE, maxHeight: MAX_SIZE }, rotating: false }));
+  let wheelFrame = 0;
+  let wheelIntent: { x: number; y: number; deltaY: number } | null = null;
+  function canvasWheel(x: number, y: number, deltaY: number) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(deltaY) || !deltaY || document.querySelector("dialog[open]")) return;
+    wheelIntent = { x, y, deltaY };
+    if (wheelFrame) return;
+    wheelFrame = requestAnimationFrame(() => {
+      wheelFrame = 0; const intent = wheelIntent; wheelIntent = null;
+      if (destroyed || !intent || document.querySelector("dialog[open]")) return;
+      graph.zoom(wheelScale(graph.zoom(), intent.deltaY), { absolute: true, center: graph.clientToGraph({ x: intent.x, y: intent.y }) });
+    });
+  }
+  graphHost.addEventListener("wheel", event => {
+    if (event.defaultPrevented || !event.deltaY || document.querySelector("dialog[open]")) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const content = target?.closest<HTMLElement>(".canvas-frame-content");
+    // Only the sandbox can know whether its inner control consumed this wheel event.
+    if (target instanceof HTMLIFrameElement && content?.closest(".canvas-frame.is-active")) return;
+    if (target && content?.closest(".canvas-frame.is-active") && contentUsesWheel(target, content)) return;
+    event.preventDefault(); canvasWheel(event.clientX, event.clientY, event.deltaY);
+  }, { passive: false });
+  graph.use(new Transform({ resizing: { enabled: true, preserveAspectRatio: true, allowReverse: false,
+    minWidth: node => Math.max(MIN_SIZE, scaledPresentation(node.getSize(), currentPlacement(frames.get(node.id)!)).width * .01),
+    maxWidth: node => Math.min(MAX_SIZE, scaledPresentation(node.getSize(), currentPlacement(frames.get(node.id)!)).width * 100),
+    minHeight: MIN_SIZE, maxHeight: MAX_SIZE }, rotating: false }));
   const history = new History({ stackSize: 40, ignoreAdd: true, ignoreRemove: true,
     beforeAddCommand: (_event, args) => {
       const change = args as { key?: string; options?: { remote?: boolean } } | null;
@@ -133,6 +173,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   graph.use(history);
   /** Selected units may include composition ids; rendered frames remain object keyed. */
   let selection: string | null = null;
+  let selectedAnnotationId: string | null = null;
   const selectedUnits = new Set<string>();
   /** Object whose content currently receives input in place. */
   let active: string | null = null;
@@ -143,6 +184,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   let removedEntries: Entry[] = [];
   const dirty = new Map<string, CanvasPlacement>();
   const groupLocal = new Map<string, CanvasPlacement>();
+  let groupDragStart: Map<string, CanvasPlacement> | null = null;
+  let pointerLayout = false;
   const nativeRequestIds = new Map<string, { fields: string; requestId: string }>();
   let groupMove: { request: CanvasBatchRequest; positions: Map<string, CanvasPlacement> } | null = null;
   let groupSaving: Promise<void> | null = null;
@@ -206,17 +249,20 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
 
   /* ---------- presentation state ---------- */
-  const currentPlacement = (frame: Frame) => dirty.get(frame.object.id) ?? groupLocal.get(frame.object.id) ?? frame.placement;
-  const shapeKey = (p?: CanvasPlacement) => p ? contentKey({ ...p, revision: 0, user_modified: p.user_modified ?? false }) : "";
+  const currentPlacement = (frame: Frame) => dirty.get(frame.object.id) ?? groupLocal.get(frame.object.id) ?? groupDragStart?.get(frame.object.id) ?? frame.placement;
+  const shapeKey = (p?: CanvasPlacement) => p ? contentKey({ ...p, content_scale: p.content_scale ?? 1, revision: 0, user_modified: p.user_modified ?? false }) : "";
   function placement(cell: Node): CanvasPlacement {
     const frame = frames.get(cell.id); const base = frame ? currentPlacement(frame) : undefined;
-    return { item_id: cell.id, revision: frame?.placement.revision ?? 0, z: base?.z ?? 0, removed: false, appearance: base?.appearance ?? "plain", user_modified: base?.user_modified, ...cell.getPosition(), ...cell.getSize() };
+    const size = cell.getSize();
+    return { item_id: cell.id, revision: frame?.placement.revision ?? 0, z: base?.z ?? 0, removed: false, appearance: base?.appearance ?? "plain", user_modified: base?.user_modified, ...cell.getPosition(), ...size,
+      content_scale: scaledPresentation(size, base ?? size).scale };
   }
   function applyAppearance(frame: Frame, p: CanvasPlacement) {
     frame.root.classList.toggle("is-card", p.appearance === "card");
     frame.root.classList.toggle("is-plain", p.appearance !== "card");
     frame.root.classList.toggle("is-idea-note", frame.object.content.type === "node");
     frame.root.classList.toggle("is-structured-atom", frame.object.content.type === "block");
+    frame.root.classList.toggle("is-work", frame.reply?.blocks.length === 1 && frame.reply.blocks[0].type === "artifact");
     if (frame.cell.getZIndex() !== p.z) frame.cell.setZIndex(p.z, { remote: true });
     if (selectedObjectIds().includes(frame.object.id)) paintSelectionTools();
   }
@@ -335,6 +381,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
 
   /* ---------- selection vs. activation ---------- */
   function choose(key: string | null, additive = false, fromUser = false) {
+    if (fromUser || !key) selectedAnnotationId = null;
     if (key && isComposition(key) && compositionMembers(key).some(id => frames.has(id) && !visibleFrames.has(id))) {
       // An explicitly chosen whole idea must not silently send only its visible members.
       scopeWorkspace = "all"; scopeTask = "all"; applyScope();
@@ -357,18 +404,22 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
   function anchorFor(object: CanvasObject, frame?: Frame): CanvasAnchor {
     const anchor: CanvasAnchor = { object_id: object.id, content_revision: object.content_revision };
-    if (object.content.type === "block") return { ...anchor, block_id: object.content.block.id };
+    const annotation = savedLayout.annotations?.find(note => note.id === selectedAnnotationId && note.anchor.object_id === object.id && !note.removed);
+    if (annotation) return { ...anchor, annotations: [{ id: annotation.id, revision: annotation.revision }] };
+    const selected = frame?.editor?.getSelection();
+    if (selected?.target) { anchor.target = selected.target; if (selected.region) anchor.region = selected.region; }
+    if (object.content.type === "block") return { ...anchor, block_id: object.content.block.id, image: targetImage(object.content.block, selected?.target), artifact_reference: targetArtifact(object.content.block, selected?.target) };
     if (isNativeCanvasContent(object.content)) {
       const region = frame?.native?.getRegion(); if (region) anchor.region = region;
       if (object.bindings?.length) anchor.inputs = dataflow.snapshot(object.id);
       return anchor;
     }
-    const selected = frame?.editor?.getSelection();
     if (selected?.block_id) anchor.block_id = selected.block_id;
     const block = (selected?.block_id ? frame?.reply?.blocks.find(item => item.id === selected.block_id) : undefined)
       ?? frame?.reply?.blocks.find(item => item.type === "artifact");
     if (block?.type === "artifact") { anchor.block_id ??= block.id; anchor.artifact = frame?.editor?.getArtifactAnchor() ?? { bundle_id: block.bundle_id, state_revision: block.state_revision, state: block.state }; }
     if (block?.type === "artifact") anchor.inputs = dataflow.snapshot(object.id, block.id);
+    if (block) { anchor.image = targetImage(block, selected?.target); anchor.artifact_reference = targetArtifact(block, selected?.target); }
     return anchor;
   }
   function getSelection(): CanvasSelection | null {
@@ -389,7 +440,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       deactivate(false); choose(key, false, true);
       active = key; frame.root.classList.add("is-active"); frame.content.inert = false; frame.native?.setActive(true);
     }
-    const target = frame.content.querySelector<HTMLElement>("input, textarea, select, iframe, button:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? frame.content;
+    const target = [...frame.content.querySelectorAll<HTMLElement>("input, textarea, select, iframe, button:not([disabled]), [tabindex]:not([tabindex='-1'])")]
+      .find(element => element.getClientRects().length && !element.closest("dialog:not([open])")) ?? frame.content;
     target.focus({ preventScroll: true });
     paintMode();
   }
@@ -431,6 +483,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     return members.length > 1 && members.includes(key) ? { members, compositions: compositionDependencies() } : null;
   }
   function currentRead(kind: CanvasRead["kind"], id: string): CanvasRead | null {
+    if (kind === "annotation") { const note = savedLayout.annotations?.find(note => note.id === id); return note ? { kind, id, revision: note.revision } : null; }
     if (kind === "content") { const object = objectById(id); return object ? { kind, id, revision: object.content_revision } : null; }
     if (kind === "presentation") { const item = savedLayout.items.find(entry => entry.item_id === id); return item ? { kind, id, revision: item.revision } : null; }
     const composition = compositionById(id); return composition ? { kind, id, revision: composition.revision } : null;
@@ -451,7 +504,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       operations: move.members.map(id => ({ op: "place", id, expected_revision: frames.get(id)!.placement.revision, fields: { x: positions.get(id)!.x, y: positions.get(id)!.y } })),
     } };
     layoutMessage = "layoutSaving"; paintStatus(); window.clearTimeout(saveTimer);
-    saveTimer = window.setTimeout(() => { void saveGroupMove(); }, 220);
+    saveTimer = window.setTimeout(() => { void flushLayout(); }, 220);
     return true;
   }
   async function persistGroupMove() {
@@ -461,7 +514,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     try {
       const snapshot = await handlers.onBatch(move.request);
       for (const [id, position] of positions) if (contentKey(groupLocal.get(id)) === contentKey(position)) groupLocal.delete(id);
-      update(snapshot); layoutMessage = groupLocal.size || groupMove ? "layoutSaving" : "layoutSaved";
+      update(snapshot); layoutMessage = dirty.size || groupLocal.size || groupMove ? "layoutSaving" : "layoutSaved";
     } catch (error) {
       // Keep local positions for explicit retry; a failed batch must not snap members back independently.
       if (!groupMove) groupMove = move;
@@ -472,6 +525,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   function saveGroupMove(): Promise<void> {
     if (!groupMove) return groupSaving ?? Promise.resolve();
     if (groupSaving) return groupSaving;
+    if (saving) return saving.then(() => saveGroupMove());
     groupSaving = persistGroupMove().finally(() => { groupSaving = null; if (groupMove && layoutMessage !== "layoutFailed") void saveGroupMove(); });
     return groupSaving;
   }
@@ -521,12 +575,13 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   /* ---------- layout persistence with per-presentation revisions ---------- */
   function mark(cell: Node) {
     dirty.set(cell.id, placement(cell)); layoutMessage = "layoutSaving"; paintStatus();
-    window.clearTimeout(saveTimer); saveTimer = window.setTimeout(() => void saveLayout(), 350);
+    window.clearTimeout(saveTimer); saveTimer = window.setTimeout(() => void flushLayout(), 350);
   }
   function paintStatus() { status.textContent = layoutMessage ? ct(layoutMessage) : ""; retry.hidden = layoutMessage !== "layoutFailed"; undo.disabled = !history.canUndo(); redo.disabled = !history.canRedo(); }
   function saveLayout(): Promise<void> {
     if (destroyed || !dirty.size) return Promise.resolve();
     if (saving) return saving;
+    if (groupSaving) return groupSaving.then(() => saveLayout());
     saving = persistLayout().finally(() => {
       saving = null;
       if (!destroyed) { paintStatus(); if (dirty.size && layoutMessage !== "layoutFailed") void saveLayout(); }
@@ -542,7 +597,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       // Only the confirmed shape leaves the dirty set; later edits stay and use the confirmed revision.
       for (const item of batch) if (shapeKey(dirty.get(item.item_id)) === shapeKey(item)) dirty.delete(item.item_id);
       if (board) update({ ...board, canvas: result }); else adoptLayout(result);
-      layoutMessage = dirty.size ? "layoutSaving" : "layoutSaved";
+      layoutMessage = dirty.size || groupLocal.size || groupMove ? "layoutSaving" : "layoutSaved";
     } catch (error) {
       if (destroyed) return;
       // Keep the local placement through a conflict; a visible Retry uses the refreshed presentation revisions.
@@ -566,6 +621,12 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const tidyButton = button(ct("arrange"), tidy);
   const handButton = button(ct("pan"), () => { hand = !hand; paintPan(); });
   const workButton = button(ct("activate"), () => { const frame = primaryFrame(); if (active) deactivate(); else if (frame) activate(frame.object.id); });
+  const workSettingsButton = button(ct("workSettings"), () => {
+    const frame = primaryFrame(); if (!frame) return;
+    activate(frame.object.id);
+    const dialog = frame.root.querySelector<HTMLDialogElement>(".artifact-management");
+    if (dialog && !dialog.open) dialog.showModal();
+  });
   const focusButton = button(ct("focusSelection"), () => focusSelection(), ct("focusSelectionHint"));
   function paintPan() { root.classList.toggle("is-panning", panning()); handButton.setAttribute("aria-pressed", String(hand)); }
   /** z and appearance are presentation fields saved through the same layout path. */
@@ -616,14 +677,14 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       if (parent && parent.id !== ideaId && !members.includes(object.id)) continue;
       if (!visibleFrames.has(object.id) && !members.includes(object.id)) continue;
       const frame = frames.get(object.id);
-      candidates.push({ id: object.id, title: frame?.title.textContent || object.id, detail: frame?.provenance.textContent || ct("overviewUnsorted"), reads: readsForUnit(object.id) });
+      candidates.push({ id: object.id, title: frame?.title.textContent || object.id, detail: frame?.provenance.textContent || ct("overviewUnsorted"), reads: readsForUnit(object.id), arrangementUnavailable: savedLayout.items.find(p => p.item_id === object.id)?.removed !== false });
     }
     for (const composition of savedLayout.compositions || []) {
       if (composition.id === ideaId || compositionContains(composition.id, ideaId)) continue;
       const parent = savedLayout.compositions?.find(c => c.members.includes(composition.id));
       if (parent && parent.id !== ideaId && !members.includes(composition.id)) continue;
       if (!compositionMembers(composition.id).some(id => visibleFrames.has(id)) && !members.includes(composition.id)) continue;
-      candidates.push({ id: composition.id, title: composition.title || ct("groupTitle"), detail: ct("layerMembers", { n: composition.members.length }), reads: readsForUnit(composition.id) });
+      candidates.push({ id: composition.id, title: composition.title || ct("groupTitle"), detail: ct("layerMembers", { n: composition.members.length }), reads: readsForUnit(composition.id), arrangementUnavailable: true });
     }
     return { id: ideaId, group, members, candidates };
   }
@@ -649,6 +710,52 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     catch (error) { try { update(await handlers.onReload()); } catch { /* Keep the reviewed connection request while disconnected. */ } throw error; }
   });
   const connectionsButton = button(ct("dataConnections"), () => { const frame = primaryFrame(); if (frame && board) void connections.show(board, frame.object.id); });
+  async function prepareFeedback() {
+    const ids = new Set(selectedObjectIds());
+    const addInputs = (id: string) => { for (const binding of objectById(id)?.bindings ?? []) if (!ids.has(binding.from.object_id)) { ids.add(binding.from.object_id); addInputs(binding.from.object_id); } };
+    [...ids].forEach(addInputs);
+    const selected = [...ids].map(id => frames.get(id)).filter((frame): frame is Frame => Boolean(frame));
+    selected.forEach(frame => frame.native?.prepareFeedback());
+    await Promise.all(selected.map(frame => frame.editor?.prepareFeedback()));
+    update(await handlers.onReload());
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  }
+  const annotationsPanel = canvasAnnotations({
+    getBoard: () => board ?? undefined,
+    getAnnotations: () => (savedLayout.annotations ?? []).filter(note => {
+      const object = objectById(note.anchor.object_id);
+      const origin = object && board ? originForObject(object, board, overviewMeta.bindings)
+        : resolveContentOrigin(note.origin ? { cwd: note.origin.cwd, thread_id: note.origin.thread_id, source_id: note.origin.source_id || undefined, goal: note.origin.label } : undefined, note.origin?.source_id, overviewMeta.bindings);
+      return originMatches(origin, scopeWorkspace || "all", scopeTask);
+    }),
+    capture: async () => {
+      // Capturing a new note points at the current selection, not a recursive note reference.
+      selectedAnnotationId = null;
+      await prepareFeedback();
+      const anchors = getSelection()?.anchors;
+      if (anchors?.length !== 1) return null;
+      const anchor = structuredClone(anchors[0]); delete anchor.annotations; return anchor;
+    },
+    save: async request => { update(await handlers.onBatch(request)); },
+    focus: note => focusAnnotation(note, false),
+    discuss: note => focusAnnotation(note, true),
+  });
+  function focusAnnotation(note: CanvasAnnotation, discuss: boolean) {
+    const frame = frames.get(note.anchor.object_id);
+    if (!frame) throw new Error(ct("proposalMissing"));
+    focus(frame.object.id, true); choose(frame.object.id, false, true);
+    if (!discuss && note.anchor.content_revision === frame.object.content_revision) {
+      if (note.anchor.block_id && frame.reply) frame.editor?.selectBlock(frame.reply.id, note.anchor.block_id, note.anchor.target, note.anchor.region);
+      if (note.anchor.region) frame.native?.setRegion(note.anchor.region);
+    }
+    if (discuss) { selectedAnnotationId = note.id; handlers.onSelect(getSelection()); handlers.onFocusNotice?.(annotationSelected()); }
+  }
+  function openAnnotation(id: string) {
+    const note = savedLayout.annotations?.find(note => note.id === id); if (!note) return;
+    choose(note.anchor.object_id, false, true); void annotationsPanel.show(note.anchor.object_id, id);
+  }
+  const annotationsButton = button(annotationLabel(), () => { const frame = primaryFrame(); if (frame) void annotationsPanel.show(frame.object.id); });
+  const allAnnotationsButton = button(annotationLabel(), () => { void annotationsPanel.show(); });
   function paintSelectionTools() {
     const frame = primaryFrame();
     for (const node of [frontButton, backButton, cardButton]) node.disabled = !frame;
@@ -656,6 +763,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     ungroupButton.disabled = !selection || !isComposition(selection);
     ideaButton.hidden = !selection || !isComposition(selection);
     workButton.disabled = !frame;
+    workSettingsButton.hidden = !frame?.root.classList.contains("is-work");
+    annotationsButton.disabled = selectedObjectIds().length !== 1;
     focusButton.disabled = !selectedObjectIds().length;
     connectionsButton.disabled = !frame || (frame.object.content.type !== "text" && !frame.reply?.blocks.some(block => block.type === "artifact"));
     cardButton.setAttribute("aria-pressed", String(frame ? currentPlacement(frame).appearance === "card" : false));
@@ -665,7 +774,13 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const step = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[event.key];
     if (!step) return false; event.preventDefault();
     const cell = frame.cell; const pos = cell.getPosition(); const size = cell.getSize();
-    if (event.shiftKey) { cell.resize(Math.min(MAX_SIZE, Math.max(MIN_SIZE, size.width + step[0])), Math.min(MAX_SIZE, Math.max(MIN_SIZE, size.height + step[1]))); mark(cell); }
+    if (event.shiftKey) {
+      const scale = scaledPresentation(size, currentPlacement(frame)).scale;
+      const desired = 1 + (step[0] || step[1]) / (step[0] ? size.width : size.height);
+      const ratio = Math.min(MAX_SIZE / size.width, MAX_SIZE / size.height, 100 / scale,
+        Math.max(MIN_SIZE / size.width, MIN_SIZE / size.height, .01 / scale, desired));
+      cell.resize(size.width * ratio, size.height * ratio); mark(cell);
+    }
     else {
       graph.model.startBatch("layout");
       try { cell.position(pos.x + step[0], pos.y + step[1]); if (!queueGroupMove(frame.object.id)) mark(cell); }
@@ -690,7 +805,22 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       if (event.key === "Escape" && !modifier) { event.preventDefault(); deactivate(); }
       return;
     }
-    if (modifier || target?.closest("input, textarea, select, [role=textbox]") || target?.isContentEditable) return;
+    if (target?.closest("input, textarea, select, [role=textbox]") || target?.isContentEditable) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && target && (root.contains(target) || target === document.body)) {
+      const key = event.key.toLowerCase();
+      const undoKey = key === "z" && !event.shiftKey;
+      const redoKey = (key === "z" && event.shiftKey) || (key === "y" && !event.shiftKey);
+      if (undoKey || redoKey) {
+        event.preventDefault();
+        if (!event.repeat) {
+          if (undoKey && history.canUndo()) replayHistory("undo");
+          else if (redoKey && history.canRedo()) replayHistory("redo");
+        }
+        if (moreMenu) moreMenu.open = false;
+        return;
+      }
+    }
+    if (modifier) return;
     const frame = primaryFrame();
     const onHost = target === graphHost || Boolean(frame && target === frame.head);
     if (event.key === "Escape") { if (active) { event.preventDefault(); deactivate(); } else if (onHost && selection) { event.preventDefault(); choose(null, false, true); } return; }
@@ -703,14 +833,17 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     event.preventDefault(); space = true; paintPan();
   }
   function keyUp(event: KeyboardEvent) { if (event.code === "Space") { space = false; paintPan(); } }
-  function releasePan() { space = middle = false; if (groupHistoryOpen) { graph.model.stopBatch("layout"); groupHistoryOpen = false; } paintPan(); }
+  function releasePan() { space = middle = pointerLayout = false; groupDragStart = null; if (groupHistoryOpen) { graph.model.stopBatch("layout"); groupHistoryOpen = false; } paintPan(); }
   function middleDown(event: MouseEvent) { if (event.button === 1) { event.preventDefault(); middle = true; paintPan(); } }
   function middleUp() { middle = false; paintPan(); }
   window.addEventListener("keydown", keyDown); window.addEventListener("keyup", keyUp); window.addEventListener("blur", releasePan);
   graphHost.addEventListener("mousedown", middleDown, true); window.addEventListener("mouseup", middleUp, true);
   window.addEventListener("pagehide", persistView);
-  const undo = button(ct("undo"), () => history.undo());
-  const redo = button(ct("redo"), () => history.redo());
+  function replayHistory(action: "undo" | "redo") { if (!pointerLayout) history[action]({ historyReplay: true }); }
+  const undo = button(ct("undo"), () => replayHistory("undo"));
+  const redo = button(ct("redo"), () => replayHistory("redo"));
+  undo.setAttribute("aria-keyshortcuts", "Control+z Meta+z");
+  redo.setAttribute("aria-keyshortcuts", "Control+Shift+z Control+y Meta+Shift+z");
   let insertPending: { content: string; request: CanvasBatchRequest; id: string } | undefined;
   const insert = canvasInsert(async (content: CanvasContent) => {
     // The dialog regenerates placeholder IDs on a retry; that is still the same insert.
@@ -738,7 +871,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   });
   const add = button(ct("addComponent"), () => insert.show());
   add.classList.add("canvas-tool-icon");
-  const retry = button(ct("retry"), () => { layoutMessage = "layoutSaving"; void (groupMove ? saveGroupMove() : saveLayout()); }); retry.hidden = true;
+  const retry = button(ct("retry"), () => { layoutMessage = "layoutSaving"; void flushLayout(); }); retry.hidden = true;
   const draftsButton = button(ct("drafts"), () => { paintDrafts(); drafts.showModal(); });
   const removedButton = button(ct("removed"), () => { paintRemovedList(); removedDialog.showModal(); });
   const layersButton = button(ct("layers"), () => { paintLayers(); layers.showModal(); });
@@ -758,7 +891,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (board) update(board);
     paintLegacyEdges();
   });
-  moreMenu.append(jump, groupButton, ungroupButton, proposalsButton, tidyButton, undo, redo, frontButton, backButton, cardButton, draftsButton, removedButton, legacyEdgesButton);
+  moreMenu.append(jump, allAnnotationsButton, groupButton, ungroupButton, proposalsButton, tidyButton, undo, redo, frontButton, backButton, cardButton, draftsButton, removedButton, legacyEdgesButton);
   more.append(moreSummary, moreMenu);
   function paintLegacyEdges() {
     const hasLegacy = (board?.edges ?? []).some((edge) => (edge.relation ?? "unconfirmed") !== "parent");
@@ -788,7 +921,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const rail = toolGroup(add, overviewButton, layersButton, handButton, more);
   rail.classList.add("canvas-tool-rail");
   const selectionTitle = element("span", "canvas-tool-selection-title");
-  const selectionDock = toolGroup(selectionTitle, ideaButton, workButton, connectionsButton, focusButton);
+  const selectionDock = toolGroup(selectionTitle, ideaButton, workButton, workSettingsButton, annotationsButton, connectionsButton, focusButton);
   selectionDock.classList.add("canvas-tool-selection");
   const camera = toolGroup(fitButton, zoomOut, actual, zoomIn);
   camera.classList.add("canvas-tool-camera");
@@ -819,17 +952,29 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   paintIcons();
   placeSelectionTools();
   window.addEventListener("resize", placeSelectionTools);
-  graph.on("node:move", ({ node }) => { if (moveSet(node.id)) { graph.model.startBatch("layout"); groupHistoryOpen = true; } });
+  graph.on("node:move", ({ node }) => {
+    pointerLayout = true;
+    const group = moveSet(node.id);
+    if (group) {
+      // Keep the gesture's starting placements authoritative while live board updates arrive.
+      groupDragStart = new Map(group.members.map(id => [id, { ...currentPlacement(frames.get(id)!) }]));
+      graph.model.startBatch("layout"); groupHistoryOpen = true;
+    }
+  });
   graph.on("node:moved", ({ node }) => {
     if (!queueGroupMove(node.id)) mark(node);
+    groupDragStart = null; pointerLayout = false;
     if (groupHistoryOpen) { graph.model.stopBatch("layout"); groupHistoryOpen = false; }
   });
-  graph.on("node:resized", ({ node }) => mark(node));
-  for (const name of ["node:change:position", "node:change:size"] as const) graph.on(name, ({ node, options }: { node: Node; options: { remote?: boolean } }) => {
-    if (!options.remote && (name !== "node:change:position" || !moveSet(node.id))) dirty.set(node.id, placement(node));
+  graph.on("node:resize", () => { pointerLayout = true; root.classList.add("is-scaling"); });
+  graph.on("node:resized", ({ node }) => { pointerLayout = false; root.classList.remove("is-scaling"); mark(node); });
+  for (const name of ["node:change:position", "node:change:size"] as const) graph.on(name, ({ node, options }: { node: Node; options: { remote?: boolean; historyReplay?: boolean } }) => {
+    if (name === "node:change:size") sizeHtml(node);
+    if (!options.remote && (options.historyReplay || name !== "node:change:position" || !moveSet(node.id))) dirty.set(node.id, placement(node));
   });
-  history.on("undo", () => { for (const frame of frames.values()) if (dirty.has(frame.cell.id) || shapeKey(placement(frame.cell)) !== shapeKey(frame.placement)) mark(frame.cell); paintStatus(); });
-  history.on("redo", () => { for (const frame of frames.values()) mark(frame.cell); paintStatus(); });
+  const saveHistoryReplay = () => { for (const frame of frames.values()) if (dirty.has(frame.cell.id)) mark(frame.cell); paintStatus(); };
+  history.on("undo", saveHistoryReplay);
+  history.on("redo", saveHistoryReplay);
   history.on("change", paintStatus);
   graph.on("blank:click", () => choose(null, false, true));
   graph.on("node:click", ({ node, e }: { node: Node; e?: MouseEvent }) => choose(node.id, Boolean(e?.shiftKey), true));
@@ -854,6 +999,13 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const caption = originText(origin), detail = [origin.cwd, origin.taskLabel, origin.project].filter(Boolean).join("\n");
     frame.source.textContent = caption; frame.source.title = detail;
     frame.provenance.textContent = caption; frame.provenance.title = detail;
+    const group = savedLayout.compositions?.find(composition => compositionMembers(composition.id).includes(frame.object.id));
+    const members = group ? compositionMembers(group.id).filter(id => frames.has(id) && !currentPlacement(frames.get(id)!).removed) : [];
+    const sameOrigin = origin.cwd && origin.taskKey !== "unknown" && members.every(id => {
+      const other = originForObject(frames.get(id)!.object, board!, overviewMeta.bindings);
+      return other.workspaceKey === origin.workspaceKey && other.taskKey === origin.taskKey;
+    });
+    frame.root.classList.toggle("is-origin-redundant", Boolean(sameOrigin && members.length > 1 && members[0] !== frame.object.id));
     frame.root.dataset.workspace = origin.workspaceKey; frame.root.dataset.task = origin.taskKey;
   }
   function applyScope() {
@@ -984,6 +1136,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   let proposalsRefreshing = false;
   const pendingProposals = () => (savedLayout.proposals ?? []).filter(proposal => proposal.result.status === "proposed");
   function currentValue(read: CanvasRead) {
+    if (read.kind === "annotation") return textLabel(savedLayout.annotations?.find(note => note.id === read.id)?.text || ct("proposalMissing"));
     if (read.kind === "content") {
       const object = objectById(read.id); return object ? titleFor(object, frames.get(read.id)?.reply) : ct("proposalMissing");
     }
@@ -996,11 +1149,15 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   function operationText(proposal: CanvasProposal) {
     return proposal.request.operations.map(operation => {
       switch (operation.op) {
+        case "annotate": return annotationLabel();
+        case "remove_annotation": return annotationLabel() + " · " + ct(operation.removed ? "removed" : "restore");
         case "patch_content": return ct("proposalPatch");
         case "patch_reply": return ct("proposalLegacyPatch");
+        case "patch_block": return ct("proposalPatch");
         case "bind": return ct("proposalBind");
         case "place": return ct("proposalPlace");
         case "compose": return ct("group") + ": " + operation.members.length;
+        case "arrange": return at("apply");
         case "ungroup": return ct("ungroup");
         case "create": return ct("proposalCreate");
       }
@@ -1024,7 +1181,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const { type: _type, ...fields } = content; return fields;
   }
   function appendProposalChanges(host: HTMLElement, proposal: CanvasProposal) {
-    const labels: Record<string, string> = { title: ct("nativeTitle"), text: ct("nativeText"), src: ct("nativeImageSource"), alt: ct("nativeAlt"), fill: ct("nativeFill"), members: ct("layers"), bindings: ct("dataConnections") };
+    const labels: Record<string, string> = { title: ct("nativeTitle"), text: ct("nativeText"), src: ct("nativeImageSource"), alt: ct("nativeAlt"), fill: ct("nativeFill"), members: ct("layers"), bindings: ct("dataConnections"), arrangement: at("label"), description: ct("ideaDescription") };
     const bindingText = (bindings: NonNullable<CanvasObject["bindings"]>) => bindings.map(binding => `${binding.from.object_id} / ${binding.from.block_id}.${binding.from.port} → ${binding.to.block_id ? binding.to.block_id + "." : ""}${binding.to.port}`).join("\n") || "—";
     const memberNames = (ids: string[]) => ids.map(id => compositionById(id)?.title || (objectById(id) ? titleFor(objectById(id)!, frames.get(id)?.reply) : id)).join("\n");
     const valueCell = (value: unknown, isImage: boolean) => {
@@ -1046,7 +1203,11 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       const add = (key: string, before: unknown, after: unknown) => {
         const label = element("small", "canvas-proposal-field", labels[key] ?? key); table.append(label, valueCell(before, key === "src"), valueCell(after, key === "src"));
       };
-      if (operation.op === "patch_content") {
+      if (operation.op === "annotate") {
+        add("text", savedLayout.annotations?.find(note => note.id === operation.id)?.text, operation.text);
+      } else if (operation.op === "remove_annotation") {
+        add("text", savedLayout.annotations?.find(note => note.id === operation.id)?.text, ct(operation.removed ? "removed" : "restore"));
+      } else if (operation.op === "patch_content") {
         const fields = objectFields(object); for (const [key, value] of Object.entries(operation.fields)) add(key, fields[key], value);
       } else if (operation.op === "patch_reply") {
         const content = object?.content, reply = content?.type === "reply" ? board?.replies?.find(reply => reply.id === content.id) : undefined;
@@ -1061,6 +1222,18 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       } else if (operation.op === "compose") {
         const group = compositionById(operation.id); add("title", group?.title, operation.title); add("members", group ? memberNames(group.members) : "—", memberNames(operation.members));
         if (operation.description !== undefined) add("description", group?.description, operation.description);
+        if (operation.arrangement !== undefined) add("arrangement", at(group?.arrangement || "free"), at(operation.arrangement));
+      } else if (operation.op === "arrange") {
+        const group = compositionById(operation.id);
+        const preceding = proposal.request.operations.slice(0, proposal.request.operations.indexOf(operation)).reverse().find(op => op.op === "compose" && op.id === operation.id);
+        const mode = preceding?.op === "compose" ? preceding.arrangement || group?.arrangement || "free" : group?.arrangement || "free";
+        const members = preceding?.op === "compose" ? preceding.members : group?.members || [];
+        const placements = members.map(id => savedLayout.items.find(p => p.item_id === id)).filter((p): p is CanvasPlacement => Boolean(p));
+        add("arrangement", at(group?.arrangement || "free"), at(mode));
+        if (placements.length === members.length) for (const point of arrangementPreview(mode, placements)) {
+          const before = placements.find(p => p.item_id === point.id)!;
+          add(memberNames([point.id]), `${Math.round(before.x)}, ${Math.round(before.y)}`, `${Math.round(point.x)}, ${Math.round(point.y)}`);
+        }
       } else if (operation.op === "ungroup") {
         add("members", memberNames(compositionById(operation.id)?.members ?? []), ct("ungroup"));
       } else if (operation.op === "create" && operation.content.type === "block") {
@@ -1076,6 +1249,13 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const needed = [...proposal.request.reads];
     const created = new Set(proposal.request.operations.filter(operation => operation.op === "create").map(operation => operation.id));
     for (const operation of proposal.request.operations) {
+      if (operation.op === "annotate" || operation.op === "remove_annotation") {
+        if (operation.expected_revision > 0) needed.push({ kind: "annotation", id: operation.id, revision: operation.expected_revision });
+        if (operation.op === "annotate" && contentKey(savedLayout.annotations?.find(note => note.id === operation.id)?.anchor) !== contentKey(operation.anchor)) {
+          needed.push({ kind: "content", id: operation.anchor.object_id, revision: operation.anchor.content_revision });
+          for (const group of operation.anchor.compositions ?? []) needed.push({ kind: "composition", ...group });
+        }
+      }
       if ((operation.op === "patch_content" || operation.op === "patch_reply" || operation.op === "patch_block" || operation.op === "bind") && !created.has(operation.id)) needed.push({ kind: "content", id: operation.id, revision: operation.expected_revision });
       else if (operation.op === "place" && !created.has(operation.id)) needed.push({ kind: "presentation", id: operation.id, revision: operation.expected_revision });
       else if (operation.op === "ungroup") {
@@ -1085,6 +1265,9 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       } else if (operation.op === "compose") {
         if (operation.expected_revision > 0) needed.push({ kind: "composition", id: operation.id, revision: operation.expected_revision });
         operation.members.filter(member => !created.has(member)).forEach(member => needed.push(...readsForUnit(member)));
+      } else if (operation.op === "arrange") {
+        if (!proposal.request.operations.some(op => op.op === "compose" && op.id === operation.id && op.expected_revision === 0)) needed.push({ kind: "composition", id: operation.id, revision: operation.expected_revision });
+        for (const [id, revision] of Object.entries(operation.expected_presentations)) if (!created.has(id)) needed.push({ kind: "presentation", id, revision });
       }
     }
     const current: CanvasRead[] = [];
@@ -1250,18 +1433,31 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const provenance = element("small", "canvas-origin");
     const activateButton = button(ct("activate"), () => { if (active === key) deactivate(); else activate(key); });
     const openButton = button(ct("open"), () => openReader(key), ct("open"));
-    for (const node of [activateButton, openButton]) node.addEventListener("mousedown", event => event.stopPropagation());
+    const annotationBadge = button(annotationLabel(), () => { choose(key, false, true); void annotationsPanel.show(key); });
+    annotationBadge.classList.add("canvas-annotation-badge"); annotationBadge.hidden = true;
+    for (const name of ["pointerdown", "mousedown", "click", "dblclick"]) annotationBadge.addEventListener(name, event => event.stopPropagation());
+    for (const node of [activateButton, openButton]) {
+      for (const name of ["pointerdown", "mousedown", "click", "dblclick"]) node.addEventListener(name, event => event.stopPropagation());
+    }
     head.append(title, source, activateButton, openButton);
     const content = element("div", "canvas-frame-content"); content.tabIndex = -1;
     content.inert = true;
     const drag = element("div", "canvas-card-drag"); drag.setAttribute("aria-hidden", "true");
-    for (const name of ["mousedown", "pointerdown", "wheel", "dblclick"]) content.addEventListener(name, event => event.stopPropagation());
+    for (const name of ["mousedown", "pointerdown", "dblclick"]) content.addEventListener(name, event => event.stopPropagation());
     content.addEventListener("pointerdown", event => choose(key, event.shiftKey, true), { capture: true });
-    frame.append(head, provenance, content, drag);
+    frame.append(head, provenance, content, drag, annotationBadge);
     let editor: ReplyBoardHandle | undefined;
     let native: NativeCanvasContent | undefined;
     if (isNativeCanvasContent(object.content)) {
       native = new NativeCanvasContent(content, object, {
+        getSourceTitle: source => {
+          const producer = objectById(source.object_id);
+          if (!producer) return;
+          if (producer.content.type !== "reply") return titleFor(producer);
+          const replyId = producer.content.id;
+          const sourceReply = board?.replies?.find(reply => reply.id === replyId);
+          return sourceReply?.blocks.find(block => block.id === source.block_id)?.title?.trim() || sourceReply?.title?.trim();
+        },
         onPatch: async (fields: CanvasContentFields) => {
           const held = frames.get(key); if (!held) return;
           const encoded = contentKey({ fields, expected_revision: held.object.content_revision }), previous = nativeRequestIds.get(key);
@@ -1275,10 +1471,27 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
         onSelectionChange: () => { if (selectedUnits.has(key)) handlers.onSelect(getSelection()); },
         onTitleChange: value => { const held = frames.get(key); if (held) { held.title.textContent = value; held.head.setAttribute("aria-label", value); } },
         onError: fail,
+        onAnnotation: openAnnotation,
       });
     } else if (reply) {
       editor = mountReplyBoard(content, {
         dataflow,
+        getCanvas: () => board?.canvas,
+        getBoard: () => board ?? undefined,
+        onAnnotation: openAnnotation,
+        onArtifactWheel: canvasWheel,
+        onArtifactPresentationChange: (_replyId, blockId, height, _mode, explicit) => {
+          const held = frames.get(key);
+          if (!explicit || !held || held.reply?.blocks.length !== 1 || held.reply.blocks[0].id !== blockId) return;
+          // Natural measurement never overwrites a user's layout; an explicit size mode change may.
+          const chrome = held.root.offsetHeight - held.content.offsetHeight;
+          const next = Math.min(MAX_SIZE, Math.max(160, (height + chrome) * (currentPlacement(held).content_scale ?? 1)));
+          void (async () => {
+            await saveLayout();
+            const current = frames.get(key); if (!current) return;
+            update(await handlers.onBatch({ request_id: crypto.randomUUID(), reads: [{ kind: "presentation", id: key, revision: current.placement.revision }], operations: [{ op: "place", id: key, expected_revision: current.placement.revision, fields: { height: next } }] }));
+          })().catch(fail);
+        },
         onPatch: async request => {
           const atom = frames.get(key)?.object;
           if (atom?.content.type === "block") {
@@ -1306,6 +1519,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     }
     html.set(key, frame);
     const cell = graph.addNode({ id: key, shape, x: p.x, y: p.y, width: p.width, height: p.height, zIndex: p.z }, { remote: true });
+    sizeHtml(cell, frame, p);
     mountHtml(cell, frame, native);
     queueMicrotask(() => { if (!destroyed && html.get(key) === frame) mountHtml(cell, frame, native); });
     requestAnimationFrame(() => { if (!destroyed && html.get(key) === frame) mountHtml(cell, frame, native); });
@@ -1315,7 +1529,12 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
 
   type GraphEdgeSpec = { id: string; source: string; target: string; labels?: string[] };
-  const edgeLabelStyle = { attrs: { text: { fill: "#5c574e", fontSize: 11, fontFamily: "Noto Sans SC, Microsoft YaHei, sans-serif" }, rect: { fill: "#fffcf7", stroke: "none", rx: 4, ry: 4 } } };
+  // Style each label so X6 retains its default markup, anchoring, and background sizing.
+  // An attrs-only defaultLabel replaces those defaults and throws during edge rendering.
+  const edgeLabel = (text: string) => ({ attrs: {
+    label: { text, fill: "#5c574e", fontSize: 11, fontFamily: "Noto Sans SC, Microsoft YaHei, sans-serif" },
+    body: { fill: "#fffcf7", stroke: "none", rx: 4, ry: 4 },
+  } });
   function edgeLineAttrs(id: string) {
     return { stroke: id.startsWith("data:") ? "#2a8a78" : "#9e7cc0", strokeWidth: 1.6, strokeDasharray: id.startsWith("data:") ? "" : "5 5" };
   }
@@ -1333,14 +1552,14 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
         if (cell.getSourceCellId() !== edge.source) cell.setSource({ cell: edge.source }, { remote: true });
         if (cell.getTargetCellId() !== edge.target) cell.setTarget({ cell: edge.target }, { remote: true });
         const nextLabels = edge.labels ?? [];
-        if (contentKey(edgeLabelTexts(cell)) !== contentKey(nextLabels)) cell.setLabels(nextLabels, { remote: true });
+        if (contentKey(edgeLabelTexts(cell)) !== contentKey(nextLabels)) cell.setLabels(nextLabels.map(edgeLabel), { remote: true });
         if (cell.getZIndex() !== EDGE_Z) cell.setZIndex(EDGE_Z, { remote: true });
         const line = edgeLineAttrs(edge.id);
         if (cell.attr("line/stroke") !== line.stroke) cell.attr("line/stroke", line.stroke, { remote: true });
         if (Number(cell.attr("line/strokeWidth")) !== line.strokeWidth) cell.attr("line/strokeWidth", line.strokeWidth, { remote: true });
         if (String(cell.attr("line/strokeDasharray") ?? "") !== line.strokeDasharray) cell.attr("line/strokeDasharray", line.strokeDasharray, { remote: true });
       } else if (!cell) {
-        graph.addEdge({ ...edge, zIndex: EDGE_Z, defaultLabel: edgeLabelStyle, attrs: { line: edgeLineAttrs(edge.id) } }, { remote: true });
+        graph.addEdge({ ...edge, labels: edge.labels?.map(edgeLabel), zIndex: EDGE_Z, attrs: { line: edgeLineAttrs(edge.id) } }, { remote: true });
       }
     }
   }
@@ -1349,13 +1568,13 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (destroyed) return;
     board = snapshot;
     dataflow.update(snapshot);
-    const layout: CanvasLayout = { revision: snapshot.canvas?.revision ?? 0, objects: snapshot.canvas?.objects ?? [], items: snapshot.canvas?.items ?? [], compositions: snapshot.canvas?.compositions ?? [], proposals: snapshot.canvas?.proposals ?? [] };
+    const layout: CanvasLayout = { revision: snapshot.canvas?.revision ?? 0, objects: snapshot.canvas?.objects ?? [], items: snapshot.canvas?.items ?? [], compositions: snapshot.canvas?.compositions ?? [], annotations: snapshot.canvas?.annotations ?? [], proposals: snapshot.canvas?.proposals ?? [] };
     if (layout.revision >= revision) { revision = layout.revision; savedLayout = layout; }
     if (groupMove) {
       const receipt = savedLayout.proposals?.find(proposal => proposal.request.request_id === groupMove!.request.request_id);
       if (receipt && receipt.result.status !== "proposed") {
         for (const [id, position] of groupMove.positions) if (contentKey(groupLocal.get(id)) === contentKey(position)) groupLocal.delete(id);
-        groupMove = null; layoutMessage = "layoutSaved";
+        groupMove = null; layoutMessage = dirty.size || groupLocal.size ? "layoutSaving" : "layoutSaved";
       }
     }
     for (const [id, pending] of nativeRequestIds) if (savedLayout.proposals?.some(proposal => proposal.request.request_id === pending.requestId && proposal.result.status === "dismissed")) nativeRequestIds.delete(id);
@@ -1405,7 +1624,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       if (frame.editor && reply) frame.editor.update([reply]);
       if (readingKey === key) { readerTitle.textContent = label; readerSource.textContent = frame.source.textContent; }
       // Unsaved local changes win over the server placement; confirmed or conflicting ones follow the layout.
-      if (!dirty.has(key) && !groupLocal.has(key)) { frame.cell.position(p.x, p.y, { remote: true }); frame.cell.resize(p.width, p.height, { remote: true }); }
+      if (!dirty.has(key) && !groupLocal.has(key) && !groupDragStart?.has(key)) { frame.cell.position(p.x, p.y, { remote: true }); frame.cell.resize(p.width, p.height, { remote: true }); }
+      sizeHtml(frame.cell);
       applyAppearance(frame, currentPlacement(frame));
     }
     const objectKey = (type: LegacyContent["type"], id: string) => objectForContent(type, id)?.id ?? "";
@@ -1416,6 +1636,14 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       .filter(edge => keys.has(edge.source) && keys.has(edge.target));
     syncGraphEdges(edges);
     applyScope();
+    if (selectedAnnotationId && !savedLayout.annotations?.some(note => note.id === selectedAnnotationId && !note.removed)) selectedAnnotationId = null;
+    for (const frame of frames.values()) {
+      frame.native?.setAnnotations(savedLayout.annotations ?? []);
+      const count = savedLayout.annotations?.filter(note => !note.removed && note.anchor.object_id === frame.object.id).length ?? 0;
+      const badge = frame.root.querySelector<HTMLButtonElement>(".canvas-annotation-badge");
+      if (badge) { badge.hidden = !count; badge.textContent = annotationLabel(count); badge.setAttribute("aria-label", annotationLabel(count)); }
+    }
+    annotationsPanel.refresh();
     for (const unit of [...selectedUnits]) if (!objectById(unit) && !compositionById(unit)) selectedUnits.delete(unit);
     if (selection && (!selectedUnits.size || !selectedObjectIds().length)) choose(null);
     else {
@@ -1442,12 +1670,16 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
   function labels() {
     applyScope();
+    workSettingsButton.textContent = ct("workSettings"); workSettingsButton.title = ct("workSettings"); workSettingsButton.setAttribute("aria-label", ct("workSettings"));
+    for (const node of [annotationsButton, allAnnotationsButton]) { node.textContent = annotationLabel(); node.setAttribute("aria-label", annotationLabel()); }
     graphHost.setAttribute("aria-label", ct("canvas"));
     connectionsButton.textContent = ct("dataConnections"); connectionsButton.title = ct("dataConnections"); connectionsButton.setAttribute("aria-label", ct("dataConnections"));
     moreSummary.setAttribute("aria-label", ct("moreMenu")); moreSummary.title = ct("more");
     focusButton.textContent = ct("focusSelection"); focusButton.title = ct("focusSelectionHint"); focusButton.setAttribute("aria-label", ct("focusSelectionHint"));
     paintLegacyEdges();
     for (const [node, key] of [[fitButton, "fit"], [undo, "undo"], [redo, "redo"], [retry, "retry"], [proposalsButton, "proposals"], [tidyButton, "arrange"], [overviewClose, "close"], [layersClose, "close"], [proposalsClose, "close"], [proposalRefresh, "proposalRefresh"], [frontButton, "toFront"], [backButton, "toBack"], [cardButton, "cardStyle"], [groupButton, "group"], [ungroupButton, "ungroup"]] as const) { node.textContent = ct(key); node.title = ct(key); node.setAttribute("aria-label", ct(key)); }
+    undo.title = `${ct("undo")} (Ctrl+Z)`;
+    redo.title = `${ct("redo")} (Ctrl+Shift+Z / Ctrl+Y)`;
     for (const [node, key] of [[add, "addComponent"], [overviewButton, "overview"], [layersButton, "layers"], [handButton, "pan"], [zoomIn, "zoomIn"], [zoomOut, "zoomOut"]] as const) { node.title = ct(key); node.setAttribute("aria-label", ct(key)); }
     ideaButton.textContent = ct("ideaEdit"); ideaButton.setAttribute("aria-label", ct("ideaEdit"));
     paintIcons();
@@ -1472,16 +1704,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
   const unsubscribeLocale = onLocale(labels); labels();
   return { update, getSelection, setOverviewMeta, selectObject, getScope: () => ({ workspace: scopeWorkspace || "all", task: scopeTask }),
-    async prepareFeedback() {
-      const ids = new Set(selectedObjectIds());
-      const addInputs = (id: string) => { for (const binding of objectById(id)?.bindings ?? []) if (!ids.has(binding.from.object_id)) { ids.add(binding.from.object_id); addInputs(binding.from.object_id); } };
-      [...ids].forEach(addInputs);
-      const selected = [...ids].map(id => frames.get(id)).filter((frame): frame is Frame => Boolean(frame));
-      selected.forEach(frame => frame.native?.prepareFeedback());
-      await Promise.all(selected.map(frame => frame.editor?.prepareFeedback()));
-      update(await handlers.onReload());
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-    },
+    prepareFeedback,
     select(replyId: string) {
       const object = objectForContent("reply", replyId) ?? resolveObject(replyId);
       if (!object || !frames.has(object.id)) {
@@ -1519,6 +1742,6 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       locateIntent = { kind: "object", id: object.id };
       reveal(object);
     },
-    destroy() { persistView(); destroyed = true; viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistView); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); unsubscribeLocale(); unsubscribeDrafts(); unsubscribeData(); dataflow.destroy(); connections.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
+    destroy() { persistView(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistView); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); unsubscribeLocale(); unsubscribeDrafts(); unsubscribeData(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
   };
 }

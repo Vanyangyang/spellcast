@@ -105,6 +105,10 @@ struct Rpc {
 
 impl Rpc {
     async fn open(executable: &Path) -> Result<Self, CodexError> {
+        Self::open_in_profile(executable, None).await
+    }
+
+    async fn open_in_profile(executable: &Path, profile: Option<(&Path, &Path)>) -> Result<Self, CodexError> {
         let mut command = Command::new(executable);
         command
             .args(["app-server", "--stdio"])
@@ -112,6 +116,10 @@ impl Rpc {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        if let Some((user_home, codex_home)) = profile {
+            command.current_dir(user_home).env("HOME", user_home)
+                .env("USERPROFILE", user_home).env("CODEX_HOME", codex_home);
+        }
         #[cfg(windows)]
         command.creation_flags(0x0800_0000); // This owned protocol helper has no interactive window.
         let mut child = command
@@ -202,6 +210,15 @@ impl Rpc {
         }
     }
 
+}
+
+/// Ask Codex to evaluate current hook hashes and trust. Never creates a thread,
+/// runs a hook, or writes trust. The caller supplies the exact installation profile.
+pub async fn list_hooks(executable: &Path, user_home: &Path, codex_home: &Path) -> Result<Value, CodexError> {
+    let mut rpc = Rpc::open_in_profile(executable, Some((user_home, codex_home))).await?;
+    let result = rpc.request("hooks/list", json!({ "cwds": [user_home] })).await;
+    rpc.close().await;
+    result.map_err(CodexError::before_send)
 }
 
 fn rpc_result(message: Value) -> Result<Value, CodexError> {

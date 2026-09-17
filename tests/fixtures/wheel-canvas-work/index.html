@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>滚轮交互验收</title>
+<style>
+  body { margin: 0; padding: 12px; color: #24332f; background: #f8f6ef; font: 14px/1.5 system-ui; }
+  h1 { margin: 0 0 8px; font-size: 18px; }
+  #free { height: 48px; background: #e4eee9; padding: 8px; box-sizing: border-box; }
+  label { display: flex; gap: 10px; align-items: center; margin: 10px 0; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  #scrollPanel, #wheelPad { height: 100px; box-sizing: border-box; border: 1px solid #bbc9c1; padding: 8px; }
+  #scrollPanel { overflow-y: auto; } #scrollPanel p { margin: 0; height: 45px; }
+  #wheelPad { background: #eee5f5; } #wheelPad:focus { outline: 2px solid #80638e; }
+</style>
+<body>
+<h1>滚轮交互验收</h1>
+<div id="free">这里没有内部滚动，应缩放画布</div>
+<label>间隔 <input id="gap" aria-label="间隔" type="range" min="0" max="30" value="15"><output id="gapValue">15</output></label>
+<div class="panels">
+  <section id="scrollPanel" aria-label="内部滚动区域" tabindex="0"><p>内部滚动：第一行</p><p>第二行</p><p>第三行</p><p>第四行</p><p>第五行</p><p>第六行</p></section>
+  <section id="wheelPad" aria-label="作品自定义滚轮" tabindex="0">这里由作品处理滚轮：<output id="turns">0</output></section>
+</div>
+<script>
+spellcast.ready.then(saved => {
+  let gap = saved.gap ?? 15, turns = saved.turns ?? 0;
+  const slider = document.querySelector('#gap'), count = document.querySelector('#turns'), value = document.querySelector('#gapValue');
+  const paint = () => { slider.value = gap; value.textContent = gap; count.textContent = turns; };
+  paint(); spellcast.onRestore(next => { gap = next.gap ?? 15; turns = next.turns ?? 0; paint(); });
+  slider.addEventListener('input', () => { gap = Number(slider.value); paint(); spellcast.setState({ gap, turns }); });
+  document.querySelector('#wheelPad').addEventListener('wheel', event => { event.preventDefault(); turns++; paint(); spellcast.setState({ gap, turns }); }, { passive: false });
+});
+</script>
+</body></html>

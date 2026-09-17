@@ -3,15 +3,153 @@
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use spellcast_core::inbox::{now_ms, CanvasAnchor};
-use spellcast_core::{CanvasBatchRequest, CanvasBatchResult, CanvasBatchStatus, CanvasContent, CanvasOperation, CanvasProposal, CanvasRead, CanvasTargetKind, CanvasTargetState, CanvasTargetStatus, ReplyBlock, Session, SpellcastError};
+use spellcast_core::{
+    CanvasArrangement, CanvasBatchRequest, CanvasBatchResult, CanvasBatchStatus, CanvasBinding,
+    CanvasContent, CanvasContentFields, CanvasOperation, CanvasOrigin, CanvasPlacementFields,
+    CanvasProposal, CanvasRead, CanvasTargetKind, CanvasTargetState, CanvasTargetStatus, ReplyBlock,
+    Session, SpellcastError,
+};
 
 use crate::{feedback::DeliveryPhase, Bridge, PersistedState};
+
+/// Host-visible canvas writes. Layout, annotation and ungroup stay on the window HTTP path.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum McpCanvasOperation {
+    Create {
+        id: String,
+        content: CanvasContent,
+        #[serde(default)]
+        origin: Option<CanvasOrigin>,
+        #[serde(default)]
+        placement: CanvasPlacementFields,
+        #[serde(default)]
+        bindings: Vec<CanvasBinding>,
+    },
+    PatchContent {
+        id: String,
+        expected_revision: u64,
+        fields: CanvasContentFields,
+    },
+    PatchReply {
+        id: String,
+        expected_revision: u64,
+        block: ReplyBlock,
+    },
+    PatchBlock {
+        id: String,
+        expected_revision: u64,
+        block: ReplyBlock,
+    },
+    Bind {
+        id: String,
+        expected_revision: u64,
+        bindings: Vec<CanvasBinding>,
+    },
+    Compose {
+        id: String,
+        expected_revision: u64,
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arrangement: Option<CanvasArrangement>,
+        members: Vec<String>,
+    },
+}
+
+impl From<McpCanvasOperation> for CanvasOperation {
+    fn from(operation: McpCanvasOperation) -> Self {
+        match operation {
+            McpCanvasOperation::Create {
+                id,
+                content,
+                origin,
+                placement,
+                bindings,
+            } => Self::Create {
+                id,
+                content,
+                origin,
+                placement,
+                bindings,
+            },
+            McpCanvasOperation::PatchContent {
+                id,
+                expected_revision,
+                fields,
+            } => Self::PatchContent {
+                id,
+                expected_revision,
+                fields,
+            },
+            McpCanvasOperation::PatchReply {
+                id,
+                expected_revision,
+                block,
+            } => Self::PatchReply {
+                id,
+                expected_revision,
+                block,
+            },
+            McpCanvasOperation::PatchBlock {
+                id,
+                expected_revision,
+                block,
+            } => Self::PatchBlock {
+                id,
+                expected_revision,
+                block,
+            },
+            McpCanvasOperation::Bind {
+                id,
+                expected_revision,
+                bindings,
+            } => Self::Bind {
+                id,
+                expected_revision,
+                bindings,
+            },
+            McpCanvasOperation::Compose {
+                id,
+                expected_revision,
+                title,
+                description,
+                arrangement,
+                members,
+            } => Self::Compose {
+                id,
+                expected_revision,
+                title,
+                description,
+                arrangement,
+                members,
+            },
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct CanvasSubmission {
     pub source_id: String,
-    #[serde(flatten)]
-    pub batch: CanvasBatchRequest,
+    pub request_id: String,
+    #[serde(default)]
+    pub reads: Vec<CanvasRead>,
+    pub operations: Vec<McpCanvasOperation>,
+    #[serde(default)]
+    pub feedback_sequences: Vec<u64>,
+}
+
+impl CanvasSubmission {
+    pub fn into_batch(self) -> CanvasBatchRequest {
+        CanvasBatchRequest {
+            request_id: self.request_id,
+            reads: self.reads,
+            operations: self.operations.into_iter().map(Into::into).collect(),
+            feedback_sequences: self.feedback_sequences,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,7 +189,7 @@ impl Bridge {
                 state.session.board.canvas.proposals.push(CanvasProposal { request: request.clone(), source_id: source_id.map(String::from), result: result.clone() });
             }
             if result.status == "applied" {
-                capture_origins(state, &request, source_id);
+                capture_origins(state, &request, source_id)?;
                 if let Some(source) = source_id { mark_response(state, source, &request); }
             }
             state.session.sync_canvas();
@@ -85,7 +223,7 @@ impl Bridge {
                     }
                     state.session = candidate;
                     if result.status == "applied" && proposal.result.status != "applied" {
-                        capture_origins(state, &proposal.request, proposal.source_id.as_deref());
+                        capture_origins(state, &proposal.request, proposal.source_id.as_deref())?;
                         if let Some(source) = &proposal.source_id { mark_response(state, source, &proposal.request); }
                     }
                     result
@@ -101,26 +239,55 @@ impl Bridge {
     }
 
     fn canvas_resource_issues(&self, session: &Session, current: &Session, request: &CanvasBatchRequest) -> Vec<CanvasTargetStatus> {
-        request.operations.iter().filter_map(|op| self.validate_canvas_resource(session, op).err().map(|error| {
-            let (id, expected) = match op {
-                CanvasOperation::Create { id, .. } => (id, 0),
+        request.operations.iter().filter_map(|op| self.validate_canvas_resource(session, current, op).err().map(|error| {
+            let (kind, id, expected) = match op {
+                CanvasOperation::Create { id, .. } => (CanvasTargetKind::Content, id, 0),
                 CanvasOperation::PatchContent { id, expected_revision, .. } | CanvasOperation::PatchReply { id, expected_revision, .. } | CanvasOperation::Bind { id, expected_revision, .. }
                 | CanvasOperation::PatchBlock { id, expected_revision, .. }
-                | CanvasOperation::Place { id, expected_revision, .. } | CanvasOperation::Compose { id, expected_revision, .. } | CanvasOperation::Ungroup { id, expected_revision } => (id, *expected_revision),
+                | CanvasOperation::Place { id, expected_revision, .. } | CanvasOperation::Compose { id, expected_revision, .. } | CanvasOperation::Arrange { id, expected_revision, .. } | CanvasOperation::Ungroup { id, expected_revision } => (CanvasTargetKind::Content, id, *expected_revision),
+                CanvasOperation::Annotate { id, expected_revision, .. } | CanvasOperation::RemoveAnnotation { id, expected_revision, .. } => (CanvasTargetKind::Annotation, id, *expected_revision),
             };
-            CanvasTargetStatus { kind: CanvasTargetKind::Content, id: id.clone(), status: CanvasTargetState::Invalid,
-                expected_revision: Some(expected), actual_revision: current.board.canvas.object(id).map(|o| o.content_revision), message: Some(error.to_string()) }
+            CanvasTargetStatus { kind, id: id.clone(), status: CanvasTargetState::Invalid,
+                expected_revision: Some(expected), actual_revision: current.board.canvas.revision_of(kind, id), message: Some(error.to_string()) }
         })).collect()
     }
 
-    fn validate_canvas_resource(&self, session: &Session, op: &CanvasOperation) -> Result<(), SpellcastError> {
+    fn validate_canvas_resource(&self, session: &Session, current: &Session, op: &CanvasOperation) -> Result<(), SpellcastError> {
             match op {
                 CanvasOperation::Create { content, bindings, .. } => {
                     for binding in bindings { self.validate_binding_ports(session, content, binding)?; }
+                    if let CanvasContent::Block { block } = content {
+                        self.validate_block_resources(block)?;
+                    }
                 }
                 CanvasOperation::Bind { id, bindings, .. } => {
                     let object = session.board.canvas.object(id).ok_or_else(|| SpellcastError::user("连接的目标已经不存在。"))?;
                     for binding in bindings { self.validate_binding_ports(session, &object.content, binding)?; }
+                }
+                CanvasOperation::Annotate { anchor, .. } => {
+                    let unchanged_anchor = match op {
+                        CanvasOperation::Annotate { id, .. } => current
+                            .board
+                            .canvas
+                            .annotation(id)
+                            .is_some_and(|annotation| annotation.anchor == *anchor),
+                        _ => false,
+                    };
+                    if !unchanged_anchor {
+                        validate_anchors(session, std::slice::from_ref(anchor))?;
+                    }
+                }
+                CanvasOperation::PatchBlock { id, block, .. } => {
+                    if let Some(source) = session
+                        .board
+                        .canvas
+                        .object(id)
+                        .and_then(|object| object.source_id.as_deref())
+                    {
+                        self.validate_artifacts(source, std::slice::from_ref(block))?;
+                    } else {
+                        self.validate_block_resources(block)?;
+                    }
                 }
                 _ => {}
             }
@@ -169,6 +336,9 @@ fn validate_feedback(state: &PersistedState, source: &str, request: &CanvasBatch
         for id in event.anchors.iter().map(|a| &a.object_id).chain(event.object_id.iter())
             .chain(event.anchors.iter().filter_map(|a| a.inputs.as_ref()).flat_map(|inputs| inputs.ports.values())
                 .filter(|port| port.status == spellcast_core::inbox::CanvasPortStatus::Available).flat_map(|port| port.sources.iter().map(|source| &source.object_id))) {
+            let preserved_by_annotation = state.session.board.canvas.object(id).is_none()
+                && event.annotation_context.iter().any(|annotation| &annotation.anchor.object_id == id);
+            if preserved_by_annotation { continue; }
             if !request.reads.iter().any(|read| read.kind == CanvasTargetKind::Content && &read.id == id) {
                 return Err(SpellcastError::user("请声明所引用反馈对象的内容版本依赖，再提交结果。"));
             }
@@ -178,27 +348,118 @@ fn validate_feedback(state: &PersistedState, source: &str, request: &CanvasBatch
                 return Err(SpellcastError::user("请声明所引用想法组合的版本依赖，再提交结果。"));
             }
         }
+        for annotation in &event.annotation_context {
+            if !request.reads.iter().any(|read| {
+                read.kind == CanvasTargetKind::Annotation && read.id == annotation.id
+            }) {
+                return Err(SpellcastError::user(
+                    "请声明所引用注释的版本依赖，再提交结果。",
+                ));
+            }
+        }
     }
     Ok(())
 }
 
-fn capture_origins(state: &mut PersistedState, request: &CanvasBatchRequest, source: Option<&str>) {
-    let Some(binding) = source.and_then(|source| state.bindings.iter().find(|binding| binding.source_id == source)) else { return; };
-    let cwd = binding.cwd.clone();
-    if cwd.is_empty() { return; }
-    let origin = spellcast_core::CanvasOrigin { cwd, thread_id: Some(binding.thread_id.clone()), source_id: Some(binding.source_id.clone()), label: binding.label.clone() };
-    for operation in &request.operations {
-        if let CanvasOperation::Create { id, .. } = operation {
-            if let Some(object) = state.session.board.canvas.objects.iter_mut().find(|object| object.id == *id) { object.origin = Some(origin.clone()); }
+fn capture_origins(
+    state: &mut PersistedState,
+    request: &CanvasBatchRequest,
+    source: Option<&str>,
+) -> Result<(), SpellcastError> {
+    let created_origin = source
+        .and_then(|source| state.bindings.iter().find(|binding| binding.source_id == source))
+        .filter(|binding| !binding.cwd.is_empty())
+        .map(|binding| spellcast_core::CanvasOrigin {
+            cwd: binding.cwd.clone(),
+            thread_id: Some(binding.thread_id.clone()),
+            source_id: Some(binding.source_id.clone()),
+            label: binding.label.clone(),
+        });
+    if let Some(origin) = created_origin {
+        for operation in &request.operations {
+            if let CanvasOperation::Create { id, .. } = operation {
+                if let Some(object) = state
+                    .session
+                    .board
+                    .canvas
+                    .objects
+                    .iter_mut()
+                    .find(|object| object.id == *id)
+                {
+                    object.origin = Some(origin.clone());
+                }
+            }
         }
     }
+    for operation in &request.operations {
+        if let CanvasOperation::Annotate { id, anchor, .. } = operation {
+            let copied = effective_origin(state, &anchor.object_id);
+            if let Some(annotation) = state
+                .session
+                .board
+                .canvas
+                .annotations
+                .iter_mut()
+                .find(|annotation| annotation.id == *id)
+            {
+                if copied.is_some() {
+                    annotation.origin = copied;
+                }
+                if serde_json::to_vec(annotation)?.len() > 3 * 1024 * 1024 {
+                    return Err(SpellcastError::user(
+                        "单条注释超过 3 MiB；请把图片保存为 immutable /artifacts 资源后重试。",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn effective_origin(state: &PersistedState, object_id: &str) -> Option<spellcast_core::CanvasOrigin> {
+    let object = state.session.board.canvas.object(object_id)?;
+    if let Some(origin) = &object.origin {
+        return Some(origin.clone());
+    }
+    if let CanvasContent::Node { id } = &object.content {
+        if let Some(captured) = state
+            .session
+            .board
+            .nodes
+            .iter()
+            .find(|node| &node.id == id)
+            .and_then(|node| node.captured_context.as_ref())
+        {
+            if let Some(cwd) = captured.cwd.clone().filter(|cwd| !cwd.is_empty()) {
+                return Some(spellcast_core::CanvasOrigin {
+                    cwd,
+                    thread_id: captured.thread_id.clone(),
+                    source_id: Some(captured.source_id.clone()),
+                    label: captured.project.clone(),
+                });
+            }
+        }
+    }
+    let source = object.source_id.as_deref()?;
+    state
+        .bindings
+        .iter()
+        .find(|binding| binding.source_id == source && !binding.cwd.is_empty())
+        .map(|binding| spellcast_core::CanvasOrigin {
+            cwd: binding.cwd.clone(),
+            thread_id: Some(binding.thread_id.clone()),
+            source_id: Some(binding.source_id.clone()),
+            label: binding.label.clone(),
+        })
 }
 
 fn mark_response(state: &mut PersistedState, source: &str, request: &CanvasBatchRequest) {
-    let ids: Vec<_> = request.operations.iter().map(|op| match op {
+    let ids: Vec<_> = request.operations.iter().flat_map(|op| match op {
         CanvasOperation::Create { id, .. } | CanvasOperation::PatchContent { id, .. }
         | CanvasOperation::PatchReply { id, .. } | CanvasOperation::PatchBlock { id, .. } | CanvasOperation::Bind { id, .. } | CanvasOperation::Place { id, .. }
-        | CanvasOperation::Compose { id, .. } | CanvasOperation::Ungroup { id, .. } => id.clone(),
+        | CanvasOperation::Compose { id, .. } | CanvasOperation::Ungroup { id, .. }
+        | CanvasOperation::Annotate { id, .. } | CanvasOperation::RemoveAnnotation { id, .. } => vec![id.clone()],
+        CanvasOperation::Arrange { id, expected_presentations, .. } => std::iter::once(id.clone()).chain(expected_presentations.keys().cloned()).collect(),
     }).collect();
     for receipt in &mut state.deliveries {
         if request.feedback_sequences.contains(&receipt.event.seq) && receipt.event.source_id.as_deref() == Some(source) {
@@ -213,80 +474,76 @@ fn mark_response(state: &mut PersistedState, source: &str, request: &CanvasBatch
 
 /// Validate every reference before recording one request for one receiving task.
 pub(crate) fn validate_anchors(session: &Session, anchors: &[CanvasAnchor]) -> Result<(), SpellcastError> {
-    if anchors.len() > 64 || serde_json::to_vec(anchors)?.len() > 128 * 1024 {
+    let mut without_images = anchors.to_vec();
+    for anchor in &mut without_images {
+        if anchor.image.is_some() { anchor.image = None; if let Some(region) = &mut anchor.region { region.resource.clear(); } }
+    }
+    if serde_json::to_vec(anchors)?.len() > 3 * 1024 * 1024 { return Err(SpellcastError::user("这次引用的画面过大，请改用本地图片资源，或分开发送。")); }
+    if anchors.len() > 64 || serde_json::to_vec(&without_images)?.len() > 128 * 1024 {
         return Err(SpellcastError::user("一次最多引用 64 个位置，参数快照不能超过 128 KB。"));
     }
     let mut input_bytes = std::collections::HashMap::<&str, usize>::new();
     for anchor in anchors {
-        if anchor.compositions.len() > 64 { return Err(SpellcastError::user("组合引用过多。")); }
-        for reference in &anchor.compositions {
-            let group = session.board.canvas.composition(&reference.id).ok_or_else(|| SpellcastError::user("想法组合已不存在。"))?;
-            if group.revision != reference.revision || !session.board.canvas.composition_reaches(&reference.id, &anchor.object_id) {
-                return Err(SpellcastError::user("想法的说明或成员已经改变，请重新查看后再发送。"));
-            }
-        }
+        spellcast_core::capture_anchor_snapshot(session, anchor, true)?;
         if let Some(inputs) = &anchor.inputs {
             let bytes = input_bytes.entry(&anchor.object_id).or_default();
             *bytes += serde_json::to_vec(inputs)?.len();
             if *bytes > 64_000 { return Err(SpellcastError::user("每个对象的输入快照不能超过 64 KB。")); }
         }
-        let object = session.board.canvas.object(&anchor.object_id)
-            .ok_or_else(|| SpellcastError::user("引用的对象已不存在。"))?;
-        if object.content_revision != anchor.content_revision {
-            return Err(SpellcastError::user("引用内容已经更新；请查看最新内容后重新选择。"));
+    }
+    Ok(())
+}
+
+pub(crate) fn annotation_context(
+    session: &Session,
+    anchors: &[CanvasAnchor],
+) -> Result<Vec<spellcast_core::CanvasAnnotation>, SpellcastError> {
+    let mut seen = std::collections::HashSet::new();
+    let mut context = Vec::new();
+    for reference in anchors.iter().flat_map(|anchor| &anchor.annotations) {
+        if !seen.insert(reference.id.as_str()) {
+            continue;
         }
-        let mut text: Option<String> = None;
-        let mut block = None;
-        match &object.content {
-            CanvasContent::Node { id } => {
-                if let Some(node) = session.board.nodes.iter().find(|n| &n.id == id) {
-                    text = Some(format!("{}\n{}", node.title, node.body));
-                }
-                if anchor.block_id.as_deref().is_some_and(|id| id != "text") {
-                    return Err(SpellcastError::user("想法没有这个子项。"));
-                }
-            }
-            CanvasContent::Reply { id } => {
-                let reply = session.board.replies.iter().find(|r| &r.id == id).ok_or_else(|| SpellcastError::user("回复已经不存在。"))?;
-                if let Some(id) = &anchor.block_id {
-                    block = Some(reply.blocks.iter().find(|b| b.id() == id).ok_or_else(|| SpellcastError::user("引用的子项已经不存在。"))?);
-                }
-                if let Some(ReplyBlock::Text { title, text: body, .. }) = block { text = Some(format!("{title}\n{body}")); }
-            }
-            CanvasContent::Block { block: atom } => {
-                if anchor.block_id.as_deref().is_some_and(|id| id != atom.id()) { return Err(SpellcastError::user("引用的组件子项已经不存在。")); }
-                block = Some(atom);
-                if let ReplyBlock::Text { title, text: body, .. } = atom { text = Some(format!("{title}\n{body}")); }
-            }
-            CanvasContent::Text { title, text: body } | CanvasContent::Shape { title, text: body, .. } => {
-                text = Some(format!("{title}\n{body}"));
-                if anchor.block_id.is_some() { return Err(SpellcastError::user("这个对象没有独立子项。")); }
-            }
-            CanvasContent::Image { .. } => {
-                if anchor.block_id.is_some() { return Err(SpellcastError::user("图片没有独立子项。")); }
-            }
+        if context.len() >= 64 {
+            return Err(SpellcastError::user("一次最多携带 64 条注释上下文。"));
         }
-        if let Some(selection) = &anchor.selection {
-            if selection.is_empty() || selection.len() > 16_000 || !text.as_ref().is_some_and(|body| body.contains(selection)) {
-                return Err(SpellcastError::user("文字选区与引用的内容不一致。"));
-            }
-        }
-        if let Some(region) = &anchor.region {
-            let valid_resource = matches!(&object.content, CanvasContent::Image { src, .. } if src == &region.resource);
-            let valid_bounds = [region.x, region.y, region.width, region.height].iter().all(|n| n.is_finite())
-                && region.x >= 0.0 && region.y >= 0.0 && region.width > 0.0 && region.height > 0.0
-                && region.x + region.width <= 1.0000001 && region.y + region.height <= 1.0000001;
-            if !valid_resource || region.unit != "normalized" || !valid_bounds {
-                return Err(SpellcastError::user("图片选区的资源或坐标不一致。"));
-            }
-        }
-        if let Some(artifact) = &anchor.artifact {
-            let valid = matches!(block, Some(ReplyBlock::Artifact { bundle_id, state, state_revision, .. })
-                if bundle_id == &artifact.bundle_id && state_revision == &artifact.state_revision
-                    && (state == &artifact.state || (state.is_null() && artifact.state.as_object().is_some_and(|state| state.is_empty()))));
-            if !valid || serde_json::to_vec(artifact)?.len() > 64 * 1024 {
-                return Err(SpellcastError::user("作品版本或参数已经变化；请重新选择。"));
-            }
+        let annotation = session
+            .board
+            .canvas
+            .annotation(&reference.id)
+            .filter(|annotation| !annotation.removed && annotation.revision == reference.revision)
+            .ok_or_else(|| SpellcastError::user("引用的注释已经更新或移除。"))?;
+        context.push(annotation.clone());
+    }
+    if serde_json::to_vec(&context)?.len() > 3 * 1024 * 1024 {
+        return Err(SpellcastError::user(
+            "这次注释上下文超过 3 MiB；请减少注释或改用 immutable /artifacts 图片资源。",
+        ));
+    }
+    Ok(context)
+}
+
+pub(crate) fn validate_annotation_route(
+    session: &Session,
+    context: &[spellcast_core::CanvasAnnotation],
+    source: &str,
+) -> Result<(), SpellcastError> {
+    for annotation in context {
+        let original_source = annotation
+            .origin
+            .as_ref()
+            .and_then(|origin| origin.source_id.as_deref())
+            .or_else(|| {
+                session
+                    .board
+                    .canvas
+                    .object(&annotation.anchor.object_id)
+                    .and_then(|object| object.source_id.as_deref())
+            });
+        if original_source.is_some_and(|original| original != source) {
+            return Err(SpellcastError::user(
+                "注释反馈必须返回锚定对象的原任务；不能按注释作者改投其他任务。",
+            ));
         }
     }
     Ok(())

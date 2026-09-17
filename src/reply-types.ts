@@ -11,7 +11,15 @@ export type ReplyOption = {
   title: string;
   summary: string;
   values: string[];
+  image?: ReplyImageReference | null;
+  artifact?: ReplyArtifactReference | null;
 };
+
+/** Fixed image content; refreshing this reference is an explicit edit. */
+export type ReplyImageReference = { object_id: string; content_revision: number; title: string; alt: string; src: string };
+export type ArtifactStatePreview = { src: string; alt: string };
+export type ReplyArtifactReference = { object_id: string; content_revision: number; block_id: string; bundle_id: string; state_revision: number; title: string; state: Record<string, unknown>; preview?: ArtifactStatePreview | null };
+export type ReplyTarget = { kind: "option" | "step" | "graph_node" | "graph_edge"; id: string };
 
 export type ReplyComparisonBlock = {
   id: string;
@@ -46,6 +54,8 @@ export type ReplyStep = {
   action: string;
   feedback?: string;
   note?: string;
+  image?: ReplyImageReference | null;
+  artifact?: ReplyArtifactReference | null;
 };
 
 export type ReplySequenceBlock = {
@@ -70,6 +80,7 @@ export type ReplyArtifactBlock = {
   bundle_id: string;
   state: Record<string, unknown> | null;
   state_revision: number;
+  state_preview?: ArtifactStatePreview | null;
 };
 
 export type ArtifactBundle = {
@@ -110,6 +121,7 @@ export type ReplyPatchRequest = {
 export type ArtifactFeedback = { bundle_id: string; state: Record<string, unknown>; state_revision?: number; inputs?: import("./canvas-data-types").CanvasInputSnapshot };
 
 export type ReplyActionInput = {
+  anchors?: import("./types").CanvasAnchor[];
   object_id?: string;
   reply_id: string;
   request_id?: string;

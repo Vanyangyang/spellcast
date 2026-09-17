@@ -351,9 +351,15 @@ try {
     });
     const nativeBinding = bindingFromProducer({ block_id: null, port: 'text' });
     const chartBinding = bindingFromProducer({ block_id: 'work', port: 'tide' });
-    const prepared = await batch('phase3-place-and-link', [
-      { op: 'place', id: producer.id, expected_revision: producerPose.revision, fields: { x: 40, y: 40, width: 500, height: 650 } },
-      { op: 'place', id: chartObject.id, expected_revision: chartPose.revision, fields: { x: 680, y: 40, width: 650, height: 650 } },
+    const positioned = await api('/api/canvas/batch', 'POST', {
+      request_id: 'phase3-place',
+      operations: [
+        { op: 'place', id: producer.id, expected_revision: producerPose.revision, fields: { x: 40, y: 40, width: 500, height: 650 } },
+        { op: 'place', id: chartObject.id, expected_revision: chartPose.revision, fields: { x: 680, y: 40, width: 650, height: 650 } },
+      ],
+    });
+    assert.equal(positioned.result.status, 'applied');
+    const prepared = await batch('phase3-link', [
       {
         op: 'create',
         id: 'value',
@@ -378,7 +384,7 @@ try {
     assert.deepEqual(canonicalReplyObject(linkedBoard, chartReplyId).bindings, [chartBinding]);
     assert.deepEqual((await object('value')).bindings, [nativeBinding]);
     assert.equal((await object('value')).content.text, 'Preserved explanation');
-    pass('one atomic batch places both work kinds, binds declared ports, preserves native fallback text and keeps an unrelated note');
+    pass('window layout positions both works; MCP then binds declared ports, preserves native fallback text and keeps an unrelated note');
 
     let parameter = await openWork(producer.id);
     let chart = await openWork(chartObject.id);

@@ -284,12 +284,18 @@ try {
   const chartPose = published.canvas.items.find(item => item.item_id === chartObject.id);
   const tideBinding = { from: { object_id: producer.id, block_id: 'work', port: 'tide' }, to: { block_id: 'work', port: 'tide' } };
   const nativeBinding = { from: { object_id: producer.id, block_id: 'work', port: 'tide' }, to: { block_id: null, port: 'text' } };
-  const placed = await call('spellcast_canvas_batch', {
-    source_id: 'harbor-studio',
+  const positioned = await api('/api/canvas/batch', 'POST', {
     request_id: 'harbor-place',
     operations: [
       { op: 'place', id: producer.id, expected_revision: producerPose.revision, fields: { x: 96, y: 72, width: 200, height: 240 } },
       { op: 'place', id: chartObject.id, expected_revision: chartPose.revision, fields: { x: 340, y: 48, width: 720, height: 500 } },
+    ],
+  });
+  assert.equal(positioned.result.status, 'applied');
+  const placed = await call('spellcast_canvas_batch', {
+    source_id: 'harbor-studio',
+    request_id: 'harbor-link',
+    operations: [
       { op: 'create', id: 'harbor-value', content: { type: 'text', title: '潮位观察', text: '潮位读数' }, placement: { x: 1090, y: 72, width: 200, height: 160 }, bindings: [nativeBinding] },
       { op: 'create', id: 'harbor-note', content: { type: 'text', title: '旁注', text: '不被改写的说明' }, placement: { x: 1090, y: 260, width: 200, height: 140 } },
       { op: 'bind', id: chartObject.id, expected_revision: chartObject.content_revision, bindings: [tideBinding] },

@@ -27,11 +27,11 @@
 ## 当前运行状态
 
 - 程序：`G:\VibeProj\spellcast\src-tauri\target\debug\spellcast.exe`
-- SHA-256：`87c9452fbb5ed70c488f4adfb490ed2542dbfb1969b93779c014becb7f9a9a7a`
+- SHA-256：`dde8bde6a09be2204f67c78004ad71cfd72e17f095f7224ea8300f6b05c81daa`
 - Codex 插件：`spellcast@personal`，版本 `0.3.0+sc.b2c73cd57898`。原生 CLI 确认 installed/enabled；源和缓存的 9 个静态载荷文件与发行资源一致，MCP 指向 47194。
 - 最后一次更新前后的 6 条点子、5 条历史边、1 份回复、11 条消息、8 个 Canvas 对象及全部既有字段和布局逐项一致；没有清理历史内容。
-- 物理数据库备份：`artifacts/workbench-20260914/native-codex-only-20260915/direct-physical-state-87c9452f/`。备份通过解包进程访问实际 AppData，避免 Codex Appx 的重定向副本。
-- 原程序和资源备份：同目录下 `runtime-original/`。用户接入配置备份在 `C:\Users\Administrator\AppData\Local\SpellcastAcceptance\profile-native-codex-only-20260915`。
+- 物理数据库备份：`artifacts/workbench-20260914/native-ready-label-20260915/direct-physical-state-dde8bde6/`。备份通过解包进程访问实际 AppData，避免 Codex Appx 的重定向副本。
+- 原程序和资源备份：同目录下 `runtime-original/`。用户接入配置备份在 `C:\Users\Administrator\AppData\Local\SpellcastAcceptance\profile-native-ready-label-20260915`。
 
 关键证据：`artifacts/workbench-20260914/assembly-1789371772478/result.json`、`native-workbench-20260914-0739/native-choice-result.json`，以及 `native-workbench-20260914-final/` 下的 `direct-result.json`、`production-preserved.json`、`plugin-verified.json`。
 
@@ -65,7 +65,7 @@ Windows 原生最终运行版点击“当前建议”后，按钮、紫色高亮
 
 空闲原 Codex 任务的接手和实际执行回传已完成：五次原生窗口提交均在原任务执行并回写同一对象（版本 1→6），且具有匹配的反馈处理回执。运行中并发提交和实机断线不在这五次通过范围内。实现、测试与证据见 [原生交付验收](2026-09-14-native-canvas-delivery.md)。未新增独立模型、未重启 Grok 执行器。
 
-设置面板的“待信任”是当前安装器对宿主 hook 信任状态的保守描述。本轮验证了插件 installed/enabled 和文件一致性，没有改写 hook 信任，也没有重新进行新任务的无提醒旁念激活试验。
+该次验收仅核验插件 installed/enabled 和文件一致性，未读取真实信任状态。9 月 15 日已修正错误的“待信任”显示，改为 Codex 原生只读查询；运行窗口确认当前 Hook 已信任，见[设置与信任状态验收](2026-09-15-settings-trust.md)。仍未改写信任，也未重新进行新任务的无提醒旁念激活试验。
 
 ## 工作区优先接收任务与 Browser Use 补充
 

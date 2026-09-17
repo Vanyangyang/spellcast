@@ -20,6 +20,11 @@ function objectTarget(object: CanvasObject, board: BoardSnapshot, bindings: Code
     label: current?.label || object.origin?.label || captured?.goal || reply?.source_label || sources.find(s => s.id === source_id)?.label || source_id };
 }
 
+/** Canvas send-back currently needs a bound desktop task. MCP-only hosts stay visible but cannot receive it yet. */
+export function canReturnCanvas(sourceId: string | undefined, bindings: CodexBinding[]): boolean {
+  return Boolean(sourceId && bindings.some(binding => binding.source_id === sourceId));
+}
+
 /** The selected idea owns the destination; referenced components are context, not votes. */
 export function originalTask(board: BoardSnapshot, selection: CanvasSelection | null, bindings: CodexBinding[], sources: Source[] = []): TaskTarget | undefined {
   if (!selection) return;
@@ -178,22 +183,25 @@ export class CanvasRecipient {
     if (this.switching) throw new Error(ct("recipientSwitchPending"));
     if (!this.selection) throw new Error(ct("noTarget"));
     const target = this.target(); if (!target) throw new Error(ct("noTask"));
+    if (!this.canReturn(target)) throw new Error(ct("taskTarget.noReturn"));
     const key = this.key(target), status = await this.check(target, true);
     if (this.switching) throw new Error(ct("recipientSwitchPending"));
     if (!this.target() || this.key(this.target()!) !== key) throw new Error(ct("sendCancelled"));
     if (status.status !== "available") throw new Error(ct(`taskTarget.${status.status}`));
     return status;
   }
-  refresh() { const target = this.target(); if (target) void this.check(target, true); }
+  refresh() { const target = this.target(); if (target && this.canReturn(target)) void this.check(target, true); }
   private paint() {
     if (!this.board) return;
     const committed = this.committedTarget(), committedStatus = this.status(committed);
     const original = committed?.source_id === this.origin?.source_id;
+    const returnable = this.canReturn(committed);
     const name = committedStatus?.label || committed?.label || ct("noOriginalTask");
     const label = committedStatus?.status === "deleted" ? `${ct(original ? "originalTaskDeleted" : "taskDeleted")} · ${name}` : `${name}${committed && original ? ` · ${ct("originalTask")}` : ""}`;
     this.view.root.hidden = !this.selection;
     this.view.summary.textContent = ct("recipientSummary", { task: label });
     this.view.summary.title = committed?.cwd || "";
+    this.view.summary.classList.toggle("is-unavailable", Boolean(this.selection && committed && !returnable));
     this.view.toggle.textContent = this.editing ? ct("recipientCancelChange") : committed ? ct("recipientChange") : ct("recipientChooseTask");
     this.view.toggle.setAttribute("aria-expanded", String(this.editing));
     this.view.toggle.disabled = Boolean(this.confirmation);
@@ -218,13 +226,15 @@ export class CanvasRecipient {
       const label = known?.label || optionTarget.label;
       option.textContent = known?.status === "deleted" ? `${ct(original ? "originalTaskDeleted" : "taskDeleted")} · ${label}` : `${label}${original ? ` · ${ct("originalTask")}` : ""}`;
       option.title = [optionTarget.thread_id, optionTarget.cwd, optionTarget.source_id].filter(Boolean).join("\n");
-      option.disabled = known?.status === "deleted"; this.select.append(option);
+      option.disabled = known?.status === "deleted" || !this.canReturn(optionTarget); this.select.append(option);
     }
     this.select.value = target?.source_id || "";
     this.select.disabled = !this.selection || !this.workspace.value || !scoped.length || Boolean(this.confirmation);
     this.workspace.disabled = !this.selection || Boolean(this.confirmation);
-    if (this.selection && status && status.status !== "available") { this.notice.textContent = ct(`taskTarget.${status.status}`); this.notice.hidden = false; }
-    this.onState(!this.selection || !target || this.switching || status?.status !== "available");
-    if (this.selection && target) { const entry = this.cache.get(this.key(target)); if (!entry?.pending && (!entry?.value || Date.now() - entry.at > 30000)) void this.check(target); }
+    if (this.selection && target && !this.canReturn(target)) { this.notice.textContent = ct("taskTarget.noReturn"); this.notice.hidden = false; }
+    else if (this.selection && status && status.status !== "available") { this.notice.textContent = ct(`taskTarget.${status.status}`); this.notice.hidden = false; }
+    this.onState(!this.selection || !target || this.switching || !this.canReturn(target) || status?.status !== "available");
+    if (this.selection && target && this.canReturn(target)) { const entry = this.cache.get(this.key(target)); if (!entry?.pending && (!entry?.value || Date.now() - entry.at > 30000)) void this.check(target); }
   }
+  private canReturn(target?: TaskTarget) { return canReturnCanvas(target?.source_id, this.bindings); }
 }

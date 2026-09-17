@@ -8,6 +8,47 @@ use serde::{Deserialize, Serialize};
 use crate::inbox::now_ms;
 use crate::{new_id, Session, SpellcastError};
 
+/// A fixed snapshot of an image object used by one comparison option or sequence step.
+///
+/// The reference deliberately carries the whole display identity rather than resolving the
+/// current object on every render. Contextual validation happens against the canvas when this
+/// value is new or changed; an existing snapshot remains meaningful after its source changes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct ReplyImageReference {
+    pub object_id: String,
+    pub content_revision: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub alt: String,
+    pub src: String,
+}
+
+/// A compact immutable preview for one saved artifact state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct ArtifactStatePreview {
+    pub src: String,
+    #[serde(default)]
+    pub alt: String,
+}
+
+/// A fixed snapshot of one artifact block used by a comparison option or sequence step.
+/// It is validated when introduced, then remains meaningful if the source work changes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct ReplyArtifactReference {
+    pub object_id: String,
+    pub content_revision: u64,
+    pub block_id: String,
+    pub bundle_id: String,
+    pub state_revision: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub state: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<ArtifactStatePreview>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct ReplyOption {
     pub id: String,
@@ -15,6 +56,10 @@ pub struct ReplyOption {
     #[serde(default)]
     pub summary: String,
     pub values: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ReplyImageReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ReplyArtifactReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -46,6 +91,10 @@ pub struct ReplyStep {
     pub feedback: String,
     #[serde(default)]
     pub note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ReplyImageReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ReplyArtifactReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -91,6 +140,8 @@ pub enum ReplyBlock {
         state: serde_json::Value,
         #[serde(default)]
         state_revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state_preview: Option<ArtifactStatePreview>,
     },
 }
 
@@ -152,6 +203,49 @@ impl ReplyBlock {
         }
     }
 
+    /// `(subitem_id, reference)` pairs for the option or step that owns each image snapshot.
+    /// The subitem ID stays stable across unrelated changes and is used to distinguish an
+    /// existing stale snapshot from a newly authored reference.
+    pub fn image_references(&self) -> Box<dyn Iterator<Item = (&str, &ReplyImageReference)> + '_> {
+        match self {
+            Self::Comparison { options, .. } => Box::new(options.iter().filter_map(|option| {
+                option
+                    .image
+                    .as_ref()
+                    .map(|reference| (option.id.as_str(), reference))
+            })),
+            Self::Sequence { steps, .. } => Box::new(steps.iter().filter_map(|step| {
+                step.image
+                    .as_ref()
+                    .map(|reference| (step.id.as_str(), reference))
+            })),
+            Self::Text { .. } | Self::Graph { .. } | Self::Artifact { .. } => {
+                Box::new(std::iter::empty())
+            }
+        }
+    }
+
+    pub fn artifact_references(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&str, &ReplyArtifactReference)> + '_> {
+        match self {
+            Self::Comparison { options, .. } => Box::new(options.iter().filter_map(|option| {
+                option
+                    .artifact
+                    .as_ref()
+                    .map(|reference| (option.id.as_str(), reference))
+            })),
+            Self::Sequence { steps, .. } => Box::new(steps.iter().filter_map(|step| {
+                step.artifact
+                    .as_ref()
+                    .map(|reference| (step.id.as_str(), reference))
+            })),
+            Self::Text { .. } | Self::Graph { .. } | Self::Artifact { .. } => {
+                Box::new(std::iter::empty())
+            }
+        }
+    }
+
     pub fn validate(&self) -> Result<(), SpellcastError> {
         validate_id(self.id())?;
         text_limit(self.title(), 160)?;
@@ -160,11 +254,15 @@ impl ReplyBlock {
                 bundle_id,
                 description,
                 state,
+                state_preview,
                 ..
             } => {
                 validate_id(bundle_id)?;
                 text_limit(description, 4_000)?;
                 validate_artifact_state(state)?;
+                if let Some(preview) = state_preview {
+                    validate_artifact_state_preview(preview)?;
+                }
             }
             Self::Text { text, .. } => {
                 check(!text.trim().is_empty(), "文字块需要有正文。")?;
@@ -196,6 +294,9 @@ impl ReplyBlock {
                     text_limit(&option.summary, 4_000)?;
                     for value in &option.values {
                         text_limit(value, 4_000)?;
+                    }
+                    if let Some(reference) = &option.artifact {
+                        validate_artifact_reference_shape(reference)?;
                     }
                 }
                 if let Some(selected) = selected_id {
@@ -251,6 +352,9 @@ impl ReplyBlock {
                     for text in [&step.action, &step.feedback, &step.note] {
                         text_limit(text, 8_000)?;
                     }
+                    if let Some(reference) = &step.artifact {
+                        validate_artifact_reference_shape(reference)?;
+                    }
                 }
             }
         }
@@ -270,11 +374,13 @@ impl ReplyBlock {
             if let Self::Artifact {
                 state,
                 state_revision,
+                state_preview,
                 ..
             } = block
             {
                 *state = serde_json::Value::Null;
                 *state_revision = 0;
+                *state_preview = None;
             }
         }
         left == right
@@ -292,6 +398,39 @@ pub fn validate_artifact_state(state: &serde_json::Value) -> Result<(), Spellcas
     )
 }
 
+pub const MAX_ARTIFACT_PREVIEW_SRC_BYTES: usize = 256 * 1024;
+
+pub fn artifact_states_equal(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    left == right
+        || (left.is_null() && right.as_object().is_some_and(|value| value.is_empty()))
+        || (right.is_null() && left.as_object().is_some_and(|value| value.is_empty()))
+}
+
+pub fn validate_artifact_state_preview(
+    preview: &ArtifactStatePreview,
+) -> Result<(), SpellcastError> {
+    text_limit(&preview.alt, 4_000)?;
+    check(
+        preview.src.len() <= MAX_ARTIFACT_PREVIEW_SRC_BYTES,
+        "作品状态预览地址的编码结果不能超过 256 KiB；请保存为资源文件。",
+    )?;
+    crate::validate_immutable_image_reference_src(&preview.src)
+}
+
+fn validate_artifact_reference_shape(
+    reference: &ReplyArtifactReference,
+) -> Result<(), SpellcastError> {
+    validate_id(&reference.object_id)?;
+    validate_id(&reference.block_id)?;
+    validate_id(&reference.bundle_id)?;
+    text_limit(&reference.title, 160)?;
+    validate_artifact_state(&reference.state)?;
+    if let Some(preview) = &reference.preview {
+        validate_artifact_state_preview(preview)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactStatePatch {
     #[serde(default)]
@@ -302,6 +441,8 @@ pub struct ArtifactStatePatch {
     pub bundle_id: String,
     pub expected_state_revision: u64,
     pub state: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<ArtifactStatePreview>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -384,6 +525,8 @@ pub struct ReplyActionInput {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_context: Option<ArtifactFeedback>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchors: Vec<crate::inbox::CanvasAnchor>,
 }
 
 fn validate_blocks(blocks: &[ReplyBlock]) -> Result<(), SpellcastError> {
@@ -413,18 +556,25 @@ impl ReplyBlock {
         match (self, previous) {
             (
                 Self::Artifact {
+                    bundle_id,
                     state,
                     state_revision,
+                    state_preview,
                     ..
                 },
                 Self::Artifact {
+                    bundle_id: old_bundle,
                     state: old,
                     state_revision: revision,
+                    state_preview: old_preview,
                     ..
                 },
             ) => {
                 *state = old.clone();
                 *state_revision = *revision;
+                *state_preview = (bundle_id == old_bundle)
+                    .then(|| old_preview.clone())
+                    .flatten();
             }
             (Self::Graph { nodes, .. }, Self::Graph { nodes: old, .. }) => {
                 for node in nodes {
@@ -464,6 +614,9 @@ impl Session {
     ) -> Result<BoardReply, SpellcastError> {
         req.reply_id = self.canvas_reply_id(req.object_id.as_deref(), &req.reply_id)?;
         validate_artifact_state(&req.state)?;
+        if let Some(preview) = &req.preview {
+            validate_artifact_state_preview(preview)?;
+        }
         let reply = self
             .board
             .replies
@@ -479,6 +632,7 @@ impl Session {
             bundle_id,
             state,
             state_revision,
+            state_preview,
             ..
         } = block
         else {
@@ -492,8 +646,20 @@ impl Session {
             *state_revision == req.expected_state_revision,
             "作品状态已在其他窗口更新；保留当前输入后再合并。",
         )?;
-        if *state != req.state {
+        let state_changed = !artifact_states_equal(state, &req.state);
+        let preview_changed = req
+            .preview
+            .as_ref()
+            .is_some_and(|preview| state_preview.as_ref() != Some(preview));
+        if state_changed || preview_changed {
             *state = req.state;
+            *state_preview = if let Some(preview) = req.preview {
+                Some(preview)
+            } else if state_changed {
+                None
+            } else {
+                state_preview.clone()
+            };
             *state_revision += 1;
         }
         Ok(reply.clone())

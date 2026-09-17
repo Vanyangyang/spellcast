@@ -15,8 +15,8 @@ use rmcp::transport::streamable_http_server::{
 use rmcp::{schemars, tool, tool_handler, tool_router, RoleServer, ServerHandler};
 use serde::Deserialize;
 use serde_json::json;
-use spellcast_core::types::{BubbleRequest, PresentPayload, ProposedNode, ProposedThrow};
-use spellcast_core::ReplyPatchRequest;
+use spellcast_core::types::BubbleRequest;
+use spellcast_core::{CanvasOperation, ReplyPatchRequest};
 
 use crate::feedback::{BindCodexRequest, ReplySubmission};
 use crate::observer::{CheckpointRequest, ObserverCompletion};
@@ -30,7 +30,7 @@ Use one stable source_id for the originating task when sending bubbles, publishi
 
 The App aside switch is the authority for independent asides. When enabled and not paused, the main task submits a short spellcast_checkpoint snapshot at the first substantial context and whenever a plan, new evidence, or a new constraint appears. The main task only recognizes that new context; it does not pre-judge bubble value. This is not every tool call or message. Use host-provided current aside state; if missing or stale, lightly read observer_status. unknown is not OFF; a prior OFF can be refreshed when fresh context next appears. A status read does not authorize spawn. Only checkpoint status=ready permits one fresh host-native child with no history. Other statuses: do not spawn or immediately retry; a later new context submits again. thought=null is valid silence. Do not inline-replace an unavailable child, force a quota, or poll on a timer.
 
-When modifying existing Canvas content, read current board and object versions first. User-edited content and layout stay protected; conflicts remain reviewable proposals. Handle only this source's feedback; include feedback_sequences in the response; ack only after actually handling it. Queued, read, replied, and handled are different. Call spellcast_remember only with explicit user permission; a kept bubble is not memory."#;
+When modifying existing Canvas content, read current board and object versions first. User-edited content and layout stay protected; conflicts remain reviewable proposals. Layout, grouping, annotations, selection and send stay in the Spellcast window; host tools publish and update this source's content, they do not drive the canvas as a remote editor. Never edit a user's annotation. Comparison/storyboard artifact references are fixed copies of the selected artifact block's exact object/content/bundle/state/preview version; refresh them only explicitly. Handle only this source's feedback; include feedback_sequences plus anchored annotation reads in the response; ack only after actually handling it. Queued, read, replied, and handled are different. Call spellcast_remember only with explicit user permission; a kept bubble is not memory."#;
 
 fn nullable_schema<T: schemars::JsonSchema>(
     generator: &mut schemars::SchemaGenerator,
@@ -53,10 +53,6 @@ fn nullable_u32_schema(generator: &mut schemars::SchemaGenerator) -> schemars::S
 
 fn nullable_usize_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     nullable_schema::<usize>(generator)
-}
-
-fn nullable_throws_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    nullable_schema::<Vec<PresentThrowParams>>(generator)
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -126,131 +122,6 @@ struct ArtifactReadParams {
     file: Option<String>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct PresentNodeParams {
-    title: String,
-    #[serde(default)]
-    body: String,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    kind: Option<String>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    weight: Option<String>,
-    /// Existing fragment this one belongs to. Creates a parent relationship. Omit for an independent fragment.
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    parent_id: Option<String>,
-}
-
-impl From<PresentNodeParams> for ProposedNode {
-    fn from(value: PresentNodeParams) -> Self {
-        Self {
-            id: None,
-            source_id: None,
-            title: value.title,
-            body: value.body,
-            kind: value.kind,
-            weight: value.weight,
-            parent_id: value.parent_id,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct PresentThrowParams {
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_usize_schema")]
-    node: Option<usize>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    title: Option<String>,
-    tease: String,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    size: Option<String>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    shape: Option<String>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    on_poke: Option<String>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_u32_schema")]
-    linger: Option<u32>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    kind: Option<String>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_u32_schema")]
-    delay: Option<u32>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    screen: Option<String>,
-}
-
-impl From<PresentThrowParams> for ProposedThrow {
-    fn from(value: PresentThrowParams) -> Self {
-        Self {
-            node: value.node,
-            title: value.title,
-            tease: value.tease,
-            size: value.size,
-            shape: value.shape,
-            on_poke: value.on_poke,
-            linger: value.linger,
-            kind: value.kind,
-            delay: value.delay,
-            screen: value.screen,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct PresentParams {
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    source_id: Option<String>,
-    #[serde(default)]
-    reply: String,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    topic: Option<String>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    form: Option<String>,
-    #[serde(default)]
-    nodes: Vec<PresentNodeParams>,
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_throws_schema")]
-    throws: Option<Vec<PresentThrowParams>>,
-    /// Places new fragments around this node. Does not create a parent relationship.
-    #[serde(default)]
-    #[schemars(schema_with = "nullable_string_schema")]
-    focus_node_id: Option<String>,
-    #[serde(default)]
-    open: bool,
-    #[serde(default)]
-    replace: bool,
-}
-
-impl From<PresentParams> for PresentPayload {
-    fn from(value: PresentParams) -> Self {
-        Self {
-            source_id: value.source_id,
-            reply: value.reply,
-            topic: value.topic,
-            form: value.form,
-            nodes: value.nodes.into_iter().map(Into::into).collect(),
-            throws: value
-                .throws
-                .map(|items| items.into_iter().map(Into::into).collect()),
-            focus_node_id: value.focus_node_id,
-            open: value.open,
-            replace: value.replace,
-        }
-    }
-}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 struct ListenParams {
@@ -339,6 +210,24 @@ impl SpellcastMcp {
     fn error(err: impl std::fmt::Display) -> ErrorData {
         ErrorData::internal_error(err.to_string(), None)
     }
+
+    fn reject_window_canvas_ops(operations: &[CanvasOperation]) -> Result<(), ErrorData> {
+        if operations.iter().any(|op| {
+            matches!(
+                op,
+                CanvasOperation::Place { .. }
+                    | CanvasOperation::Arrange { .. }
+                    | CanvasOperation::Annotate { .. }
+                    | CanvasOperation::RemoveAnnotation { .. }
+                    | CanvasOperation::Ungroup { .. }
+            )
+        }) {
+            return Err(Self::error(
+                "布局、标注和解组请在 Spellcast 窗口中完成。宿主工具只投放和更新内容，不直接操作画布。",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[tool_router]
@@ -404,6 +293,7 @@ impl SpellcastMcp {
             "save": "window.spellcast.setState({parameter: value}) merges a JSON object (64 KB max). Store large data as files. This does not ask a model.",
             "selection": "window.spellcast.select({ids: ['stable-object-id'], label: 'What is selected', asset: 'assets/file', region: {...}, time_range: {...}}). Use fields appropriate to your work; include coordinate units and asset names.",
             "restore": "window.spellcast.onRestore(state => restoreControlsWithoutSavingAgain(state)); The host's content revision does not reset saved parameters.",
+            "snapshot": "Register window.spellcast.onSnapshot(() => ({state: currentState, preview: {src: immutablePngJpegOrWebp, alt: description}})) so comparisons and storyboards can capture one fixed work state. State is object/null (64 KB max); preview src is an immutable data URL or same-bundle /artifacts path (256 KiB encoded max). Throw on a generation mismatch instead of returning stale state.",
             "inputs": "Declare bundle io.inputs/io.outputs. window.spellcast.inputs and onInputs(snapshot => ...) expose {revision,ports:{name:{status,value?,reason?,sources}}}, separate from saved state. Show unavailable explicitly; do not feed cached values onward.",
             "outputs": "window.spellcast.publishOutputs({port: scalar}, snapshot.revision) requires the input revision actually used. Only declared finite scalars are accepted; state changes save before outputs are forwarded. No host commands or expressions.",
             "errors": "window.spellcast.reportError(error). Uncaught errors are reported too. Handle pagehide to dispose graphics, listeners, media and workers.",
@@ -473,32 +363,8 @@ impl SpellcastMcp {
     }
 
     #[tool(
-        name = "spellcast_present",
-        description = "Lay several fragments out on the board as a constellation, spatial view, timeline, or stack. focus_node_id only places new fragments around that node; it does not create a relationship. Set parent_id on a node to record a parent link. Do not reduce a requested board reply to a progress notification. Do not clear a user-edited board without permission."
-    )]
-    async fn present(
-        &self,
-        Parameters(params): Parameters<PresentParams>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
-        self.identify(&context);
-        let result = self.bridge.present(params.into()).map_err(Self::error)?;
-        Self::result(json!({
-            "form": result.form,
-            "form_reason": result.form_reason,
-            "topic": result.topic,
-            "nodes": result.nodes,
-            "edges": result.edges,
-            "throws": result.throws,
-            "opened": result.open,
-            "surface": self.bridge.status().surface,
-            "board_focused": self.bridge.status().board_focused,
-        }))
-    }
-
-    #[tool(
         name = "spellcast_reply",
-        description = "Present a full structured reply on the user's board: mix text, aligned comparisons, labeled relationship graphs, and storyboards. Use a stable originating source_id and the adopted origin_node_id. Read current board versions first; preserve user edits. Include feedback_sequences when answering this source's feedback; ack only after handling."
+        description = "Present a full structured reply on the user's board: mix text, aligned comparisons, labeled relationship graphs, and storyboards. Comparison options and storyboard steps may carry one fixed artifact reference copied exactly from a same-source artifact block in the same Idea: object/content revision, block/bundle, state revision, title, state and preview. Existing references stay fixed until explicitly refreshed. Use a stable originating source_id and the adopted origin_node_id. Read current board versions first; preserve user edits. Include feedback_sequences when answering this source's feedback; ack only after handling."
     )]
     async fn reply(
         &self,
@@ -536,7 +402,7 @@ impl SpellcastMcp {
 
     #[tool(
         name = "spellcast_canvas_batch",
-        description = "Atomically create native text/images/shapes, patch selected object fields, arrange explicit targets, or compose/ungroup objects. Read spellcast_board first. Declare content/presentation/composition reads and expected write revisions. Use caller-generated stable IDs and request_id; retry identical requests with that ID. User edits/layout are protected: any conflict retains the entire batch as a reviewable proposal and no partial writes occur. Operate only on this source's targets; other sources may be read as context. Include feedback_sequences and all anchored content reads when answering Canvas feedback."
+        description = "Publish or update this source's native Canvas content: create text/images/shapes/blocks, patch selected content fields, compose an idea, or bind declared work ports. Read spellcast_board first. Layout, grouping, annotations, selection and send stay in the Spellcast window. Declare content/presentation/composition reads and expected write revisions. Use caller-generated stable IDs and request_id; retry identical requests with that ID. User edits/layout/annotations are protected: any conflict retains the entire batch as a reviewable proposal and no partial writes occur. Operate only on this source's targets; other sources may be read as context. Include feedback_sequences and anchored content plus annotation reads when answering Canvas feedback."
     )]
     async fn canvas_batch(
         &self,
@@ -544,7 +410,10 @@ impl SpellcastMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         self.identify(&context);
-        Self::result(self.bridge.canvas_batch(params.batch, Some(&params.source_id)).map_err(Self::error)?)
+        let source_id = params.source_id.clone();
+        let batch = params.into_batch();
+        Self::reject_window_canvas_ops(&batch.operations)?;
+        Self::result(self.bridge.canvas_batch(batch, Some(&source_id)).map_err(Self::error)?)
     }
 
     #[tool(

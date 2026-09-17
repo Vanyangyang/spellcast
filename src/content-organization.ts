@@ -169,6 +169,12 @@ export function excerpt(text: string, limit = 120) {
   return trimmed.slice(0, Math.max(1, limit - 1)) + "…";
 }
 
+/** Navigation label only; the original text and its optional title stay untouched. */
+export function textLabel(text: string) {
+  const first = text.split(/\r?\n/).find(line => line.trim()) || "";
+  return excerpt(first.replace(/^\s*(?:#{1,6}\s+|>\s*)/, "").replace(/(\*\*|__|`)(.*?)\1/g, "$2").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1"), 64);
+}
+
 export function backgroundLine(context?: CapturedContext | null) {
   if (!context) return "";
   return [context.project, context.change || context.goal].filter(Boolean).join(" · ");
@@ -353,13 +359,13 @@ function titleForObject(board: BoardSnapshot, objectId: string) {
   const object = board.canvas?.objects.find((item) => item.id === objectId);
   if (!object) return "";
   const content = object.content;
-  if (content.type === "block") return content.block.title || "";
+  if (content.type === "block") return content.block.title || (content.block.type === "text" ? textLabel(content.block.text) : "");
   if (content.type === "node" || content.type === "reply") {
     const contentId = content.id;
     if (content.type === "node") return board.nodes.find((item) => item.id === contentId)?.title || "";
     return board.replies?.find((item) => item.id === contentId)?.title || "";
   }
-  if ("title" in content) return content.title || "";
+  if ("title" in content) return content.title || (content.type === "text" ? textLabel(content.text) : "");
   return "";
 }
 
@@ -474,7 +480,7 @@ export function overviewItemFromObject(
 ): OverviewItem {
   const origin = originForObject(object, board, bindings);
   if (object.content.type === "block") return {
-    objectId: object.id, contentType: "block", title: object.content.block.title || object.id,
+    objectId: object.id, contentType: "block", title: object.content.block.title || (object.content.block.type === "text" ? textLabel(object.content.block.text) : "") || object.id,
     excerpt: excerpt(blockPlain(object.content.block)), background: "", origin,
     project: overviewProject(undefined, object.source_id, bindings), revision: object.content_revision,
   };
@@ -516,7 +522,7 @@ export function overviewItemFromObject(
   return {
     objectId: object.id,
     contentType: object.content.type,
-    title: title || object.id,
+    title: title || textLabel(text) || object.id,
     excerpt: excerpt(text || ""),
     background: "",
     project,

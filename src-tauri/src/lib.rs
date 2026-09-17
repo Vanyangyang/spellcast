@@ -130,11 +130,7 @@ impl Surface for Desktop {
     fn focus(&self) {
         let app = self.app.clone();
         let _ = self.app.run_on_main_thread(move || {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.unminimize();
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
+            instance::restore_main(&app);
             let _ = app.emit_to("main", "spellcast-focus", ());
         });
     }
@@ -303,6 +299,26 @@ fn complete_setup_cli(paths: &complete_setup::SetupPaths) -> Option<complete_set
     })
 }
 
+struct GrokUnusedCli;
+
+impl complete_setup::PluginCli for GrokUnusedCli {
+    fn plugin_add(
+        &self,
+        _selector: &str,
+        _env: &complete_setup::CliEnv,
+    ) -> Result<complete_setup::CliOutcome, String> {
+        Err("Grok Build 接入不使用 Codex CLI。".into())
+    }
+
+    fn plugin_list(
+        &self,
+        _marketplace: &str,
+        _env: &complete_setup::CliEnv,
+    ) -> Result<complete_setup::CliOutcome, String> {
+        Err("Grok Build 接入不使用 Codex CLI。".into())
+    }
+}
+
 #[tauri::command]
 async fn complete_setup_status(
     app: AppHandle,
@@ -311,9 +327,14 @@ async fn complete_setup_status(
 ) -> Result<complete_setup::SetupReport, String> {
     let paths = complete_setup_paths(&app)?;
     let cli = complete_setup_cli(&paths);
-    tauri::async_runtime::spawn_blocking(move || match &cli {
-        Some(cli) => complete_setup::status_with_cli(&client, url.as_deref(), &paths, cli),
-        None => complete_setup::status(&client, url.as_deref(), &paths),
+    tauri::async_runtime::spawn_blocking(move || {
+        if client == "grok" {
+            return complete_setup::status(&client, url.as_deref(), &paths);
+        }
+        match &cli {
+            Some(cli) => complete_setup::status_with_cli(&client, url.as_deref(), &paths, cli),
+            None => complete_setup::status(&client, url.as_deref(), &paths),
+        }
     })
     .await
     .map_err(|err| format!("状态查询中断：{err}"))
@@ -327,9 +348,14 @@ async fn complete_setup_install(
 ) -> Result<complete_setup::SetupReport, String> {
     let paths = complete_setup_paths(&app)?;
     let cli = complete_setup_cli(&paths);
-    tauri::async_runtime::spawn_blocking(move || match cli {
-        Some(cli) => complete_setup::install(&client, url.as_deref(), &paths, &cli),
-        None => complete_setup::status(&client, url.as_deref(), &paths),
+    tauri::async_runtime::spawn_blocking(move || {
+        if client == "grok" {
+            return complete_setup::install(&client, url.as_deref(), &paths, &GrokUnusedCli);
+        }
+        match cli {
+            Some(cli) => complete_setup::install(&client, url.as_deref(), &paths, &cli),
+            None => complete_setup::status(&client, url.as_deref(), &paths),
+        }
     })
     .await
     .map_err(|err| format!("安装中断：{err}"))

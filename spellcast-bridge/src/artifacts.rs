@@ -292,6 +292,7 @@ impl Bridge {
             bundle_id: bundle.id.clone(),
             state: serde_json::Value::Null,
             state_revision: 0,
+            state_preview: None,
         };
         block.validate()?;
         let existing = self
@@ -371,11 +372,78 @@ impl Bridge {
         blocks: &[ReplyBlock],
     ) -> Result<(), SpellcastError> {
         for block in blocks {
-            if let ReplyBlock::Artifact { bundle_id, .. } = block {
+            if let ReplyBlock::Artifact { bundle_id, state_preview, .. } = block {
                 if self.artifact(bundle_id)?.source_id != source {
                     return Err(SpellcastError::user("作品资源属于另一个任务。"));
                 }
+                if let Some(preview) = state_preview {
+                    self.validate_artifact_preview(bundle_id, preview)?;
+                }
             }
+            for (_, reference) in block.artifact_references() {
+                if self.artifact(&reference.bundle_id)?.source_id != source {
+                    return Err(SpellcastError::user("固定作品引用属于另一个任务。"));
+                }
+                if let Some(preview) = &reference.preview {
+                    self.validate_artifact_preview(&reference.bundle_id, preview)?;
+                }
+            }
+            for (_, reference) in block.image_references() {
+                self.validate_immutable_image_resource(&reference.src, None)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_block_resources(
+        &self,
+        block: &ReplyBlock,
+    ) -> Result<(), SpellcastError> {
+        for (_, reference) in block.artifact_references() {
+            self.artifact(&reference.bundle_id)?;
+            if let Some(preview) = &reference.preview {
+                self.validate_artifact_preview(&reference.bundle_id, preview)?;
+            }
+        }
+        for (_, reference) in block.image_references() {
+            self.validate_immutable_image_resource(&reference.src, None)?;
+        }
+        Ok(())
+    }
+
+    fn validate_artifact_preview(
+        &self,
+        bundle_id: &str,
+        preview: &spellcast_core::ArtifactStatePreview,
+    ) -> Result<(), SpellcastError> {
+        spellcast_core::validate_artifact_state_preview(preview)?;
+        self.validate_immutable_image_resource(&preview.src, Some(bundle_id))
+    }
+
+    fn validate_immutable_image_resource(
+        &self,
+        src: &str,
+        expected_bundle: Option<&str>,
+    ) -> Result<(), SpellcastError> {
+        spellcast_core::validate_immutable_image_reference_src(src)?;
+        let Some(local) = src.strip_prefix("/artifacts/") else {
+            return Ok(());
+        };
+        let (bundle, name) = local
+            .split_once('/')
+            .ok_or_else(|| SpellcastError::user("图片资源路径缺少文件名。"))?;
+        if expected_bundle.is_some_and(|expected| expected != bundle) {
+            return Err(SpellcastError::user(
+                "作品状态预览必须来自同一个 immutable bundle。",
+            ));
+        }
+        let artifact = self.artifact(bundle)?;
+        if !artifact
+            .files
+            .iter()
+            .any(|file| file.name == name && file.media_type.starts_with("image/"))
+        {
+            return Err(SpellcastError::user("这个图片资源不存在。"));
         }
         Ok(())
     }
@@ -384,6 +452,9 @@ impl Bridge {
         &self,
         req: spellcast_core::ArtifactStatePatch,
     ) -> Result<BoardReply, SpellcastError> {
+        if let Some(preview) = &req.preview {
+            self.validate_artifact_preview(&req.bundle_id, preview)?;
+        }
         let reply = self.update(|state| state.session.patch_artifact_state(req))?;
         self.surface.board_changed();
         Ok(reply)
@@ -553,9 +624,12 @@ pub fn resource_response(
     );
     let length = bytes.len();
     if mime.starts_with("text/html") {
+        // The work bytes stay immutable; host navigation can be updated without republishing it.
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        let wheel = include_str!("artifact-wheel.js");
         // The first doctype preserves standards mode, including entries without an explicit head.
         let mut document = format!(
-            "<!doctype html><script src=\"/artifacts/{bundle}/__spellcast.js\"></script>\n"
+            "<!doctype html><script>{wheel}</script><script src=\"/artifacts/{bundle}/__spellcast.js\"></script>\n"
         )
         .into_bytes();
         document.extend(bytes);
@@ -620,6 +694,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("work/tone.wav"), [0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
+        std::fs::write(root.join("work/preview.png"), [137, 80, 78, 71]).unwrap();
         let db = root.join("state.sqlite3");
         let bridge = Bridge::open(crate::Headless, 47194, &db).unwrap();
         (root, db, bridge)
@@ -654,6 +729,191 @@ mod tests {
             .to_string_lossy()
             .starts_with("spellcast-artifact-test-"));
         std::fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[test]
+    fn fixed_artifact_references_preserve_state_and_preview_until_explicit_refresh() {
+        let (root, _db, bridge) = fixture();
+        let source = bridge.publish_artifact(publish(&root, None)).unwrap();
+        let bundle_id = bundle(&source).to_string();
+        let source_object = bridge
+            .board()
+            .canvas
+            .objects
+            .into_iter()
+            .find(|object| matches!(&object.content, spellcast_core::CanvasContent::Reply { id } if id == &source.id))
+            .unwrap();
+        let preview_src = format!("/artifacts/{bundle_id}/preview.png");
+        let saved = bridge
+            .save_artifact_state(
+                serde_json::from_value(json!({
+                    "object_id": source_object.id,
+                    "block_id": "work",
+                    "bundle_id": bundle_id,
+                    "expected_state_revision": 0,
+                    "state": {"page": 1},
+                    "preview": {"src": preview_src, "alt": "第一页"}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let preserved = bridge
+            .write_reply(spellcast_core::ReplyRequest {
+                id: Some(source.id.clone()),
+                source_id: source.source_id.clone(),
+                source_label: Some(source.source_label.clone()),
+                origin_node_id: source.origin_node_id.clone(),
+                title: "普通同 bundle 内容编辑".into(),
+                blocks: source.blocks.clone(),
+                expected_revision: Some(source.revision),
+            })
+            .unwrap();
+        let ReplyBlock::Artifact {
+            state,
+            state_revision,
+            state_preview,
+            ..
+        } = &preserved.blocks[0]
+        else {
+            panic!()
+        };
+        assert_eq!(state, &json!({"page": 1}));
+        assert_eq!(*state_revision, 1);
+        assert_eq!(state_preview.as_ref().unwrap().alt, "第一页");
+        let source_object = bridge
+            .board()
+            .canvas
+            .objects
+            .into_iter()
+            .find(|object| matches!(&object.content, spellcast_core::CanvasContent::Reply { id } if id == &source.id))
+            .unwrap();
+        let reference = json!({
+            "object_id": source_object.id,
+            "content_revision": source_object.content_revision,
+            "block_id": "work",
+            "bundle_id": bundle_id,
+            "state_revision": 1,
+            "title": "可运行作品",
+            "state": {"page": 1},
+            "preview": {"src": preview_src, "alt": "第一页"}
+        });
+        let comparison = json!({
+            "type":"comparison","id":"versions","criteria":["版本"],
+            "options":[
+                {"id":"before","title":"当前版本","values":["1"],"artifact":reference},
+                {"id":"after","title":"另一个方向","values":["2"]}
+            ]
+        });
+        let request: spellcast_core::CanvasBatchRequest = serde_json::from_value(json!({
+            "request_id":"artifact-reference-create",
+            "operations":[
+                {"op":"create","id":"comparison","content":{"type":"block","block":comparison}},
+                {"op":"compose","id":"artifact-idea","expected_revision":0,"title":"状态对照",
+                 "members":[source_object.id,"comparison"]}
+            ]
+        })).unwrap();
+        let created = bridge.canvas_batch(request, Some("codex:artifact")).unwrap();
+        assert_eq!(created.result.status, spellcast_core::CanvasBatchStatus::Applied);
+
+        let changed = bridge
+            .save_artifact_state(
+                serde_json::from_value(json!({
+                    "object_id": source_object.id,
+                    "block_id": "work",
+                    "bundle_id": bundle_id,
+                    "expected_state_revision": 1,
+                    "state": {"page": 2}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let ReplyBlock::Artifact { state_preview, state_revision, .. } = &changed.blocks[0] else { panic!() };
+        assert_eq!(*state_revision, 2);
+        assert_eq!(*state_preview, None);
+
+        let current = bridge.board();
+        let object = current.canvas.object("comparison").unwrap();
+        let mut retained = match &object.content {
+            spellcast_core::CanvasContent::Block { block } => block.clone(),
+            _ => panic!(),
+        };
+        if let ReplyBlock::Comparison { title, .. } = &mut retained {
+            *title = "仍引用发送前状态".into();
+        }
+        let retained_request: spellcast_core::CanvasBatchRequest = serde_json::from_value(json!({
+            "request_id":"retain-old-artifact-reference",
+            "operations":[{"op":"patch_block","id":"comparison",
+                "expected_revision":object.content_revision,"block":retained}]
+        })).unwrap();
+        assert_eq!(
+            bridge.canvas_batch(retained_request, Some("codex:artifact")).unwrap().result.status,
+            spellcast_core::CanvasBatchStatus::Applied
+        );
+
+        let unchanged_state_new_preview = bridge.save_artifact_state(
+            serde_json::from_value(json!({
+                "object_id": source_object.id,"block_id":"work","bundle_id":bundle_id,
+                "expected_state_revision":2,"state":{"page":2},
+                "preview":{"src":"data:image/png;base64,AAAA","alt":"第二页"}
+            })).unwrap()).unwrap();
+        let ReplyBlock::Artifact { state_revision, state_preview, .. } = &unchanged_state_new_preview.blocks[0] else { panic!() };
+        assert_eq!(*state_revision, 3);
+        assert_eq!(state_preview.as_ref().unwrap().alt, "第二页");
+
+        let direct = bridge.write_reply(serde_json::from_value(json!({
+            "id":"direct-artifact-comparison","source_id":"codex:artifact","title":"直接入口",
+            "blocks":[{"type":"comparison","id":"direct","criteria":["版本"],"options":[
+                {"id":"one","title":"作品状态","values":["2"]},
+                {"id":"two","title":"其他方向","values":["3"]}
+            ]}]
+        })).unwrap()).unwrap();
+        let direct_object = bridge.board().canvas.objects.into_iter().find(|object| {
+            matches!(&object.content, spellcast_core::CanvasContent::Reply { id } if id == &direct.id)
+        }).unwrap();
+        let joined: spellcast_core::CanvasBatchRequest = serde_json::from_value(json!({
+            "request_id":"join-direct-artifact-reference",
+            "operations":[{"op":"compose","id":"artifact-idea","expected_revision":1,
+                "title":"状态对照","members":[source_object.id,"comparison",direct_object.id]}]
+        })).unwrap();
+        assert_eq!(bridge.canvas_batch(joined, Some("codex:artifact")).unwrap().result.status,
+            spellcast_core::CanvasBatchStatus::Applied);
+        let direct_reference = json!({
+            "object_id":source_object.id,"content_revision":source_object.content_revision,
+            "block_id":"work","bundle_id":bundle_id,"state_revision":3,
+            "title":"可运行作品","state":{"page":2},
+            "preview":{"src":"data:image/png;base64,AAAA","alt":"第二页"}
+        });
+        let with_reference = bridge.write_reply(serde_json::from_value(json!({
+            "id":direct.id,"source_id":"codex:artifact","title":"直接入口",
+            "expected_revision":direct.revision,
+            "blocks":[{"type":"comparison","id":"direct","criteria":["版本"],"options":[
+                {"id":"one","title":"作品状态","values":["2"],"artifact":direct_reference},
+                {"id":"two","title":"其他方向","values":["3"]}
+            ]}]
+        })).unwrap()).unwrap();
+        let later = bridge.save_artifact_state(serde_json::from_value(json!({
+            "object_id":source_object.id,"block_id":"work","bundle_id":bundle_id,
+            "expected_state_revision":3,"state":{"page":3}
+        })).unwrap()).unwrap();
+        let ReplyBlock::Artifact { state_revision, .. } = &later.blocks[0] else { panic!() };
+        assert_eq!(*state_revision, 4);
+        let mut unchanged_reference = with_reference.blocks[0].clone();
+        if let ReplyBlock::Comparison { title, .. } = &mut unchanged_reference {
+            *title = "旧状态引用仍有效".into();
+        }
+        bridge.patch_reply_from_source("codex:artifact", spellcast_core::ReplyPatchRequest {
+            object_id: Some(direct_object.id), reply_id: String::new(), request_id: None,
+            expected_revision: with_reference.revision, block: unchanged_reference, layout_only: false,
+        }).unwrap();
+
+        assert!(bridge.save_artifact_state(serde_json::from_value(json!({
+            "object_id": source_object.id,"block_id":"work","bundle_id":bundle_id,
+            "expected_state_revision":3,"state":{"page":2},
+            "preview":{"src":"/artifacts/missing/preview.png","alt":"伪造"}
+        })).unwrap()).is_err());
+        assert_eq!(saved.revision, source.revision);
+        drop(bridge);
+        cleanup(root);
     }
 
     #[tokio::test]
@@ -751,8 +1011,9 @@ mod tests {
         let saved = reopened.save_artifact_state(spellcast_core::ArtifactStatePatch {
             object_id: Some(object.id.clone()), reply_id: String::new(), block_id: reply.blocks[0].id().into(),
             bundle_id: bundle_id.clone(), expected_state_revision: 0, state: json!({"amount": 42}),
+            preview: None,
         }).unwrap();
-        let (_, event) = reopened.reply_action(spellcast_core::ReplyActionInput {
+        let (_, event) = reopened.reply_action(spellcast_core::ReplyActionInput { anchors: vec![],
             object_id: Some(object.id.clone()), reply_id: String::new(), request_id: None,
             block_id: reply.blocks[0].id().into(), action: spellcast_core::ReplyAction::Ask,
             option_id: None, text: Some("继续这个对象".into()), artifact_context: None,
@@ -785,6 +1046,7 @@ mod tests {
             bundle_id: id.clone(),
             expected_state_revision: 0,
             state: state.clone(),
+            preview: None,
         };
         let changed = bridge.save_artifact_state(request.clone()).unwrap();
         assert_eq!(changed.revision, 1);
@@ -860,7 +1122,7 @@ mod tests {
         assert!(bridge.pending_feedback(None).is_empty(), "Saving the artifact source is local until explicit send.");
         let selected = json!({"selection":{"region":{"x":0.1,"y":0.2,"width":0.3,"height":0.4},"label":"原版左上角"}});
         let (_, event) = bridge
-            .reply_action(spellcast_core::ReplyActionInput {
+            .reply_action(spellcast_core::ReplyActionInput { anchors: vec![],
                 object_id: None,
                 reply_id: first.id.clone(),
                 request_id: Some("ask-once".into()),
@@ -915,6 +1177,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
         let csp = response.headers()[header::CONTENT_SECURITY_POLICY]
             .to_str()
             .unwrap();
@@ -923,6 +1186,15 @@ mod tests {
         assert!(csp.contains(&format!("http://127.0.0.1:47194/artifacts/{id}/")));
         let content = response.into_body().collect().await.unwrap().to_bytes();
         assert!(String::from_utf8_lossy(&content).contains("__spellcast.js"));
+        assert!(String::from_utf8_lossy(&content).contains("Host-owned navigation"));
+        let (_, saved_sdk) = bridge.artifact_file(&id, "__spellcast.js").unwrap();
+        assert!(!String::from_utf8_lossy(&saved_sdk).contains("Host-owned navigation"));
+        let sdk_response = app.clone().oneshot(
+            axum::http::Request::builder().uri(format!("/artifacts/{id}/__spellcast.js"))
+                .body(axum::body::Body::empty()).unwrap()
+        ).await.unwrap();
+        assert_eq!(sdk_response.headers()[header::CACHE_CONTROL], "private, max-age=31536000, immutable");
+        assert_eq!(sdk_response.into_body().collect().await.unwrap().to_bytes().as_ref(), saved_sdk.as_slice());
         for (name, value) in [("Origin", "null"), ("Sec-Fetch-Site", "cross-site")] {
             let response = app
                 .clone()
@@ -974,6 +1246,7 @@ mod tests {
         );
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         assert!(!String::from_utf8_lossy(&bytes).contains("__spellcast.js"));
+        assert!(!String::from_utf8_lossy(&bytes).contains("Host-owned navigation"));
         // The delivery worker owns an Arc until this runtime shuts down; preserve its temp database.
         drop(bridge);
     }

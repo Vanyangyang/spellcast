@@ -1,0 +1,123 @@
+.light-text {
+  --light-text-ink: var(--studio-ink, var(--paper, #f4f1ea));
+  --light-text-muted: var(--studio-soft, var(--mute, rgba(244, 241, 234, 0.62)));
+  --light-text-line: var(--studio-line, var(--line, rgba(244, 241, 234, 0.16)));
+  --light-text-surface: var(--studio-canvas-2, var(--surface-2, rgba(244, 241, 234, 0.07)));
+  --light-text-accent: var(--studio-lilac, var(--lilac, #d4b3ff));
+
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--light-text-ink);
+  font: inherit;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.light-text *,
+.light-text *::before,
+.light-text *::after {
+  box-sizing: border-box;
+}
+
+.light-text > :first-child {
+  margin-top: 0;
+}
+
+.light-text > :last-child {
+  margin-bottom: 0;
+}
+
+.light-text-paragraph {
+  margin: 0 0 0.8em;
+}
+
+.light-text-heading {
+  color: var(--light-text-ink);
+  font-weight: 650;
+}
+
+.light-text-strong {
+  font-weight: 700;
+}
+
+.light-text-em {
+  font-style: italic;
+}
+
+.light-text-link {
+  color: var(--light-text-accent);
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: 0.16em;
+}
+
+.light-text-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.light-text-link:focus-visible {
+  outline: 2px solid var(--light-text-accent);
+  outline-offset: 2px;
+}
+
+.light-text-quote {
+  margin: 0 0 0.9em;
+  padding: 0.65em 0.9em;
+  border-inline-start: 3px solid var(--light-text-accent);
+  border-radius: 0 var(--radius-sm, 8px) var(--radius-sm, 8px) 0;
+  background: color-mix(in srgb, var(--light-text-surface) 75%, transparent);
+  color: var(--light-text-muted);
+}
+
+.light-text-list {
+  margin: 0 0 0.9em;
+  padding-inline-start: 1.35em;
+}
+
+.light-text-list-item + .light-text-list-item {
+  margin-top: 0.28em;
+}
+
+.light-text-list-item > .light-text-list {
+  margin-top: 0.45em;
+  margin-bottom: 0;
+}
+
+.light-text-inline-code,
+.light-text-code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.light-text-inline-code {
+  display: inline;
+  padding: 0.08em 0.34em;
+  border: 1px solid var(--light-text-line);
+  border-radius: 0.35em;
+  background: var(--light-text-surface);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.light-text-code-block {
+  max-width: 100%;
+  max-block-size: 22rem;
+  margin: 0 0 0.9em;
+  padding: 0.85em 1em;
+  overflow: auto;
+  border: 1px solid var(--light-text-line);
+  border-radius: var(--radius-sm, 8px);
+  color: var(--light-text-ink);
+  background: color-mix(in srgb, var(--light-text-surface) 92%, var(--light-text-ink));
+}
+
+.light-text-code-block > .light-text-code {
+  display: block;
+  min-width: max-content;
+  font-size: 0.9em;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.light-text-raw {
+  color: var(--light-text-muted);
+}

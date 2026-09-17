@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use toml_edit::{value, DocumentMut, Item, Table};
 
 // Canonical skill root plus a fixed, known reference set. Not a recursive tree copy.
-const SPELLCAST_SKILL: &str = include_str!("../../skills/spellcast/SKILL.md");
+pub(crate) const SPELLCAST_SKILL: &str = include_str!("../../skills/spellcast/SKILL.md");
 const SPELLCAST_REF_ASIDES: &str = include_str!("../../skills/spellcast/references/asides.md");
 const SPELLCAST_REF_CANVAS: &str = include_str!("../../skills/spellcast/references/canvas.md");
 const SPELLCAST_REF_WORKS: &str = include_str!("../../skills/spellcast/references/works.md");
@@ -96,6 +96,15 @@ fn describe_for_home(client: &str, home: &Path, url: &str) -> Result<ClientConfi
             ),
             "只合并 [mcp_servers.spellcast]；模型、插件、信任项目和 hooks 保持不变。",
         ),
+        "grok" => (
+            "Grok Build",
+            Some(home.join(".grok").join("config.toml")),
+            format!(
+                "[mcp_servers.spellcast]\nenabled = true\nurl = {}\n",
+                serde_json::to_string(url).unwrap()
+            ),
+            "只合并 [mcp_servers.spellcast]；models、plugins、marketplace、其他 mcp_servers.* 和 [ui] 保持不变。",
+        ),
         "windsurf" => (
             "Windsurf",
             Some(
@@ -157,6 +166,12 @@ fn skill_path_for_home(client: &str, home: &Path) -> Result<Option<PathBuf>, Str
                 .join("spellcast")
                 .join("SKILL.md"),
         ),
+        "grok" => Some(
+            home.join(".grok")
+                .join("skills")
+                .join("spellcast")
+                .join("SKILL.md"),
+        ),
         "windsurf" => Some(
             home.join(".codeium")
                 .join("windsurf")
@@ -180,7 +195,7 @@ pub fn install_skill(client: &str) -> Result<SkillInstall, String> {
     install_skill_for_home(client, &home()?)
 }
 
-fn install_skill_for_home(client: &str, home: &Path) -> Result<SkillInstall, String> {
+pub(crate) fn install_skill_for_home(client: &str, home: &Path) -> Result<SkillInstall, String> {
     let path = skill_path_for_home(client, home)?
         .ok_or_else(|| "这个客户端没有可确认的全局 Skill 目录，只提供手动安装。".to_string())?;
     let dir = path
@@ -221,7 +236,7 @@ pub fn write(client: &str, port: u16, override_url: Option<&str>) -> Result<Clie
     write_for_home(client, &home()?, &url)
 }
 
-fn write_for_home(client: &str, home: &Path, url: &str) -> Result<ClientConfig, String> {
+pub(crate) fn write_for_home(client: &str, home: &Path, url: &str) -> Result<ClientConfig, String> {
     let mut config = describe_for_home(client, home, url)?;
     let Some(path) = config.path.as_deref().map(PathBuf::from) else {
         return Ok(config);
@@ -230,7 +245,7 @@ fn write_for_home(client: &str, home: &Path, url: &str) -> Result<ClientConfig, 
     let next = match client {
         "cursor" => merge_json(&path, &url, "url", true)?,
         "windsurf" => merge_json(&path, &url, "serverUrl", false)?,
-        "codex" => merge_codex_toml(&path, &url)?,
+        "codex" | "grok" => merge_codex_toml(&path, &url)?,
         _ => return Err("这个客户端只支持复制片段。".into()),
     };
     let backup = commit_with_backup(&path, next.as_bytes())?;
@@ -495,6 +510,70 @@ mod tests {
     }
 
     #[test]
+    fn grok_merge_preserves_models_plugins_marketplace_ui_and_other_servers() {
+        let dir = test_dir("grok");
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            "[models]\ndefault = \"grok-4\"\n[plugins.demo]\nenabled = true\n[marketplace]\norigin = \"keep\"\n[ui]\ntheme = \"dark\"\n[mcp_servers.other]\nurl = \"http://other\"\n[mcp_servers.spellcast]\ncommand = \"npx\"\nargs = [\"-y\", \"old\"]\ntype = \"stdio\"\nenabled = false\n",
+        )
+        .unwrap();
+        let next = merge_codex_toml(&path, "http://127.0.0.1:47194/mcp").unwrap();
+        assert!(next.contains("[models]"));
+        assert!(next.contains("default = \"grok-4\""));
+        assert!(next.contains("[plugins.demo]"));
+        assert!(next.contains("[marketplace]"));
+        assert!(next.contains("origin = \"keep\""));
+        assert!(next.contains("[ui]"));
+        assert!(next.contains("theme = \"dark\""));
+        assert!(next.contains("[mcp_servers.other]"));
+        assert!(next.contains("[mcp_servers.spellcast]"));
+        assert!(next.contains("enabled = true"));
+        assert!(next.contains("url = \"http://127.0.0.1:47194/mcp\""));
+        assert!(!next.contains("command"));
+        assert!(!next.contains("args"));
+        assert!(!next.contains("type ="));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grok_writer_cannot_touch_codex_config() {
+        let dir = test_dir("grok-path-isolation");
+        let grok = dir.join(".grok").join("config.toml");
+        let codex = dir.join(".codex").join("config.toml");
+        fs::create_dir_all(grok.parent().unwrap()).unwrap();
+        fs::create_dir_all(codex.parent().unwrap()).unwrap();
+        fs::write(
+            &grok,
+            "model = \"keep-grok\"\n[ui]\ntheme = \"dark\"\n[mcp_servers.other]\nurl = \"http://other\"\n",
+        )
+        .unwrap();
+        fs::write(&codex, "model = \"keep-codex\"\n[hooks]\nnotify = [\"keep\"]\n").unwrap();
+
+        let result = write_for_home("grok", &dir, "http://127.0.0.1:47194/mcp").unwrap();
+        assert_eq!(PathBuf::from(result.path.unwrap()), grok);
+        assert_eq!(result.label, "Grok Build");
+        assert_eq!(
+            fs::read_to_string(&codex).unwrap(),
+            "model = \"keep-codex\"\n[hooks]\nnotify = [\"keep\"]\n"
+        );
+        let text = fs::read_to_string(&grok).unwrap();
+        assert!(text.contains("model = \"keep-grok\""));
+        assert!(text.contains("[ui]"));
+        assert!(text.contains("[mcp_servers.other]"));
+        assert!(text.contains("[mcp_servers.spellcast]"));
+        assert!(text.contains("url = \"http://127.0.0.1:47194/mcp\""));
+        assert!(!codex
+            .parent()
+            .unwrap()
+            .join("skills")
+            .join("spellcast")
+            .join("SKILL.md")
+            .exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn commit_keeps_the_original_as_a_backup() {
         let dir = test_dir("backup");
         let path = dir.join("config.toml");
@@ -519,6 +598,10 @@ mod tests {
             dir.join(".codex/skills/spellcast/SKILL.md")
         );
         assert_eq!(
+            skill_path_for_home("grok", &dir).unwrap().unwrap(),
+            dir.join(".grok/skills/spellcast/SKILL.md")
+        );
+        assert_eq!(
             skill_path_for_home("windsurf", &dir).unwrap().unwrap(),
             dir.join(".codeium/windsurf/skills/spellcast/SKILL.md")
         );
@@ -527,6 +610,15 @@ mod tests {
             dir.join(".claude/skills/spellcast/SKILL.md")
         );
         assert!(skill_path_for_home("generic", &dir).unwrap().is_none());
+
+        let grok_skill = install_skill_for_home("grok", &dir).unwrap();
+        assert_eq!(
+            PathBuf::from(&grok_skill.path),
+            dir.join(".grok/skills/spellcast/SKILL.md")
+        );
+        assert_eq!(fs::read_to_string(&grok_skill.path).unwrap(), SPELLCAST_SKILL);
+        assert_skill_files(&PathBuf::from(&grok_skill.path));
+        assert!(!dir.join(".codex/skills/spellcast/SKILL.md").exists());
 
         let first = install_skill_for_home("cursor", &dir).unwrap();
         assert_eq!(fs::read_to_string(&first.path).unwrap(), SPELLCAST_SKILL);

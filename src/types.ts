@@ -63,25 +63,34 @@ export type CanvasOrigin = { cwd: string; thread_id?: string | null; source_id?:
 export type TaskTarget = { source_id: string; thread_id?: string | null; cwd?: string | null; label: string };
 export type TaskTargetStatus = { source_id: string; thread_id?: string | null; label: string; status: "available" | "deleted" | "unlinked" | "changed" | "unknown"; message: string; checked_at_ms: number };
 export type CanvasObject = { id: string; content: CanvasContent; content_revision: number; origin?: CanvasOrigin | null; source_id?: string | null; user_edited?: boolean; bindings?: import("./canvas-data-types").CanvasBinding[] };
-export type CanvasPlacement = { item_id: string; revision: number; z: number; removed: boolean; appearance: "plain" | "card"; x: number; y: number; width: number; height: number; user_modified?: boolean };
-export type CanvasComposition = { id: string; revision: number; title: string; description?: string; members: string[]; source_id?: string | null; user_modified?: boolean };
-export type CanvasRead = { kind: "content" | "presentation" | "composition"; id: string; revision: number };
+export type CanvasPlacement = { item_id: string; revision: number; z: number; removed: boolean; appearance: "plain" | "card"; x: number; y: number; width: number; height: number; content_scale?: number; user_modified?: boolean };
+export type CanvasArrangement = "free" | "side_by_side" | "figure_caption" | "sequence";
+export type CanvasComposition = { id: string; revision: number; title: string; description?: string; arrangement?: CanvasArrangement; members: string[]; source_id?: string | null; user_modified?: boolean };
+export type CanvasRead = { kind: "content" | "presentation" | "composition" | "annotation"; id: string; revision: number };
+export type CanvasAnnotation = { id: string; revision: number; anchor: CanvasAnchor; snapshot: unknown; text: string; origin?: CanvasOrigin | null; source_id?: string | null; removed: boolean };
 export type CanvasContentFields = { title?: string; text?: string; src?: string; alt?: string; fill?: string };
-export type CanvasPlacementFields = Partial<Pick<CanvasPlacement, "x" | "y" | "width" | "height" | "z" | "appearance" | "removed">>;
+export type CanvasPlacementFields = Partial<Pick<CanvasPlacement, "x" | "y" | "width" | "height" | "content_scale" | "z" | "appearance" | "removed">>;
 export type CanvasOperation = { op: "create"; id: string; content: CanvasContent; origin?: CanvasOrigin; placement: CanvasPlacementFields; bindings?: import("./canvas-data-types").CanvasBinding[] }
   | { op: "patch_content"; id: string; expected_revision: number; fields: CanvasContentFields }
   | { op: "patch_reply"; id: string; expected_revision: number; block: import("./reply-types").ReplyBlock }
   | { op: "patch_block"; id: string; expected_revision: number; block: Exclude<import("./reply-types").ReplyBlock, { type: "artifact" }> }
   | { op: "bind"; id: string; expected_revision: number; bindings: import("./canvas-data-types").CanvasBinding[] }
   | { op: "place"; id: string; expected_revision: number; fields: CanvasPlacementFields }
-  | { op: "compose"; id: string; expected_revision: number; title: string; description?: string; members: string[] }
+  | { op: "compose"; id: string; expected_revision: number; title: string; description?: string; arrangement?: CanvasArrangement; members: string[] }
+  | { op: "arrange"; id: string; expected_revision: number; expected_presentations: Record<string, number> }
+  | { op: "annotate"; id: string; expected_revision: number; anchor: CanvasAnchor; text: string }
+  | { op: "remove_annotation"; id: string; expected_revision: number; removed: boolean }
   | { op: "ungroup"; id: string; expected_revision: number };
 export type CanvasBatchRequest = { request_id: string; reads: CanvasRead[]; operations: CanvasOperation[]; feedback_sequences?: number[] };
 export type CanvasTargetStatus = { kind: CanvasRead["kind"]; id: string; status: string; expected_revision?: number | null; actual_revision?: number | null; message?: string | null };
 export type CanvasBatchResult = { request_id: string; status: "applied" | "proposed" | "dismissed"; targets: CanvasTargetStatus[] };
 export type CanvasProposal = { request: CanvasBatchRequest; source_id?: string | null; result: CanvasBatchResult };
-export type CanvasLayout = { revision: number; objects: CanvasObject[]; items: CanvasPlacement[]; compositions?: CanvasComposition[]; proposals?: CanvasProposal[] };
+export type CanvasLayout = { revision: number; objects: CanvasObject[]; items: CanvasPlacement[]; compositions?: CanvasComposition[]; annotations?: CanvasAnnotation[]; proposals?: CanvasProposal[] };
 export type CanvasAnchor = { object_id: string; content_revision: number; block_id?: string; selection?: string;
+  target?: import("./reply-types").ReplyTarget;
+  image?: import("./reply-types").ReplyImageReference;
+  artifact_reference?: import("./reply-types").ReplyArtifactReference;
+  annotations?: { id: string; revision: number }[];
   compositions?: { id: string; revision: number }[];
   inputs?: import("./canvas-data-types").CanvasInputSnapshot;
   region?: { resource: string; unit: "normalized"; x: number; y: number; width: number; height: number };
@@ -132,6 +141,7 @@ export type AgentEvent = {
   object_id?: string | null;
   object_revision?: number | null;
   anchors?: CanvasAnchor[];
+  annotation_context?: CanvasAnnotation[];
   reply_id?: string | null;
   block_id?: string | null;
   option_id?: string | null;
@@ -215,6 +225,7 @@ export type SetupKind =
   | "not_installed"
   | "installing"
   | "installed_pending_trust"
+  | "installed_unverified"
   | "pending_reload"
   | "verified"
   | "conflict_custom"
@@ -226,6 +237,7 @@ export type SetupReport = {
   kind: SetupKind;
   complete_supported: boolean;
   installed: boolean;
+  hook_trust?: "trusted" | "untrusted" | "modified" | "disabled" | "unknown" | null;
   note: string;
   done: string[];
   not_done: string[];

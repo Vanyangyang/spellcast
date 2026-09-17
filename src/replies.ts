@@ -9,9 +9,13 @@ import { Graph } from "@antv/x6";
 import type { Edge as X6Edge, Node as X6Node } from "@antv/x6";
 import { currentLocale, onLocale, type Locale } from "./i18n";
 import { ct } from "./i18n/canvas";
+import { renderLightText } from "./light-text";
+import { imageAnnotations } from "./canvas-annotation-markers";
 import { ArtifactFrame } from "./artifacts";
 import type { CanvasDataflow } from "./canvas-dataflow";
-import type { CanvasAnchor } from "./types";
+import type { BoardSnapshot, CanvasAnchor, CanvasLayout } from "./types";
+import { artifactChoices, artifactChoiceKey, artifactSnapshot, artifactReferenceState, artifactReferencePreview, artifactText, targetArtifact } from "./reply-artifact";
+import { imageChoices, imageSnapshot, imageText, referencePreview, referenceState, targetExists, targetImage } from "./reply-image";
 import { replyDrafts, draftKey, contentKey, semanticBlockKey, type DraftRecord } from "./reply-drafts";
 import type {
   BoardReply,
@@ -26,6 +30,9 @@ import type {
   ReplyStep,
   ReplyTextBlock,
   ReplyArtifactBlock,
+  ReplyImageReference,
+  ReplyArtifactReference,
+  ReplyTarget,
 } from "./reply-types";
 import "./replies.css";
 
@@ -33,9 +40,14 @@ import "./replies.css";
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
-export type ReplySelection = { object_id?: string; reply_id: string; block_id: string };
+export type ReplySelection = { object_id?: string; reply_id: string; block_id: string; target?: ReplyTarget; region?: CanvasAnchor["region"] };
 
 export type ReplyBoardHandlers = {
+  getBoard?(): BoardSnapshot | undefined;
+  onAnnotation?(id: string): void;
+  onArtifactPresentationChange?(replyId: string, blockId: string, height: number, mode: "compact" | "full", explicit: boolean): void;
+  onArtifactWheel?(clientX: number, clientY: number, deltaY: number): void;
+  getCanvas?(): CanvasLayout | undefined;
   dataflow?: CanvasDataflow;
   onAction(request: ReplyActionInput): Promise<BoardReply>;
   onPatch(request: ReplyPatchRequest): Promise<BoardReply>;
@@ -47,7 +59,7 @@ export type ReplyBoardHandlers = {
 export type ReplyBoardHandle = {
   update(replies: BoardReply[]): void;
   select(replyId: string): void;
-  selectBlock(replyId: string, blockId: string): void;
+  selectBlock(replyId: string, blockId: string, target?: ReplyTarget, region?: CanvasAnchor["region"]): void;
   getSelection(): ReplySelection | null;
   getArtifactAnchor(): CanvasAnchor["artifact"] | undefined;
   prepareFeedback(): Promise<void>;
@@ -60,7 +72,7 @@ export function mountReplyBoard(host: HTMLElement, handlers: ReplyBoardHandlers)
   return {
     update: (replies) => board.update(replies),
     select: (replyId) => board.select(replyId),
-    selectBlock: (replyId, blockId) => board.selectBlock(replyId, blockId),
+    selectBlock: (replyId, blockId, target, region) => board.selectBlock(replyId, blockId, target, region),
     getSelection: () => board.getSelection(),
     getArtifactAnchor: () => board.getArtifactAnchor(),
     prepareFeedback: () => board.prepareFeedback(),
@@ -109,7 +121,6 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "ask.label": "就这一块提问",
     "ask.placeholder": "写下你想追问、质疑或补充的内容",
     "ask.context": "关于{label}",
-    "ask.done": "已保存，可在「反馈」查看处理进度。",
     "ask.failed": "没有发送成功，你写的内容仍保留在这里。",
     "edit.stale": "这条回复在你编辑时有了新版本。继续保存可能不会成功；你也可以放弃草稿，载入最新内容。",
     "edit.failed": "保存没有成功，你的修改仍保留在这里。",
@@ -161,6 +172,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "graph.canvas": "关系图画布",
     "graph.nodes": "节点",
     "graph.detail": "节点说明",
+    "graph.edgeDetail": "连线说明",
     "graph.pick": "点击一个节点查看说明。",
     "graph.noDetail": "这个节点还没有说明。",
     "graph.links": "相关连线",
@@ -207,7 +219,6 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "ask.label": "Ask about this block",
     "ask.placeholder": "What would you like to question, challenge or add?",
     "ask.context": "About {label}",
-    "ask.done": "Saved. Check Feedback for processing status.",
     "ask.failed": "Sending failed. Your text is still here.",
     "edit.stale": "This reply changed while you were editing. Saving may not succeed; you can also discard the draft and load the latest version.",
     "edit.failed": "Saving failed. Your changes are still here.",
@@ -259,6 +270,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "graph.canvas": "Relation graph canvas",
     "graph.nodes": "Nodes",
     "graph.detail": "Node detail",
+    "graph.edgeDetail": "Edge detail",
     "graph.pick": "Click a node to read its detail.",
     "graph.noDetail": "This node has no detail yet.",
     "graph.links": "Connections",
@@ -305,7 +317,6 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "ask.label": "このブロックについて質問する",
     "ask.placeholder": "確認したいこと、疑問、補足を書いてください",
     "ask.context": "{label} について",
-    "ask.done": "保存しました。処理状況は「フィードバック」で確認できます。",
     "ask.failed": "送信できませんでした。入力内容はそのまま残っています。",
     "edit.stale": "編集中にこの返信が更新されました。保存できない場合があります。下書きを破棄して最新を読み込むこともできます。",
     "edit.failed": "保存できませんでした。変更内容はそのまま残っています。",
@@ -357,6 +368,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "graph.canvas": "関係図のキャンバス",
     "graph.nodes": "ノード",
     "graph.detail": "ノードの説明",
+    "graph.edgeDetail": "エッジの説明",
     "graph.pick": "ノードをクリックすると説明が表示されます。",
     "graph.noDetail": "このノードにはまだ説明がありません。",
     "graph.links": "関連する接続",
@@ -476,7 +488,8 @@ interface BoardContext {
   handlers: ReplyBoardHandlers;
   uid(): string;
   mergeReply(reply: BoardReply): void;
-  selectBlock(replyId: string, blockId: string): void;
+  selectBlock(replyId: string, blockId: string, target?: ReplyTarget, region?: CanvasAnchor["region"]): void;
+  selection(): ReplySelection | null;
   isBlockSelected(replyId: string, blockId: string): boolean;
   reportError(message: string): void;
 }
@@ -504,14 +517,12 @@ type AskState = {
   text: string;
   busy: boolean;
   error: string | null;
-  done: boolean;
   context: DraftRecord["context"];
   frame: HTMLElement | null;
   input: HTMLTextAreaElement | null;
   sendBtn: HTMLButtonElement | null;
   cancelBtn: HTMLButtonElement | null;
   errorEl: HTMLElement | null;
-  statusEl: HTMLElement | null;
   chipHost: HTMLElement | null;
 };
 
@@ -622,6 +633,74 @@ abstract class BlockView<B extends ReplyBlock, D> {
     this.selectedTag.textContent = on ? translate("block.selected") : "";
     if (on && !this.selectedTag.isConnected) this.kindEl.append(this.selectedTag);
     if (!on && this.selectedTag.isConnected) this.selectedTag.remove();
+    const target = on ? this.ctx.selection()?.target : undefined;
+    this.body.querySelectorAll<HTMLElement>("[data-target-id]").forEach(node => {
+      const selected = target?.id === node.dataset.targetId && target?.kind === node.dataset.targetKind;
+      node.classList.toggle("is-targeted", selected);
+      const button = node.querySelector<HTMLButtonElement>(".rb-target-button");
+      if (button) { button.setAttribute("aria-pressed", String(selected)); button.textContent = imageText(selected ? "focused" : "focus"); }
+    });
+  }
+
+  protected focusTarget(target: ReplyTarget, region?: CanvasAnchor["region"]): void {
+    this.ctx.selectBlock(this.reply.id, this.block.id, target, region);
+    this.ctx.handlers.onFocusNotice?.(imageText(region ? "regionSelected" : "focused"));
+  }
+
+  protected renderImage(image: ReplyImageReference, target: ReplyTarget): HTMLElement {
+    const selection = this.ctx.selection();
+    const region = selection?.reply_id === this.reply.id && selection.block_id === this.block.id && contentKey(selection.target) === contentKey(target) ? selection.region : undefined;
+    const canvas = this.ctx.handlers.getCanvas?.(), owner = this.reply.object_id ?? "";
+    return referencePreview(image, referenceState(canvas, owner, image), selected => this.focusTarget(target, selected), region, imageAnnotations(canvas, owner, image.src, this.block.id, target), this.ctx.handlers.onAnnotation);
+  }
+
+  protected imageEditor(item: { image?: ReplyImageReference | null }): HTMLElement {
+    const wrap = el("div", "rb-image-editor");
+    const label = el("label", "rb-field", imageText("image"));
+    const select = document.createElement("select"); select.setAttribute("aria-label", imageText("image"));
+    select.append(new Option(imageText("none"), ""));
+    const layout = this.ctx.handlers.getCanvas?.(), owner = this.reply.object_id ?? "";
+    const choices = imageChoices(layout, owner);
+    for (const object of choices) {
+      const image = imageSnapshot(object), pinned = item.image?.object_id === object.id && item.image.content_revision !== object.content_revision ? item.image : undefined;
+      select.append(new Option(pinned ? `${pinned.title || pinned.alt || imageText("image")} · ${imageText("saved")}` : image.title || image.alt || imageText("image"), image.object_id));
+    }
+    if (item.image && !choices.some(object => object.id === item.image!.object_id)) select.append(new Option(item.image.title || imageText("saved"), item.image.object_id));
+    select.value = item.image?.object_id ?? "";
+    select.addEventListener("change", () => { const object = choices.find(object => object.id === select.value); item.image = object ? imageSnapshot(object) : undefined; this.rebuildEditor(); });
+    label.append(select); wrap.append(label);
+    if (item.image) {
+      const state = referenceState(layout, owner, item.image);
+      wrap.append(referencePreview(item.image, state));
+      const current = choices.find(object => object.id === item.image!.object_id);
+      if (state === "changed" && current) wrap.append(button(imageText("refresh"), "rb-quiet", () => { item.image = imageSnapshot(current); this.rebuildEditor(); }));
+    } else if (!choices.length) wrap.append(el("p", "rb-small", imageText("empty")), el("p", "rb-small", imageText("external")));
+    return wrap;
+  }
+
+  protected renderArtifact(reference: ReplyArtifactReference): HTMLElement {
+    return artifactReferencePreview(reference, artifactReferenceState(this.ctx.handlers.getBoard?.(), this.reply.object_id || "", reference));
+  }
+
+  protected artifactEditor(item: { artifact?: ReplyArtifactReference | null }): HTMLElement {
+    const wrap = el("div", "rb-image-editor"), label = el("label", "rb-field", artifactText("label"));
+    const select = document.createElement("select"); select.setAttribute("aria-label", artifactText("label")); select.append(new Option(artifactText("none"), ""));
+    const board = this.ctx.handlers.getBoard?.(), owner = this.reply.object_id || "", choices = artifactChoices(board, owner);
+    const key = item.artifact ? JSON.stringify([item.artifact.object_id, item.artifact.block_id]) : "";
+    for (const choice of choices) {
+      const pinned = key === artifactChoiceKey(choice) && item.artifact;
+      const title = pinned ? pinned.title || artifactText("work") : choice.block.title || choice.reply.title || artifactText("work");
+      select.append(new Option(pinned ? `${title} · ${artifactText("saved")}` : title, artifactChoiceKey(choice)));
+    }
+    if (key && !choices.some(c => artifactChoiceKey(c) === key)) select.append(new Option(item.artifact!.title || artifactText("saved"), key));
+    select.value = key; select.onchange = () => { const choice = choices.find(c => artifactChoiceKey(c) === select.value); item.artifact = choice ? artifactSnapshot(choice) : undefined; this.rebuildEditor(); };
+    label.append(select); wrap.append(label);
+    if (item.artifact) {
+      const state = artifactReferenceState(board, owner, item.artifact); wrap.append(artifactReferencePreview(item.artifact, state));
+      const current = choices.find(c => artifactChoiceKey(c) === key);
+      if (state === "changed" && current) wrap.append(button(artifactText("refresh"), "rb-quiet", () => { item.artifact = artifactSnapshot(current); this.rebuildEditor(); }));
+    } else if (!choices.length) wrap.append(el("p", "rb-small", artifactText("empty")));
+    return wrap;
   }
 
   destroy(): void {
@@ -697,8 +776,18 @@ abstract class BlockView<B extends ReplyBlock, D> {
 
   protected openAsk(context: DraftRecord["context"]): void {
     if (this.ask?.busy) return;
+    if (!context?.anchors) {
+      const selected = this.ctx.selection();
+      if (selected?.reply_id === this.reply.id && selected.block_id === this.block.id && selected.target && this.reply.object_id) {
+        const image = targetImage(this.block, selected.target);
+        const artifact_reference = targetArtifact(this.block, selected.target);
+        const object = this.ctx.handlers.getCanvas?.()?.objects.find(object => object.id === this.reply.object_id);
+        context = { label: context?.label ?? imageText("focused"), prefix: context?.prefix ?? "", ...context,
+          anchors: [{ object_id: this.reply.object_id, content_revision: object?.content_revision ?? this.reply.revision, block_id: this.block.id, target: selected.target, ...(image ? { image } : {}), ...(artifact_reference ? { artifact_reference } : {}), ...(selected.region ? { region: selected.region } : {}) }] };
+      }
+    }
     if (this.ask && ((this.ask.context?.prefix ?? "") !== (context?.prefix ?? "") ||
-      contentKey(this.ask.context?.artifact_context) !== contentKey(context?.artifact_context))) this.closeAsk();
+      contentKey(this.ask.context?.artifact_context) !== contentKey(context?.artifact_context) || contentKey(this.ask.context?.anchors) !== contentKey(context?.anchors))) this.closeAsk();
     if (!this.ask) {
       const saved = replyDrafts.get(draftKey(this.draftRef("ask", context)));
       this.ask = {
@@ -708,20 +797,17 @@ abstract class BlockView<B extends ReplyBlock, D> {
         preserveContext: Boolean(saved),
         busy: false,
         error: null,
-        done: false,
         context,
         frame: null,
         input: null,
         sendBtn: null,
         cancelBtn: null,
         errorEl: null,
-        statusEl: null,
         chipHost: null,
       };
       this.buildAskFrame();
     } else {
       this.ask.context = context;
-      this.ask.done = false;
       this.renderAskChip();
       this.updateAskFrame();
     }
@@ -756,7 +842,6 @@ abstract class BlockView<B extends ReplyBlock, D> {
     const chipHost = el("div");
     const input = textArea(ask.text, (v) => {
       ask.text = v;
-      ask.done = false;
     });
     input.id = id;
     input.placeholder = translate("ask.placeholder");
@@ -773,16 +858,14 @@ abstract class BlockView<B extends ReplyBlock, D> {
     const sendBtn = el("button", "rb-primary", translate("action.send"));
     sendBtn.type = "submit";
     const cancelBtn = button(translate("action.cancel"), "rb-quiet", () => this.closeAsk(true));
-    const statusEl = el("span", "rb-status");
-    statusEl.setAttribute("aria-live", "polite");
-    actions.append(sendBtn, cancelBtn, statusEl);
+    actions.append(sendBtn, cancelBtn);
 
     const errorEl = el("p", "rb-error");
     errorEl.setAttribute("role", "alert");
     errorEl.hidden = true;
 
     frame.append(field, actions, errorEl);
-    Object.assign(ask, { frame, input, sendBtn, cancelBtn, errorEl, statusEl, chipHost });
+    Object.assign(ask, { frame, input, sendBtn, cancelBtn, errorEl, chipHost });
     this.askArea.replaceChildren(frame);
     this.askArea.hidden = false;
     this.renderAskChip();
@@ -819,10 +902,6 @@ abstract class BlockView<B extends ReplyBlock, D> {
       ask.errorEl.hidden = !ask.error;
       ask.errorEl.textContent = ask.error ?? "";
     }
-    if (ask.statusEl) {
-      ask.statusEl.textContent = ask.done ? translate("ask.done") : "";
-      ask.statusEl.classList.toggle("is-ok", ask.done);
-    }
   }
 
   private async submitAsk(): Promise<void> {
@@ -838,7 +917,6 @@ abstract class BlockView<B extends ReplyBlock, D> {
     const storedKey = draftKey(this.draftRef("ask", ask.context));
     const storedStamp = ask.draftStamp;
     ask.error = null;
-    ask.done = false;
     this.updateAskFrame();
     try {
       await this.beforeAsk();
@@ -851,6 +929,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
         action: "ask",
         text: ask.context ? `${ask.context.prefix}${trimmed}` : trimmed,
         ...(ask.context?.artifact_context ? { artifact_context: ask.context.artifact_context } : {}),
+        ...(ask.context?.anchors ? { anchors: ask.context.anchors } : {}),
       };
       const updated = await this.ctx.handlers.onAction(request);
       replyDrafts.remove(storedKey, storedStamp);
@@ -860,11 +939,11 @@ abstract class BlockView<B extends ReplyBlock, D> {
       ask.busy = false;
       ask.text = "";
       ask.context = null;
-      ask.done = true;
-      if (ask.input) ask.input.value = "";
-      this.renderAskChip();
-      this.updateAskFrame();
+      // The shared composer tracks the real delivery receipt. Do not leave a
+      // second, frozen "saved" status beside an already handled request.
+      this.closeAsk();
       this.ctx.mergeReply(updated);
+      this.askBtn.focus({ preventScroll: true });
     } catch (err) {
       if (this.destroyed) return;
       if (this.ask !== ask) return;
@@ -1070,6 +1149,7 @@ type TextDraft = { title: string; text: string };
 
 class ArtifactView extends BlockView<ReplyArtifactBlock, TextDraft> {
   private artifact: ArtifactFrame | null = null;
+  private management: HTMLDialogElement | null = null;
   constructor(ctx: BoardContext) { super(ctx, "kind.artifact"); this.keepBodyWhileEditing = true; }
   protected renderHead(): void {
     super.renderHead();
@@ -1079,8 +1159,33 @@ class ArtifactView extends BlockView<ReplyArtifactBlock, TextDraft> {
     this.artifact ??= new ArtifactFrame(this.body, reply => this.ctx.mergeReply(reply), error => this.ctx.reportError(error), async bundle_id => {
       const reply = await this.ctx.handlers.onPatch({ object_id: this.reply.object_id, reply_id: this.reply.id, expected_revision: this.reply.revision, block: { ...this.block, bundle_id } });
       this.ctx.mergeReply(reply);
-    }, this.ctx.handlers.dataflow);
+    }, this.ctx.handlers.dataflow, (height, mode, explicit) => this.ctx.handlers.onArtifactPresentationChange?.(this.reply.id, this.block.id, height, mode, explicit), this.ctx.handlers.onArtifactWheel);
+    this.manageCanvasWork();
     this.artifact.update(this.reply, this.block);
+  }
+  private manageCanvasWork() {
+    const standalone = Boolean(this.ctx.handlers.onArtifactPresentationChange) && this.reply.blocks.length === 1;
+    this.root.classList.toggle("rb-work-block", standalone);
+    if (standalone && !this.management) {
+      const dialog = el("dialog", "board-dialog artifact-management");
+      const header = el("header"), title = el("h2", "", ct("workSettings"));
+      header.append(title, button(ct("close"), "ghost", () => dialog.close()));
+      dialog.setAttribute("aria-label", ct("workSettings"));
+      const head = this.root.querySelector<HTMLElement>(".rb-block-head")!;
+      dialog.append(header, head, this.editArea, this.askArea);
+      this.artifact!.manageIn(dialog);
+      this.root.append(dialog); this.management = dialog;
+    } else if (!standalone && this.management) {
+      if (this.management.open) this.management.close();
+      this.root.prepend(this.management.querySelector<HTMLElement>(".rb-block-head")!);
+      this.root.append(this.editArea, this.askArea); this.artifact!.manageIn(null);
+      this.management.remove(); this.management = null;
+    }
+    if (this.management) {
+      this.management.setAttribute("aria-label", ct("workSettings"));
+      this.management.querySelector("h2")!.textContent = ct("workSettings");
+      this.management.querySelector("header > button")!.textContent = ct("close");
+    }
   }
   protected toggleAsk(): void { if (this.ask) this.closeAsk(); else this.openAsk(this.artifact?.context() ?? null); }
   protected async beforeAsk(): Promise<void> {
@@ -1105,9 +1210,7 @@ class TextView extends BlockView<ReplyTextBlock, TextDraft> {
 
   protected renderView(): void {
     const wrap = el("div", "rb-text");
-    const parts = paragraphs(this.block.text);
-    if (parts.length === 0 && this.block.text.length > 0) parts.push(el("p", undefined, this.block.text));
-    wrap.append(...parts);
+    renderLightText(wrap, this.block.text);
     this.body.replaceChildren(wrap);
   }
 
@@ -1158,6 +1261,7 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
       grid.setAttribute("role", "group");
       block.options.forEach((option, index) => {
         const card = el("article", "rb-cmp-card");
+        card.dataset.targetId = option.id; card.dataset.targetKind = "option";
         const isChosen = option.id === block.selected_id;
         card.classList.toggle("is-selected", isChosen);
 
@@ -1167,6 +1271,8 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
         card.append(head);
         card.append(el("h4", undefined, displayTitle(option.title)));
         if (option.summary.trim()) card.append(el("p", "rb-cmp-summary", option.summary));
+        if (option.image) card.append(this.renderImage(option.image, { kind: "option", id: option.id }));
+        if (option.artifact) card.append(this.renderArtifact(option.artifact));
 
         const dl = el("dl");
         const rows = Math.max(block.criteria.length, option.values.length);
@@ -1191,6 +1297,7 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
         pick.setAttribute("aria-pressed", String(isChosen));
         pick.disabled = this.pickingId !== null;
         card.append(pick);
+        card.append(button(imageText("focus"), "rb-quiet rb-target-button", () => this.focusTarget({ kind: "option", id: option.id })));
         grid.append(card);
       });
       frag.push(grid);
@@ -1208,6 +1315,7 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
       frag.push(err);
     }
     this.body.replaceChildren(...frag);
+    this.refreshSelection();
   }
 
   private async pick(optionId: string): Promise<void> {
@@ -1311,6 +1419,7 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
       );
       set.append(head);
       set.append(this.labeled(translate("edit.optionTitle"), textInput(option.title, (v) => (option.title = v))));
+      set.append(this.imageEditor(option), this.artifactEditor(option));
       set.append(
         this.labeled(translate("edit.optionSummary"), textArea(option.summary, (v) => (option.summary = v), 2)),
       );
@@ -1343,6 +1452,8 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
       title: o.title.trim(),
       summary: o.summary.trim(),
       values: criteria.map((_, i) => (o.values[i] ?? "").trim()),
+      ...(o.image ? { image: o.image } : {}),
+      ...(o.artifact ? { artifact: o.artifact } : {}),
     }));
     const selected = options.some((o) => o.id === draft.selected_id) ? draft.selected_id : null;
     return {
@@ -1381,12 +1492,13 @@ class SequenceView extends BlockView<ReplySequenceBlock, SequenceDraft> {
     steps.forEach((step, index) => {
       const n = index + 1;
       const item = el("li", "rb-seq-item");
+      item.dataset.targetId = step.id; item.dataset.targetKind = "step";
       const focused = step.id === this.focusedStepId;
       item.classList.toggle("is-focused", focused);
 
       const toggle = button("", "rb-seq-toggle", () => {
         this.focusedStepId = focused ? null : step.id;
-        this.ctx.selectBlock(this.reply.id, this.block.id);
+        this.ctx.selectBlock(this.reply.id, this.block.id, this.focusedStepId ? { kind: "step", id: this.focusedStepId } : undefined);
         this.renderView();
       });
       toggle.setAttribute("aria-pressed", String(focused));
@@ -1395,6 +1507,8 @@ class SequenceView extends BlockView<ReplySequenceBlock, SequenceDraft> {
       if (focused) head.append(el("span", "rb-small rb-block-selected-tag", translate("seq.focused")));
       toggle.append(head, el("span", "rb-seq-title", displayTitle(step.title)));
       item.append(toggle);
+      if (step.image) item.append(this.renderImage(step.image, { kind: "step", id: step.id }));
+      if (step.artifact) item.append(this.renderArtifact(step.artifact));
 
       const body = el("dl", "rb-seq-body");
       const addField = (labelKey: string, value: string | undefined, cls: string) => {
@@ -1417,16 +1531,17 @@ class SequenceView extends BlockView<ReplySequenceBlock, SequenceDraft> {
       foot.append(
         button(translate("seq.askStep"), "rb-quiet", () => {
           this.focusedStepId = step.id;
-          this.ctx.selectBlock(this.reply.id, this.block.id);
+          this.focusTarget({ kind: "step", id: step.id });
           this.renderView();
           const label = translate("seq.stepContext", { n, title: displayTitle(step.title) });
-          this.openAsk({ label, prefix: `[${label}] ` });
+          this.openAsk({ label, prefix: "" });
         }),
       );
       item.append(foot);
       list.append(item);
     });
     this.body.replaceChildren(list);
+    this.refreshSelection();
   }
 
   protected createDraft(block = this.block): SequenceDraft {
@@ -1457,6 +1572,7 @@ class SequenceView extends BlockView<ReplySequenceBlock, SequenceDraft> {
       );
       set.append(head);
       set.append(this.labeled(translate("edit.stepTitle"), textInput(step.title, (v) => (step.title = v))));
+      set.append(this.imageEditor(step), this.artifactEditor(step));
       set.append(this.labeled(translate("edit.stepAction"), textArea(step.action, (v) => (step.action = v), 3)));
       set.append(
         this.labeled(translate("edit.stepFeedback"), textArea(step.feedback ?? "", (v) => (step.feedback = v), 2)),
@@ -1484,6 +1600,8 @@ class SequenceView extends BlockView<ReplySequenceBlock, SequenceDraft> {
         action: s.action.trim(),
         ...(feedback ? { feedback } : {}),
         ...(note ? { note } : {}),
+        ...(s.image ? { image: s.image } : {}),
+        ...(s.artifact ? { artifact: s.artifact } : {}),
       };
     });
     return { id: this.block.id, type: "sequence", ...(title ? { title } : {}), steps };
@@ -1511,6 +1629,8 @@ const NODE_BASE_ATTRS = {
 };
 
 const NODE_FOCUS_BODY = { fill: "var(--rb-node-focus, rgba(212, 179, 255, 0.14))", stroke: "var(--rb-node-focus-stroke, #d4b3ff)", strokeWidth: 2 };
+const EDGE_BASE_LINE = { stroke: "var(--rb-edge-stroke, rgba(244, 241, 234, 0.45))", strokeWidth: 1.3, targetMarker: { name: "block", width: 9, height: 7 } };
+const EDGE_FOCUS_LINE = { stroke: "var(--rb-node-focus-stroke, #d4b3ff)", strokeWidth: 2.5 };
 
 function hasCoords(node: ReplyGraphNode): node is ReplyGraphNode & { x: number; y: number } {
   return typeof node.x === "number" && Number.isFinite(node.x) && typeof node.y === "number" && Number.isFinite(node.y);
@@ -1589,6 +1709,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
   private structureKey = "";
   private pendingFit = true;
   private focusedNodeId: string | null = null;
+  private focusedEdgeId: string | null = null;
   private dragging = false;
   private layoutTimer: number | null = null;
   private statusTimer: number | null = null;
@@ -1636,8 +1757,10 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
   protected renderView(): void {
     this.renderTools();
     this.canvas.setAttribute("aria-label", `${translate("graph.canvas")}: ${displayTitle(this.block.title)}`);
-    if (this.edit?.draft.nodeId) this.focusedNodeId = this.edit.draft.nodeId;
+    this.syncFocusFromSelection();
+    if (!this.focusedEdgeId && !this.focusedNodeId && this.edit?.draft.nodeId) this.focusedNodeId = this.edit.draft.nodeId;
     if (this.focusedNodeId && !this.shownBlock().nodes.some((n) => n.id === this.focusedNodeId)) this.focusedNodeId = null;
+    if (this.focusedEdgeId && !this.shownBlock().edges.some((edge) => edge.id === this.focusedEdgeId)) this.focusedEdgeId = null;
     this.ensureGraph();
     this.syncGraph();
     this.renderNodeList();
@@ -1687,6 +1810,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
       preventDefaultContextMenu: false,
     });
     graph.on("node:click", ({ node }) => this.focusNode(node.id));
+    graph.on("edge:click", ({ edge }) => this.focusEdge(edge.id));
     graph.on("node:move", () => {
       this.dragging = true;
     });
@@ -1725,6 +1849,10 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
       body: { ...NODE_BASE_ATTRS.body, ...(focused ? NODE_FOCUS_BODY : {}) },
       label: { ...NODE_BASE_ATTRS.label, text: displayTitle(node.title) },
     };
+  }
+
+  private edgeAttrs(edge: ReplyGraphBlock["edges"][number]) {
+    return { line: { ...EDGE_BASE_LINE, ...(edge.id === this.focusedEdgeId ? EDGE_FOCUS_LINE : {}) } };
   }
 
   private edgeLabels(label: string) {
@@ -1783,13 +1911,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
           source: { cell: edge.from },
           target: { cell: edge.to },
           connector: { name: "smooth" },
-          attrs: {
-            line: {
-              stroke: "var(--rb-edge-stroke, rgba(244, 241, 234, 0.45))",
-              strokeWidth: 1.3,
-              targetMarker: { name: "block", width: 9, height: 7 },
-            },
-          },
+          attrs: this.edgeAttrs(edge),
           labels: this.edgeLabels(edge.label),
         });
       });
@@ -1813,53 +1935,122 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     block.edges.forEach((edge) => {
       const cell = g.getCellById(edge.id);
       if (!cell || !cell.isEdge()) return;
-      (cell as X6Edge).setLabels(this.edgeLabels(edge.label));
+      const x6edge = cell as X6Edge;
+      x6edge.setAttrs(this.edgeAttrs(edge));
+      x6edge.setLabels(this.edgeLabels(edge.label));
     });
   }
 
-  private focusNode(id: string | null): void {
-    this.focusedNodeId = id;
-    this.ctx.selectBlock(this.reply.id, this.block.id);
-    const g = this.graph;
-    if (g) {
-      this.shownBlock().nodes.forEach((node) => {
-        const cell = g.getCellById(node.id);
-        if (cell && cell.isNode()) (cell as X6Node).setAttrs(this.nodeAttrs(node));
-      });
-    }
+  refreshSelection(): void {
+    super.refreshSelection();
+    this.syncFocusFromSelection();
+    this.syncGraph();
     this.renderNodeList();
     this.renderDetail();
-    if (this.edit && this.edit.draft.nodeId !== id && id) {
-      this.edit.draft.nodeId = id;
+  }
+
+  private syncFocusFromSelection(): void {
+    const selection = this.ctx.selection();
+    if (!selection || selection.reply_id !== this.reply.id || selection.block_id !== this.block.id) {
+      this.focusedNodeId = null;
+      this.focusedEdgeId = null;
+      return;
+    }
+    const target = selection.target, block = this.shownBlock();
+    if (target?.kind === "graph_node" && block.nodes.some(node => node.id === target.id)) {
+      this.focusedNodeId = target.id;
+      this.focusedEdgeId = null;
+      return;
+    }
+    if (target?.kind === "graph_edge" && block.edges.some(edge => edge.id === target.id)) {
+      this.focusedNodeId = null;
+      this.focusedEdgeId = target.id;
+      return;
+    }
+    this.focusedNodeId = null;
+    this.focusedEdgeId = null;
+  }
+
+  private focusNode(id: string | null): void {
+    const nodeId = id && this.shownBlock().nodes.some(node => node.id === id) ? id : null;
+    this.focusedNodeId = nodeId;
+    this.focusedEdgeId = null;
+    this.ctx.selectBlock(this.reply.id, this.block.id, nodeId ? { kind: "graph_node", id: nodeId } : undefined);
+    this.syncGraph();
+    this.renderNodeList();
+    this.renderDetail();
+    if (this.edit && this.edit.draft.nodeId !== nodeId && nodeId) {
+      this.edit.draft.nodeId = nodeId;
       this.rebuildEditor();
     }
   }
 
+  private focusEdge(id: string | null): void {
+    const edgeId = id && this.shownBlock().edges.some(edge => edge.id === id) ? id : null;
+    this.focusedNodeId = null;
+    this.focusedEdgeId = edgeId;
+    this.ctx.selectBlock(this.reply.id, this.block.id, edgeId ? { kind: "graph_edge", id: edgeId } : undefined);
+    this.syncGraph();
+    this.renderNodeList();
+    this.renderDetail();
+  }
+
   private renderNodeList(): void {
     this.nodeListWrap.replaceChildren();
-    const nodes = this.shownBlock().nodes;
-    if (nodes.length === 0) {
+    const block = this.shownBlock(), nodes = block.nodes;
+    if (nodes.length === 0 && block.edges.length === 0) {
       this.nodeListWrap.append(el("p", "rb-mute", translate("graph.empty")));
       return;
     }
-    this.nodeListWrap.append(el("span", "rb-kicker", translate("graph.nodes")));
-    const list = el("ul", "rb-graph-nodes");
-    nodes.forEach((node) => {
-      const item = el("li");
-      const focused = node.id === this.focusedNodeId;
-      const b = button("", "", () => this.focusNode(focused ? null : node.id));
-      b.setAttribute("aria-pressed", String(focused));
-      b.append(el("span", undefined, displayTitle(node.title)));
-      if (focused) b.append(el("span", "rb-small rb-block-selected-tag", translate("graph.focused")));
-      item.append(b);
-      list.append(item);
-    });
-    this.nodeListWrap.append(list);
+    if (nodes.length) {
+      this.nodeListWrap.append(el("span", "rb-kicker", translate("graph.nodes")));
+      const list = el("ul", "rb-graph-nodes");
+      nodes.forEach((node) => {
+        const item = el("li");
+        const focused = node.id === this.focusedNodeId;
+        const b = button("", "", () => this.focusNode(focused ? null : node.id));
+        b.setAttribute("aria-pressed", String(focused));
+        b.append(el("span", undefined, displayTitle(node.title)));
+        if (focused) b.append(el("span", "rb-small rb-block-selected-tag", translate("graph.focused")));
+        item.append(b);
+        list.append(item);
+      });
+      this.nodeListWrap.append(list);
+    }
+    if (block.edges.length) {
+      this.nodeListWrap.append(el("span", "rb-kicker", translate("graph.links")));
+      const list = el("ul", "rb-graph-nodes");
+      const titleOf = (id: string) => displayTitle(block.nodes.find(node => node.id === id)?.title ?? id);
+      block.edges.forEach((edge) => {
+        const item = el("li");
+        item.dataset.targetId = edge.id;
+        item.dataset.targetKind = "graph_edge";
+        const focused = edge.id === this.focusedEdgeId;
+        const label = edge.label.trim();
+        const text = label ? translate("graph.linkLabel", { from: titleOf(edge.from), to: titleOf(edge.to), label }) : translate("graph.linkTo", { from: titleOf(edge.from), to: titleOf(edge.to) });
+        const b = button("", "", () => this.focusEdge(focused ? null : edge.id));
+        b.setAttribute("aria-pressed", String(focused));
+        b.setAttribute("aria-label", text);
+        b.append(el("span", undefined, text));
+        if (focused) b.append(el("span", "rb-small rb-block-selected-tag", translate("graph.focused")));
+        item.append(b);
+        list.append(item);
+      });
+      this.nodeListWrap.append(list);
+    }
   }
 
   private renderDetail(): void {
     this.detailWrap.replaceChildren();
     const block = this.shownBlock();
+    const edge = block.edges.find((item) => item.id === this.focusedEdgeId) ?? null;
+    if (edge) {
+      const titleOf = (id: string) => displayTitle(block.nodes.find((node) => node.id === id)?.title ?? id);
+      const endpoints = translate("graph.linkTo", { from: titleOf(edge.from), to: titleOf(edge.to) });
+      this.detailWrap.append(el("span", "rb-kicker", translate("graph.edgeDetail")), el("h4", undefined, edge.label.trim() || endpoints));
+      if (edge.label.trim()) this.detailWrap.append(el("p", "rb-mute", endpoints));
+      return;
+    }
     const node = block.nodes.find((n) => n.id === this.focusedNodeId) ?? null;
     this.detailWrap.append(el("span", "rb-kicker", translate("graph.detail")));
     if (!node) {
@@ -2140,7 +2331,8 @@ class ReplyBoard {
       handlers,
       uid: () => `${uidPrefix}-${(this.uidCounter += 1)}`,
       mergeReply: (reply) => this.mergeReply(reply),
-      selectBlock: (replyId, blockId) => this.selectBlock(replyId, blockId),
+      selectBlock: (replyId, blockId, target, region) => this.selectBlock(replyId, blockId, target, region),
+      selection: () => this.getSelection(),
       isBlockSelected: (replyId, blockId) =>
         this.selection !== null && this.selection.reply_id === replyId && this.selection.block_id === blockId,
       reportError: (message) => this.handlers.onError?.(message),
@@ -2209,6 +2401,11 @@ class ReplyBoard {
     if (this.selection) {
       const owner = ordered.find((r) => r.id === this.selection!.reply_id);
       if (!owner || !owner.blocks.some((b) => b.id === this.selection!.block_id)) this.setSelection(null);
+      else if (this.selection.target) {
+        const block = owner.blocks.find(b => b.id === this.selection!.block_id)!;
+        if (!targetExists(block, this.selection.target)) this.setSelection({ reply_id: owner.id, block_id: block.id });
+        else if (this.selection.region && targetImage(block, this.selection.target)?.src !== this.selection.region.resource) this.setSelection({ ...this.selection, region: undefined });
+      }
     }
 
     // Remove panels of vanished replies.
@@ -2297,14 +2494,14 @@ class ReplyBoard {
     const prev = this.selection;
     const same =
       (prev === null && next === null) ||
-      (prev !== null && next !== null && prev.reply_id === next.reply_id && prev.block_id === next.block_id);
+      (prev !== null && next !== null && contentKey(prev) === contentKey(next));
     this.selection = next ? { ...next } : null;
     if (next) this.lastBlockByReply.set(next.reply_id, next.block_id);
     this.panels.forEach((panel) => panel.views.forEach((v) => v.refreshSelection()));
     if (!same) this.handlers.onSelect?.(this.getSelection());
   }
 
-  selectBlock(replyId: string, blockId: string): void {
+  selectBlock(replyId: string, blockId: string, target?: ReplyTarget, region?: CanvasAnchor["region"]): void {
     if (!this.replies.some(reply => reply.id === replyId && reply.blocks.some(block => block.id === blockId))) return;
     if (replyId !== this.activeId) {
       this.activeId = replyId;
@@ -2312,7 +2509,7 @@ class ReplyBoard {
       this.renderNav();
       this.refreshPanelVisibility();
     }
-    this.setSelection({ reply_id: replyId, block_id: blockId });
+    this.setSelection({ reply_id: replyId, block_id: blockId, ...(target ? { target } : {}), ...(region ? { region } : {}) });
   }
 
   private mergeReply(reply: BoardReply): void {

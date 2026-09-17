@@ -12,6 +12,8 @@ pub mod feedback;
 pub mod mcp;
 pub mod observer;
 #[cfg(test)]
+mod annotation_tests;
+#[cfg(test)]
 mod reply_tests;
 mod store;
 
@@ -840,7 +842,11 @@ impl Bridge {
                     return Err(SpellcastError::user("用户已修改这个对象；请通过 spellcast_canvas_batch 提交局部修改提案。"));
                 }
             }
+            let previous = state.session.clone();
             let reply = state.session.write_reply(req)?;
+            state.session.sync_canvas();
+            spellcast_core::validate_image_references(&previous, &state.session)?;
+            spellcast_core::validate_artifact_references(&previous, &state.session)?;
             state.mark_response(
                 &reply.source_id,
                 &reply.id,
@@ -944,7 +950,11 @@ impl Bridge {
             }
             let request_id = req.request_id.clone();
             let block_id = req.block.id().to_string();
+            let previous = state.session.clone();
             let reply = state.session.patch_reply(req)?;
+            state.session.sync_canvas();
+            spellcast_core::validate_image_references(&previous, &state.session)?;
+            spellcast_core::validate_artifact_references(&previous, &state.session)?;
             if !layout_only && source_id.is_none() && content_changed {
                 state.session.sync_canvas();
                 if let Some(object) = state.session.board.canvas.objects.iter_mut().find(|o| matches!(&o.content, spellcast_core::CanvasContent::Reply { id } if id == &reply.id)) {
@@ -996,7 +1006,19 @@ impl Bridge {
                     .ok_or_else(|| SpellcastError::user("请求已保存，但原回复已被删除。"))?;
                 return Ok((reply, event));
             }
+            if req.action == ReplyAction::Ask && !req.anchors.is_empty() {
+                let object_id = state.session.board.canvas.objects.iter().find(|object| matches!(&object.content, spellcast_core::CanvasContent::Reply { id } if id == &req.reply_id)).map(|object| &object.id);
+                if req.anchors.iter().any(|anchor| Some(&anchor.object_id) != object_id || anchor.block_id.as_deref() != Some(&req.block_id)) { return Err(SpellcastError::user("所选位置与讨论的回复不一致。")); }
+                canvas::validate_anchors(&state.session, &req.anchors)?;
+                for anchor in &req.anchors { self.validate_input_anchor(&state.session, anchor)?; }
+            }
+            let annotation_context = if req.action == ReplyAction::Ask {
+                canvas::annotation_context(&state.session, &req.anchors)?
+            } else {
+                Vec::new()
+            };
             let (reply, text) = state.session.act_on_reply(&req)?;
+            canvas::validate_annotation_route(&state.session, &annotation_context, &reply.source_id)?;
             let mut connected_anchor = None;
             if let Some(context) = &req.artifact_context {
                 if self.artifact(&context.bundle_id)?.source_id != reply.source_id {
@@ -1006,6 +1028,7 @@ impl Bridge {
                     let object = state.session.board.canvas.objects.iter().find(|object| matches!(&object.content, spellcast_core::CanvasContent::Reply { id } if id == &reply.id))
                         .ok_or_else(|| SpellcastError::user("作品的画布身份不存在。"))?;
                     let anchor = spellcast_core::inbox::CanvasAnchor {
+                        target: None, image: None, artifact_reference: None, annotations: vec![],
                         compositions: vec![],
                         object_id: object.id.clone(), content_revision: object.content_revision, block_id: Some(req.block_id.clone()), selection: None, region: None,
                         artifact: Some(spellcast_core::inbox::CanvasArtifactAnchor { bundle_id: context.bundle_id.clone(), state_revision: context.state_revision.ok_or_else(|| SpellcastError::user("连接反馈需要确切的参数版本。"))?, state: context.state.clone(), selection: context.state.get("selection").cloned() }),
@@ -1034,6 +1057,8 @@ impl Bridge {
             event.block_id = Some(req.block_id);
             event.option_id = req.option_id;
             event.request_id = req.request_id;
+            if req.action == ReplyAction::Ask { event.anchors = req.anchors; }
+            event.annotation_context = annotation_context;
             if let Some(anchor) = connected_anchor { event.object_id = Some(anchor.object_id.clone()); event.object_revision = Some(anchor.content_revision); event.anchors.push(anchor); }
             if let Some(context) = req.artifact_context {
                 event.artifact_context = Some(serde_json::to_value(context)?);
@@ -1102,6 +1127,11 @@ impl Bridge {
 
     /// Record something the user did and wake any tool waiting on it.
     pub fn user_event(&self, event: AgentEvent) -> Result<AgentEvent, SpellcastError> {
+        if !event.annotation_context.is_empty() {
+            return Err(SpellcastError::user(
+                "annotation_context 只能由后端从已校验的注释引用生成。",
+            ));
+        }
         if matches!(
             event.kind.as_str(),
             "expired" | "dismiss" | "poke" | "not_shown"
@@ -1170,6 +1200,8 @@ impl Bridge {
                 if !known { return Err(SpellcastError::user("接收任务已经不存在，请重新选择。")); }
                 canvas::validate_anchors(&state.session, &event.anchors)?;
                 for anchor in &event.anchors { self.validate_input_anchor(&state.session, anchor)?; }
+                event.annotation_context = canvas::annotation_context(&state.session, &event.anchors)?;
+                canvas::validate_annotation_route(&state.session, &event.annotation_context, source)?;
                 // Multiple sources are reference context; only source_id receives this request.
                 if event.object_id.is_some() || event.reply_id.is_some() || event.node_id.is_some() || event.block_id.is_some() || event.bubble_id.is_some() {
                     return Err(SpellcastError::user("多位置反馈请只使用 anchors，避免与旧引用混淆。"));
@@ -2525,3 +2557,5 @@ mod tests {
             .is_none());
     }
 }
+#[cfg(test)]
+mod image_reference_tests;

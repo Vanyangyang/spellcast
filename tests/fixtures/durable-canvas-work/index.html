@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Calendar breathing room</title>
+<style>
+  :root { color-scheme: light; font: 13px/1.35 system-ui, sans-serif; color: #24332f; background: #f8f6ef; }
+  body { margin: 0; padding: 7px 9px; min-height: 0; }
+  header, label { display: flex; align-items: center; gap: 8px; }
+  header { justify-content: space-between; margin-bottom: 5px; font-weight: 650; }
+  canvas { display: block; width: 100%; height: auto; border: 1px solid #d9d4c8; border-radius: 7px; background: #fffdf7; }
+  label { margin-top: 6px; }
+  input { flex: 1; accent-color: #3c8c78; }
+  output { min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
+  #status { color: #62716b; font-size: 11px; }
+</style>
+<body>
+  <header><span>Calendar breathing room</span><span id="status">Loading…</span></header>
+  <canvas id="calendar" width="400" height="132" aria-label="Weekly calendar gap preview"></canvas>
+  <label for="gap">Meeting gap <input id="gap" type="range" min="0" max="30" value="15"><output id="gap-value">15 min</output></label>
+<script>
+(() => {
+  const canvas = document.querySelector('#calendar');
+  const context = canvas.getContext('2d');
+  const slider = document.querySelector('#gap');
+  const value = document.querySelector('#gap-value');
+  const status = document.querySelector('#status');
+  let gap = 15;
+
+  function validGap(candidate) {
+    const number = Number(candidate);
+    return Number.isFinite(number) ? Math.max(0, Math.min(30, Math.round(number))) : 15;
+  }
+  function draw() {
+    const width = canvas.width, height = canvas.height;
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = '#fffdf7'; context.fillRect(0, 0, width, height);
+    context.strokeStyle = '#ddd7ca'; context.lineWidth = 1;
+    for (let column = 0; column <= 5; column++) {
+      const x = 12 + column * 76; context.beginPath(); context.moveTo(x, 21); context.lineTo(x, height - 8); context.stroke();
+    }
+    for (let row = 0; row < 4; row++) {
+      const y = 21 + row * 28; context.beginPath(); context.moveTo(12, y); context.lineTo(width - 8, y); context.stroke();
+    }
+    context.fillStyle = '#6f766d'; context.font = '10px system-ui';
+    ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].forEach((day, index) => context.fillText(day, 18 + index * 76, 14));
+    const room = gap / 30;
+    for (let column = 0; column < 5; column++) {
+      const x = 18 + column * 76;
+      const firstHeight = 15 + (1 - room) * 10;
+      const secondY = 47 + room * 14;
+      context.fillStyle = column === 2 ? '#b7d9cf' : '#d5e6df'; context.fillRect(x, 26, 64, firstHeight);
+      context.fillStyle = column === 2 ? '#e7b68f' : '#f0d1b8'; context.fillRect(x, secondY, 64, 17 + (1 - room) * 8);
+    }
+    context.fillStyle = '#37695e'; context.font = '11px system-ui'; context.fillText(`${gap} minute buffers`, 18, height - 14);
+  }
+  function render(next) {
+    gap = validGap(next && next.gap);
+    slider.value = String(gap); value.textContent = `${gap} min`; draw();
+  }
+
+  spellcast.ready.then(saved => {
+    render(saved);
+    status.textContent = 'Ready';
+    spellcast.onRestore(next => render(next));
+    slider.addEventListener('input', () => {
+      render({ gap: slider.value });
+      spellcast.setState({ gap });
+    });
+    spellcast.onSnapshot(() => ({
+      src: canvas.toDataURL('image/png'),
+      alt: `Weekly calendar with ${gap}-minute meeting gaps`,
+    }));
+  }).catch(error => { status.textContent = String(error); });
+  draw();
+})();
+</script>
+</body>
+</html>

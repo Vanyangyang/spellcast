@@ -70,12 +70,17 @@ pub enum SetupKind {
     NotInstalled,
     Installing,
     InstalledPendingTrust,
+    InstalledUnverified,
     PendingReload,
     Verified,
     ConflictCustom,
     ConflictEndpoint,
     Failed,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookTrust { Trusted, Untrusted, Modified, Disabled, Unknown }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SetupReport {
@@ -93,6 +98,7 @@ pub struct SetupReport {
     pub mcp_url: Option<String>,
     pub conflicts: Vec<String>,
     pub partial: bool,
+    pub hook_trust: Option<HookTrust>,
 }
 
 impl SetupReport {
@@ -100,10 +106,10 @@ impl SetupReport {
         Self {
             client: client.into(),
             kind,
-            complete_supported: client == "codex",
+            complete_supported: matches!(client, "codex" | "grok"),
             installed: matches!(
                 kind,
-                SetupKind::InstalledPendingTrust | SetupKind::PendingReload | SetupKind::Verified
+                SetupKind::InstalledPendingTrust | SetupKind::InstalledUnverified | SetupKind::PendingReload | SetupKind::Verified
             ),
             note: note.into(),
             done: Vec::new(),
@@ -115,6 +121,7 @@ impl SetupReport {
             mcp_url: None,
             conflicts: Vec::new(),
             partial: false,
+            hook_trust: None,
         }
     }
 }
@@ -149,6 +156,9 @@ pub struct CliEnv {
 pub trait PluginCli: Send + Sync {
     fn plugin_add(&self, selector: &str, env: &CliEnv) -> Result<CliOutcome, String>;
     fn plugin_list(&self, marketplace: &str, env: &CliEnv) -> Result<CliOutcome, String>;
+    fn hooks_list(&self, _env: &CliEnv) -> Result<Value, String> {
+        Err("当前 Codex 连接不支持读取 Hook 信任状态。".into())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +174,13 @@ pub struct ProcessCli {
 }
 
 impl PluginCli for ProcessCli {
+    fn hooks_list(&self, env: &CliEnv) -> Result<Value, String> {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
+            .map_err(|e| e.to_string())?;
+        runtime.block_on(spellcast_bridge::codex::list_hooks(&self.program, &env.user_home, &env.codex_home))
+            .map_err(|e| e.message)
+    }
+
     fn plugin_add(&self, selector: &str, env: &CliEnv) -> Result<CliOutcome, String> {
         run_owned(
             &self.program,
@@ -1845,12 +1862,215 @@ fn locate_report(mut r: SetupReport, paths: &SetupPaths, mcp: &str, cache: Optio
     r
 }
 
+fn grok_config_path(user_home: &Path) -> PathBuf {
+    user_home.join(".grok").join("config.toml")
+}
+
+fn grok_skill_root(user_home: &Path) -> PathBuf {
+    user_home
+        .join(".grok")
+        .join("skills")
+        .join("spellcast")
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum GrokMcp {
+    Absent,
+    Ready,
+    Incomplete,
+    Conflict(String),
+    Shape(String),
+}
+
+fn inspect_grok_spellcast(doc: &DocumentMut, mcp: &str) -> GrokMcp {
+    let Some(servers_item) = doc.get("mcp_servers") else {
+        return GrokMcp::Absent;
+    };
+    let Some(servers) = servers_item.as_table() else {
+        return GrokMcp::Shape("mcp_servers 不是表，已保护。".into());
+    };
+    let Some(entry_item) = servers.get(PLUGIN_NAME) else {
+        return GrokMcp::Absent;
+    };
+    let Some(entry) = entry_item.as_table() else {
+        return GrokMcp::Shape("mcp_servers.spellcast 不是普通表，已保护。".into());
+    };
+    let mut enabled = false;
+    let mut url: Option<String> = None;
+    let mut stdio_residue = false;
+    for (key, item) in entry.iter() {
+        match key {
+            "enabled" => {
+                enabled = item.as_value().and_then(|v| v.as_bool()).unwrap_or(false);
+            }
+            "url" => {
+                url = item.as_value().and_then(|v| v.as_str()).map(str::to_string);
+            }
+            "command" | "args" | "type" => stdio_residue = true,
+            _ => {}
+        }
+    }
+    match (enabled, url.as_deref()) {
+        (true, Some(found)) if found == mcp && !stdio_residue => GrokMcp::Ready,
+        (true, Some(found)) if found == mcp => GrokMcp::Incomplete,
+        (true, Some(found)) => {
+            GrokMcp::Conflict(format!("mcp_servers.spellcast.url={found} 指向其他实例。"))
+        }
+        (_, None) => GrokMcp::Absent,
+        _ => GrokMcp::Incomplete,
+    }
+}
+
+fn inspect_grok_config(path: &Path, mcp: &str) -> Result<GrokMcp, String> {
+    if !path.is_file() {
+        return Ok(GrokMcp::Absent);
+    }
+    let text =
+        fs::read_to_string(path).map_err(|err| format!("读不了 {}：{err}", path.display()))?;
+    let doc = text
+        .parse::<DocumentMut>()
+        .map_err(|err| format!("{} 不是有效 TOML：{err}", path.display()))?;
+    Ok(inspect_grok_spellcast(&doc, mcp))
+}
+
+fn grok_skill_present(root: &Path) -> bool {
+    root.join("SKILL.md").is_file()
+        && ["asides.md", "canvas.md", "works.md", "feedback.md"]
+            .iter()
+            .all(|name| root.join("references").join(name).is_file())
+}
+
+fn locate_grok(mut r: SetupReport, mcp: &str) -> SetupReport {
+    r.mcp_url = Some(mcp.to_string());
+    r
+}
+
+fn grok_status(client: &str, url: Option<&str>, paths: &SetupPaths) -> SetupReport {
+    let mcp = match url
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(validate_loopback_mcp_url)
+        .unwrap_or_else(|| Ok("http://127.0.0.1:47194/mcp".into()))
+    {
+        Ok(v) => v,
+        Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+    };
+    let config = grok_config_path(&paths.user_home);
+    let skill = grok_skill_root(&paths.user_home);
+    let mcp_state = match inspect_grok_config(&config, &mcp) {
+        Ok(state) => state,
+        Err(err) => {
+            return locate_grok(SetupReport::base(client, SetupKind::Failed, &err), &mcp);
+        }
+    };
+    match &mcp_state {
+        GrokMcp::Conflict(reason) => {
+            let mut r = SetupReport::base(client, SetupKind::ConflictEndpoint, reason);
+            r.conflicts.push(reason.clone());
+            r.not_done.push("未改 Grok 配置、未安装 Skill。".into());
+            return locate_grok(r, &mcp);
+        }
+        GrokMcp::Shape(reason) => {
+            let mut r = SetupReport::base(client, SetupKind::ConflictCustom, reason);
+            r.conflicts.push(reason.clone());
+            r.not_done.push("未改 Grok 配置、未安装 Skill。".into());
+            return locate_grok(r, &mcp);
+        }
+        GrokMcp::Absent | GrokMcp::Ready | GrokMcp::Incomplete => {}
+    }
+    let skill_ok = grok_skill_present(&skill);
+    if matches!(mcp_state, GrokMcp::Ready) && skill_ok {
+        let mut r = SetupReport::base(
+            client,
+            SetupKind::Verified,
+            "Grok Build 的 MCP 与 Skill 已按文件核验。",
+        );
+        r.done.push(format!("MCP：{}", config.display()));
+        r.done
+            .push(format!("Skill：{}", skill.join("SKILL.md").display()));
+        r.done.push("未写 hook trust。".into());
+        r.not_done.push("未改旁念开关。".into());
+        return locate_grok(r, &mcp);
+    }
+    let mut r = SetupReport::base(
+        client,
+        SetupKind::NotInstalled,
+        "尚未安装 Grok Build 接入（MCP + Skill）。",
+    );
+    if matches!(mcp_state, GrokMcp::Ready) {
+        r.done.push("MCP 已写入。".into());
+    } else {
+        r.not_done.push("MCP 未写入。".into());
+    }
+    if skill_ok {
+        r.done.push("Skill 已安装。".into());
+    } else {
+        r.not_done.push("Skill 未安装。".into());
+    }
+    locate_grok(r, &mcp)
+}
+
+fn grok_install_inner(client: &str, url: Option<&str>, paths: &SetupPaths) -> SetupReport {
+    let mut probe = grok_status(client, url, paths);
+    if matches!(
+        probe.kind,
+        SetupKind::Unsupported
+            | SetupKind::Failed
+            | SetupKind::ConflictEndpoint
+            | SetupKind::ConflictCustom
+            | SetupKind::Installing
+    ) {
+        probe.not_done.push("安装未开始。".into());
+        return probe;
+    }
+    if probe.kind == SetupKind::Verified && probe.installed {
+        probe.note = "已是当前 Grok Build 接入，未重复写入。".into();
+        probe.done.push("未调用 Codex CLI。".into());
+        probe.done.push("未写 hook trust。".into());
+        return probe;
+    }
+    let mcp = match validate_loopback_mcp_url(
+        probe
+            .mcp_url
+            .as_deref()
+            .unwrap_or("http://127.0.0.1:47194/mcp"),
+    ) {
+        Ok(v) => v,
+        Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+    };
+    let written = match configure::write_for_home(client, &paths.user_home, &mcp) {
+        Ok(cfg) => cfg,
+        Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+    };
+    let skill = match configure::install_skill_for_home(client, &paths.user_home) {
+        Ok(installed) => installed,
+        Err(err) => {
+            let mut r = SetupReport::base(client, SetupKind::Failed, &err);
+            r.partial = true;
+            r.mcp_url = Some(mcp);
+            r.done.push("MCP 已写入，Skill 未完成。".into());
+            r.backup = written.backup;
+            return r;
+        }
+    };
+    let mut r = grok_status(client, Some(&mcp), paths);
+    if r.backup.is_none() {
+        r.backup = written.backup.or(skill.backup);
+    }
+    r.done.insert(0, "未调用 Codex CLI。".into());
+    r.done.insert(0, "未写 hook trust。".into());
+    r
+}
+
 fn status_inner(
     client: &str,
     url: Option<&str>,
     paths: &SetupPaths,
     cli: Option<&dyn PluginCli>,
 ) -> SetupReport {
+    if client == "grok" {
+        return grok_status(client, url, paths);
+    }
     if client != "codex" {
         let mut r = SetupReport::base(
             client,
@@ -1966,6 +2186,75 @@ fn is_lock_busy(err: &std::io::Error) -> bool {
     ) || matches!(err.raw_os_error(), Some(32) | Some(33) | Some(167))
 }
 
+fn same_existing_path(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn inspect_hook_trust(value: &Value, user_home: &Path, market: &str, cache: &Path) -> Result<HookTrust, String> {
+    let entries = value.get("data").and_then(Value::as_array).ok_or("Codex 未返回有效的 Hook 列表。")?;
+    let entries: Vec<_> = entries.iter().filter(|entry| entry.get("cwd").and_then(Value::as_str)
+        .is_some_and(|cwd| same_existing_path(Path::new(cwd), user_home))).collect();
+    if entries.len() != 1 { return Err("Codex 未返回当前安装配置的唯一 Hook 列表。".into()); }
+    let entry = entries[0];
+    if !entry.get("errors").and_then(Value::as_array).is_some_and(Vec::is_empty) {
+        return Err("Codex 读取 Hook 配置时报告错误。".into());
+    }
+    let plugin = format!("spellcast@{market}");
+    let hooks: Vec<_> = entry.get("hooks").and_then(Value::as_array).ok_or("Codex Hook 列表缺失。")?
+        .iter().filter(|hook| hook.get("pluginId").and_then(Value::as_str) == Some(plugin.as_str())).collect();
+    if hooks.len() != 2 { return Err("Codex 尚未加载当前 Spellcast 的两项 Hook。".into()); }
+    let expected_path = cache.join("hooks/hooks.json");
+    let mut states = Vec::new();
+    for (event, key) in [("sessionStart", "session_start"), ("userPromptSubmit", "user_prompt_submit")] {
+        let expected_key = format!("{plugin}:hooks/hooks.json:{key}:0:0");
+        let hook = hooks.iter().find(|hook| hook.get("key").and_then(Value::as_str) == Some(expected_key.as_str()))
+            .ok_or("Codex 的 Hook 标识与当前插件不一致。")?;
+        if hook.get("eventName").and_then(Value::as_str) != Some(event)
+            || hook.get("source").and_then(Value::as_str) != Some("plugin")
+            || !hook.get("sourcePath").and_then(Value::as_str).is_some_and(|p| same_existing_path(Path::new(p), &expected_path)) {
+            return Err("Codex Hook 来源与当前已安装版本不一致。".into());
+        }
+        let hash = hook.get("currentHash").and_then(Value::as_str).unwrap_or("");
+        if !hash.strip_prefix("sha256:").is_some_and(|h| h.len() == 64 && h.bytes().all(|c| c.is_ascii_hexdigit())) {
+            return Err("Codex 未返回可核验的当前 Hook 标识。".into());
+        }
+        let enabled = hook.get("enabled").and_then(Value::as_bool).ok_or("Codex 未返回 Hook 启用状态。")?;
+        let state = match hook.get("trustStatus").and_then(Value::as_str) {
+            Some("trusted" | "managed") => HookTrust::Trusted,
+            Some("untrusted") => HookTrust::Untrusted,
+            Some("modified") => HookTrust::Modified,
+            _ => return Err("当前 Codex Hook 信任状态无法识别。".into()),
+        };
+        states.push(if enabled { state } else { HookTrust::Disabled });
+    }
+    for state in [HookTrust::Disabled, HookTrust::Modified, HookTrust::Untrusted] {
+        if states.contains(&state) { return Ok(state); }
+    }
+    Ok(HookTrust::Trusted)
+}
+
+fn apply_hook_trust(mut report: SetupReport, paths: &SetupPaths, market: &str, cache: &Path, cli: &dyn PluginCli) -> SetupReport {
+    let env = CliEnv { user_home: paths.user_home.clone(), codex_home: paths.codex_home.clone() };
+    let trust = match cli.hooks_list(&env).and_then(|v| inspect_hook_trust(&v, &paths.user_home, market, cache)) {
+        Ok(trust) => trust,
+        Err(reason) => { report.not_done.push(reason); HookTrust::Unknown }
+    };
+    report.hook_trust = Some(trust);
+    let (kind, note) = match trust {
+        HookTrust::Trusted => (SetupKind::Verified, "MCP、Hooks 和 Skill 已安装；Codex 确认当前两项 Hook 已启用并信任。"),
+        HookTrust::Untrusted => (SetupKind::InstalledPendingTrust, "已安装。请在 Codex /hooks 信任 Spellcast 的两项 Hook。"),
+        HookTrust::Modified => (SetupKind::InstalledPendingTrust, "已安装。Hook 内容发生变化，请在 Codex /hooks 重新检查并信任。"),
+        HookTrust::Disabled => (SetupKind::InstalledUnverified, "已安装，但 Codex 中的 Spellcast Hook 已停用。请在 /hooks 中启用。"),
+        HookTrust::Unknown => (SetupKind::InstalledUnverified, "已安装；暂时无法读取当前 Hook 信任状态。已信任时无需重复安装，可重新检查。"),
+    };
+    report.kind = kind;
+    report.note = note.into();
+    report
+}
+
 fn classify_installed_payload(
     client: &str,
     paths: &SetupPaths,
@@ -1975,12 +2264,10 @@ fn classify_installed_payload(
     let pending_files = || {
         let mut r = SetupReport::base(
             client,
-            SetupKind::InstalledPendingTrust,
-            "已安装并核验文件。请在 Codex /hooks 信任 Spellcast 的 SessionStart 与 UserPromptSubmit。",
+            SetupKind::InstalledUnverified,
+            "已安装并核验文件；尚未取得 Codex 的 Hook 信任结果。",
         );
-        r.done.push("未写 hook trust。".into());
-        r.not_done
-            .push("宿主 hook hash 无法在本模块可靠计算，状态为待信任/待核验。".into());
+        r.hook_trust = Some(HookTrust::Unknown);
         r
     };
     let Some(cli) = cli else {
@@ -2008,7 +2295,7 @@ fn classify_installed_payload(
             let mut r = pending_files();
             r.done
                 .push("CLI list 确认 installed/enabled，且 version 绑定当前 cache。".into());
-            r
+            apply_hook_trust(r, paths, &payload.market, &payload.cache, cli)
         }
         Ok(PluginListState::Missing) => {
             let mut r = SetupReport::base(client, SetupKind::NotInstalled, "CLI list 确认插件未安装。");
@@ -2056,6 +2343,15 @@ pub fn install(
     paths: &SetupPaths,
     cli: &dyn PluginCli,
 ) -> SetupReport {
+    if client == "grok" {
+        let _lock = match paths.lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return SetupReport::base(client, SetupKind::Installing, "已有安装正在进行。");
+            }
+        };
+        return grok_install_inner(client, url, paths);
+    }
     let lock = match paths.lock.try_lock() {
         Ok(g) => g,
         Err(_) => {
@@ -2097,18 +2393,18 @@ fn skip_current_report(
     paths: &SetupPaths,
     mcp: &str,
     payload: &MatchingPayload,
+    cli: &dyn PluginCli,
 ) -> SetupReport {
     let mut r = SetupReport::base(
         client,
-        SetupKind::InstalledPendingTrust,
+        SetupKind::InstalledUnverified,
         "已是当前完整接入，未重复写入。",
     );
     r.done.push("未写 hook trust。".into());
     r.done
         .push("源与 cache 已匹配且 CLI installed/enabled，跳过 plugin add、备份与写文件。".into());
     r.not_done.push("未改旁念开关。".into());
-    r.not_done
-        .push("宿主 hook hash 无法在本模块可靠计算，状态为待信任/待核验。".into());
+    let r = apply_hook_trust(r, paths, &payload.market, &payload.cache, cli);
     locate_report(r, paths, mcp, Some(&payload.cache))
 }
 
@@ -2177,7 +2473,7 @@ fn install_inner(
                     Some(&payload.version),
                 ) {
                     Ok(PluginListState::Active { .. }) => {
-                        return skip_current_report(client, paths, &mcp, &payload);
+                        return skip_current_report(client, paths, &mcp, &payload, cli);
                     }
                     Ok(PluginListState::Missing)
                     | Ok(PluginListState::Disabled { .. })
@@ -2512,11 +2808,10 @@ fn install_inner(
                 Err(err) => done.push(format!("legacy MCP 处理跳过：{err}")),
             }
             not_done.push("CLI 成功不等于 hook 已信任或运行时已生效。".into());
-            not_done.push("宿主 hook hash 无法在本模块可靠计算，状态为待信任/待核验。".into());
             let mut r = SetupReport::base(
                 client,
-                SetupKind::InstalledPendingTrust,
-                "已安装并核验文件。请在 Codex /hooks 信任 Spellcast 的 SessionStart 与 UserPromptSubmit。",
+                SetupKind::InstalledUnverified,
+                "已安装并核验 MCP、Hooks 和 Skill。",
             );
             r.done = done;
             r.not_done = not_done;
@@ -2526,7 +2821,7 @@ fn install_inner(
             r.backup = Some(backup.display().to_string());
             r.mcp_url = Some(mcp);
             r.installed = true;
-            r
+            apply_hook_trust(r, paths, &market.0, &cache, cli)
         }
         Ok(out) => fail(
             SetupReport::base(
@@ -2621,6 +2916,52 @@ mod tests {
         }
     }
 
+    fn hook_fixture(user: &Path, cache: &Path) -> Value {
+        let hooks: Vec<_> = [("sessionStart", "session_start"), ("userPromptSubmit", "user_prompt_submit")]
+            .into_iter().map(|(event, key)| json!({
+                "key": format!("spellcast@personal:hooks/hooks.json:{key}:0:0"),
+                "eventName": event, "pluginId": "spellcast@personal", "source": "plugin",
+                "sourcePath": cache.join("hooks/hooks.json"), "enabled": true,
+                "currentHash": format!("sha256:{}", "a".repeat(64)), "trustStatus": "trusted"
+            })).collect();
+        json!({ "data": [{ "cwd": user, "errors": [], "hooks": hooks }] })
+    }
+
+    #[test]
+    fn hook_trust_uses_both_current_handlers_and_preserves_unknown() {
+        let user = temp_dir("hook-trust"); let cache = user.join("cache");
+        write_bundle(&cache, b"HELPER");
+        let value = hook_fixture(&user, &cache);
+        assert_eq!(inspect_hook_trust(&value, &user, "personal", &cache).unwrap(), HookTrust::Trusted);
+        for (state, expected) in [("untrusted", HookTrust::Untrusted), ("modified", HookTrust::Modified), ("managed", HookTrust::Trusted)] {
+            let mut changed = value.clone(); changed["data"][0]["hooks"][1]["trustStatus"] = json!(state);
+            assert_eq!(inspect_hook_trust(&changed, &user, "personal", &cache).unwrap(), expected);
+        }
+        let mut disabled = value.clone(); disabled["data"][0]["hooks"][0]["enabled"] = json!(false);
+        assert_eq!(inspect_hook_trust(&disabled, &user, "personal", &cache).unwrap(), HookTrust::Disabled);
+        let other = user.join("old-cache"); write_bundle(&other, b"OLD");
+        let mut stale = value.clone(); stale["data"][0]["hooks"][0]["sourcePath"] = json!(other.join("hooks/hooks.json"));
+        assert!(inspect_hook_trust(&stale, &user, "personal", &cache).is_err());
+        let mut missing = value.clone(); missing["data"][0]["hooks"].as_array_mut().unwrap().pop();
+        assert!(inspect_hook_trust(&missing, &user, "personal", &cache).is_err());
+        let mut unknown = value.clone(); unknown["data"][0]["hooks"][0]["trustStatus"] = json!("future-status");
+        assert!(inspect_hook_trust(&unknown, &user, "personal", &cache).is_err());
+        assert!(inspect_hook_trust(&value, &user, "other-market", &cache).is_err());
+        assert!(inspect_hook_trust(&json!({}), &user, "personal", &cache).is_err());
+    }
+
+    #[test]
+    fn hook_query_failure_does_not_mean_missing_install_or_pending_trust() {
+        let user = temp_dir("hook-query"); let cache = user.join("cache");
+        write_bundle(&cache, b"HELPER");
+        let p = paths(&user, &user.join(".codex"), &cache);
+        let report = apply_hook_trust(SetupReport::base("codex", SetupKind::InstalledUnverified, "installed"), &p, "personal", &cache, &ok_cli(&cache));
+        assert!(report.installed);
+        assert_eq!(report.kind, SetupKind::InstalledUnverified);
+        assert_eq!(report.hook_trust, Some(HookTrust::Unknown));
+        assert!(!report.note.contains("请在 Codex /hooks 信任"));
+    }
+
     fn materialize_cache(bundle: &Path, env: &CliEnv, mcp: &str) -> (PathBuf, String) {
         let status = status_url_for_mcp(mcp).unwrap();
         let root = cache_root(&env.codex_home, "personal");
@@ -2696,14 +3037,121 @@ mod tests {
         let user = temp_dir("user");
         let bundle = user.join("bundle");
         write_bundle(&bundle, b"HELPER");
-        let r = install(
-            "cursor",
-            None,
-            &paths(&user, &user.join(".codex"), &bundle),
-            &ok_cli(&bundle),
+        for client in ["windsurf", "cursor", "claude-code", "generic"] {
+            let r = install(
+                client,
+                None,
+                &paths(&user, &user.join(".codex"), &bundle),
+                &ok_cli(&bundle),
+            );
+            assert_eq!(r.kind, SetupKind::Unsupported, "{client}");
+            assert!(!r.installed);
+            assert!(!r.complete_supported);
+        }
+    }
+
+    struct PanicCli;
+
+    impl PluginCli for PanicCli {
+        fn plugin_add(&self, _selector: &str, _env: &CliEnv) -> Result<CliOutcome, String> {
+            panic!("Grok Build 接入不得调用 Codex CLI");
+        }
+        fn plugin_list(&self, _marketplace: &str, _env: &CliEnv) -> Result<CliOutcome, String> {
+            panic!("Grok Build 接入不得调用 Codex CLI");
+        }
+    }
+
+    #[test]
+    fn grok_status_and_install_write_mcp_and_skill_under_isolated_home() {
+        let user = temp_dir("grok-user");
+        let codex = user.join(".codex");
+        let bundle = user.join("bundle");
+        write_bundle(&bundle, b"HELPER");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(&codex.join("config.toml"), "model = \"keep-codex\"\n").unwrap();
+        let grok_dir = user.join(".grok");
+        fs::create_dir_all(&grok_dir).unwrap();
+        fs::write(
+            grok_dir.join("config.toml"),
+            "[models]\ndefault = \"grok-4\"\n[plugins.demo]\nenabled = true\n[marketplace]\norigin = \"keep\"\n[ui]\ntheme = \"dark\"\n[mcp_servers.other]\nurl = \"http://other\"\n[mcp_servers.spellcast]\ncommand = \"npx\"\nargs = [\"-y\", \"old\"]\ntype = \"stdio\"\nenabled = false\n",
+        )
+        .unwrap();
+        let mut p = paths(&user, &codex, &bundle);
+        p.cli = None;
+        p.skip_path_lookup = true;
+
+        let before = status("grok", None, &p);
+        assert_eq!(before.kind, SetupKind::NotInstalled);
+        assert!(before.complete_supported);
+        assert!(!before.installed);
+        assert_ne!(before.kind, SetupKind::MissingCli);
+
+        let installed = install("grok", Some("http://127.0.0.1:47194/mcp"), &p, &PanicCli);
+        assert!(installed.complete_supported, "{:?}", installed);
+        assert!(installed.installed, "{:?}", installed);
+        assert_eq!(installed.kind, SetupKind::Verified, "{:?}", installed);
+        assert_eq!(
+            installed.mcp_url.as_deref(),
+            Some("http://127.0.0.1:47194/mcp")
         );
-        assert_eq!(r.kind, SetupKind::Unsupported);
+        assert!(installed.source_path.is_none());
+        assert!(installed.cache_path.is_none());
+        assert!(installed.marketplace_path.is_none());
+        assert!(installed.hook_trust.is_none());
+
+        let text = fs::read_to_string(grok_dir.join("config.toml")).unwrap();
+        assert!(text.contains("[models]"));
+        assert!(text.contains("[plugins.demo]"));
+        assert!(text.contains("[marketplace]"));
+        assert!(text.contains("[ui]"));
+        assert!(text.contains("[mcp_servers.other]"));
+        assert!(text.contains("[mcp_servers.spellcast]"));
+        assert!(text.contains("url = \"http://127.0.0.1:47194/mcp\""));
+        assert!(text.contains("enabled = true"));
+        assert!(!text.contains("command"));
+        assert!(!text.contains("args"));
+        assert!(!text.contains("type = "));
+        assert_eq!(
+            fs::read_to_string(codex.join("config.toml")).unwrap(),
+            "model = \"keep-codex\"\n"
+        );
+        assert!(!codex.join("skills").join("spellcast").join("SKILL.md").exists());
+        let skill = grok_dir.join("skills").join("spellcast").join("SKILL.md");
+        assert!(skill.is_file(), "{}", skill.display());
+        assert_eq!(fs::read_to_string(&skill).unwrap(), configure::SPELLCAST_SKILL);
+        assert!(grok_skill_present(&grok_dir.join("skills").join("spellcast")));
+
+        let again = install("grok", Some("http://127.0.0.1:47194/mcp"), &p, &PanicCli);
+        assert_eq!(again.kind, SetupKind::Verified);
+        assert!(again.note.contains("未重复写入"));
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn grok_conflict_endpoint_does_not_overwrite() {
+        let user = temp_dir("grok-conflict");
+        let bundle = user.join("bundle");
+        write_bundle(&bundle, b"HELPER");
+        let grok_dir = user.join(".grok");
+        fs::create_dir_all(&grok_dir).unwrap();
+        fs::write(
+            grok_dir.join("config.toml"),
+            "[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:9/mcp\"\n",
+        )
+        .unwrap();
+        let mut p = paths(&user, &user.join(".codex"), &bundle);
+        p.cli = None;
+        p.skip_path_lookup = true;
+        let r = install("grok", Some("http://127.0.0.1:47194/mcp"), &p, &PanicCli);
+        assert_eq!(r.kind, SetupKind::ConflictEndpoint, "{:?}", r);
         assert!(!r.installed);
+        assert!(r.complete_supported);
+        assert_eq!(
+            fs::read_to_string(grok_dir.join("config.toml")).unwrap(),
+            "[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:9/mcp\"\n"
+        );
+        assert!(!grok_dir.join("skills").join("spellcast").join("SKILL.md").exists());
+        let _ = fs::remove_dir_all(user);
     }
 
     #[test]
@@ -2836,10 +3284,10 @@ mod tests {
         };
         let first = install("codex", Some("http://127.0.0.1:47194/mcp"), &p, &cli);
         assert!(first.installed, "{:?}", first);
-        assert_eq!(first.kind, SetupKind::InstalledPendingTrust);
+        assert_eq!(first.kind, SetupKind::InstalledUnverified);
         let second = install("codex", Some("http://127.0.0.1:47194/mcp"), &p, &cli);
         assert!(second.installed, "{:?}", second);
-        assert_eq!(second.kind, SetupKind::InstalledPendingTrust);
+        assert_eq!(second.kind, SetupKind::InstalledUnverified);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(second.done.iter().any(|s| s.contains("跳过 plugin add")));
     }
@@ -2874,7 +3322,7 @@ mod tests {
         let bundle = user.join("bundle");
         write_bundle(&bundle, b"HELPER");
         let r = install("codex", None, &paths(&user, &user.join(".codex"), &bundle), &ok_cli(&bundle));
-        assert_eq!(r.kind, SetupKind::InstalledPendingTrust);
+        assert_eq!(r.kind, SetupKind::InstalledUnverified);
         fs::create_dir_all(user.join(".codex")).unwrap();
         fs::write(
             user.join(".codex/config.toml"),
@@ -3392,7 +3840,7 @@ mod tests {
         let later = SystemTime::now() + Duration::from_secs(3600);
         let _ = fs::File::open(&newest).and_then(|f| f.set_modified(later));
         let s = status("codex", None, &p);
-        assert_eq!(s.kind, SetupKind::InstalledPendingTrust, "{:?}", s);
+        assert_eq!(s.kind, SetupKind::InstalledUnverified, "{:?}", s);
         let path = s.cache_path.as_deref().unwrap_or("").replace('\\', "/");
         assert!(path.contains("0.3.0+sc."), "{:?}", s.cache_path);
         assert!(!path.contains("9.9.9-newer"), "{:?}", s.cache_path);
@@ -3420,7 +3868,7 @@ mod tests {
         let p = paths(&user, &user.join(".codex"), &bundle);
         assert!(install("codex", None, &p, &ok_cli(&bundle)).installed);
         let s = status("codex", None, &p);
-        assert_eq!(s.kind, SetupKind::InstalledPendingTrust, "{:?}", s);
+        assert_eq!(s.kind, SetupKind::InstalledUnverified, "{:?}", s);
         assert_ne!(s.kind, SetupKind::NotInstalled);
         assert_ne!(s.kind, SetupKind::Verified);
     }
@@ -3572,7 +4020,7 @@ mod tests {
                 },
             },
         );
-        assert_eq!(skip.kind, SetupKind::InstalledPendingTrust, "{:?}", skip);
+        assert_eq!(skip.kind, SetupKind::InstalledUnverified, "{:?}", skip);
         assert_eq!(adds.load(Ordering::SeqCst), 0);
     }
 
@@ -3632,7 +4080,7 @@ mod tests {
         assert!(r1.installed, "{:?}", r1);
         let v1 = plugin_version(&source_path(&user)).unwrap();
         let skip = install("codex", None, &p, &ok_cli(&bundle));
-        assert_eq!(skip.kind, SetupKind::InstalledPendingTrust);
+        assert_eq!(skip.kind, SetupKind::InstalledUnverified);
         assert_eq!(plugin_version(&source_path(&user)).unwrap(), v1);
 
         let reused_before = reused.load(Ordering::SeqCst);

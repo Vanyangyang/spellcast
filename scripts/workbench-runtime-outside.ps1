@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $workspace = 'G:\VibeProj\spellcast'
 $evidence = Join-Path $workspace 'artifacts\workbench-20260914'
 $request = [IO.File]::ReadAllText((Join-Path $evidence 'runtime-request.json')) | ConvertFrom-Json
-if ($request.run -notmatch '^[a-zA-Z0-9-]+$' -or $request.mode -notin @('candidate', 'deploy', 'direct', 'verify')) { throw 'Invalid workbench runtime request.' }
+if ($request.run -notmatch '^[a-zA-Z0-9-]+$' -or $request.mode -notin @('candidate', 'deploy', 'direct', 'runtime', 'verify')) { throw 'Invalid workbench runtime request.' }
 $output = Join-Path $evidence $request.run
 [void](New-Item -ItemType Directory -Force -Path $output)
 $candidate = Join-Path $workspace 'src-tauri\target-teardown-20260913\debug\spellcast.exe'
@@ -82,6 +82,13 @@ try {
       if (Test-Path -LiteralPath $source) { $copy = Join-Path $profileBackup $relative; [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $copy)); Copy-Item -LiteralPath $source -Destination $copy -Recurse }
     }
     $result.profileBackup = $profileBackup
+    if ($request.mode -eq 'runtime') {
+      $drafts = 'C:\Users\Administrator\AppData\Local\com.spellcast.board\EBWebView\Default\Local Storage\leveldb'
+      if (Test-Path -LiteralPath $drafts) {
+        $result.localDraftBackup = Join-Path $output 'local-drafts'
+        Copy-Item -LiteralPath $drafts -Destination $result.localDraftBackup -Recurse
+      }
+    }
     $fileBackup = Join-Path $output 'runtime-original'; [void](New-Item -ItemType Directory -Path $fileBackup)
     $result.fileBackup = $fileBackup
     $destination = Split-Path -Parent $production

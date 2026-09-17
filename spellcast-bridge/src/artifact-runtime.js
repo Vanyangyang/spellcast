@@ -1,7 +1,8 @@
 // Spellcast artifact protocol v1. This script runs only inside the sandboxed work.
 (() => {
   if (Object.prototype.hasOwnProperty.call(window, 'spellcast')) return;
-  let port, state = {}, inputs = { revision: 0, ports: {} }, resolveReady, inputReady = false;
+  let port, state = {}, inputs = { revision: 0, ports: {} }, resolveReady, inputReady = false, readOnly = false, stateGeneration = 0;
+  let snapshotHandler = null;
   const standalone = parent === window;
   const storageKey = 'spellcast.export.state.' + (window.__SPELLCAST_ARTIFACT_ID__ ?? location.pathname);
   const listeners = new Set();
@@ -17,6 +18,20 @@
   const portName = name => /^[A-Za-z0-9_:.-]{1,160}$/.test(name) && !['__proto__', 'constructor', 'prototype'].includes(name);
   const scalar = value => value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) ||
     (typeof value === 'string' && new TextEncoder().encode(value).length <= 16000);
+  const changeState = next => { state = next; stateGeneration++; };
+  const snapshotError = (request_id, error) => send('error', { request_id, message: String(error?.message ?? error).slice(0, 2000) });
+  const captureSnapshot = request_id => {
+    const capturedGeneration = stateGeneration;
+    const capturedState = copy(state);
+    if (!snapshotHandler) { send('snapshot', { request_id, state: capturedState, preview: null }); return; }
+    Promise.resolve().then(() => snapshotHandler()).then(preview => {
+      if (stateGeneration !== capturedGeneration) {
+        snapshotError(request_id, 'State changed before the snapshot completed.');
+        return;
+      }
+      send('snapshot', { request_id, state: capturedState, preview: preview == null ? null : copy(preview) });
+    }).catch(error => snapshotError(request_id, error));
+  };
   const api = {
     ready,
     get state() { return copy(state); },
@@ -24,9 +39,10 @@
     setState(patch) {
       if (!port && !standalone) throw new Error('Await spellcast.ready before saving state.');
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('State patch must be a JSON object.');
+      if (readOnly) return;
       const next = { ...state, ...copy(patch) };
       if (new TextEncoder().encode(JSON.stringify(next)).length > 64000) throw new Error('Keep state under 64 KB; use asset files for large data.');
-      state = next;
+      changeState(next);
       send('state', state);
       if (standalone) { try { localStorage.setItem(storageKey, JSON.stringify(state)); } catch {} }
     },
@@ -38,8 +54,15 @@
       if (inputReady) fn(api.inputs);
       return () => inputListeners.delete(fn);
     },
+    /** Register one capture callback. Its result must be { src, alt }; the host validates preview bytes and type. */
+    onSnapshot(fn) {
+      if (typeof fn !== 'function') throw new Error('Snapshot handler must be a function.');
+      snapshotHandler = fn;
+      return () => { if (snapshotHandler === fn) snapshotHandler = null; };
+    },
     publishOutputs(values, expectedInputRevision) {
       if (!port && !standalone) throw new Error('Await spellcast.ready before publishing outputs.');
+      if (readOnly) return;
       if (!Number.isSafeInteger(expectedInputRevision) || expectedInputRevision < 0) throw new Error('Expected input revision is required.');
       if (expectedInputRevision !== inputs.revision) throw new Error('Inputs changed before outputs were published.');
       if (!plain(values)) throw new Error('Outputs must be a plain object.');
@@ -59,15 +82,18 @@
   addEventListener('message', event => {
     if (event.source !== parent || event.data?.type !== 'spellcast:init' || !event.ports[0] || port) return;
     port = event.ports[0];
-    state = event.data.state && typeof event.data.state === 'object' ? copy(event.data.state) : {};
+    readOnly = event.data.readOnly === true;
+    changeState(event.data.state && typeof event.data.state === 'object' ? copy(event.data.state) : {});
     inputs = event.data.inputs && typeof event.data.inputs === 'object' ? copy(event.data.inputs) : { revision: 0, ports: {} };
     port.onmessage = event => {
       if (event.data?.type === 'restore') {
-        state = copy(event.data.value ?? {});
+        changeState(copy(event.data.value ?? {}));
         listeners.forEach(fn => fn(api.state));
       } else if (event.data?.type === 'inputs') {
         inputs = copy(event.data.value ?? { revision: 0, ports: {} });
         inputListeners.forEach(fn => fn(api.inputs));
+      } else if (event.data?.type === 'snapshot' && typeof event.data.request_id === 'string' && event.data.request_id.length <= 160) {
+        captureSnapshot(event.data.request_id);
       }
     };
     port.start();

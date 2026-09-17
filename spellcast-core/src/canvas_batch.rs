@@ -4,13 +4,15 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::inbox::now_ms;
 use crate::reply::validate_id;
 use crate::{
-    CanvasAppearance, CanvasBinding, CanvasComposition, CanvasContent, CanvasLayout, CanvasObject,
-    CanvasPlacement, NodePatch, ReplyBlock, ReplyPatchRequest, Session, SpellcastError,
+    capture_anchor_snapshot, validate_artifact_references, validate_image_references,
+    CanvasAnnotation, CanvasAppearance, CanvasArrangement, CanvasBinding, CanvasComposition,
+    CanvasContent, CanvasLayout, CanvasObject, CanvasPlacement, NodePatch, ReplyBlock,
+    ReplyPatchRequest, Session, SpellcastError,
 };
 
 pub const MAX_BATCH_OPERATIONS: usize = 64;
@@ -25,6 +27,7 @@ pub enum CanvasTargetKind {
     Content,
     Presentation,
     Composition,
+    Annotation,
 }
 
 /// A version the caller relied on without writing it.
@@ -83,6 +86,8 @@ pub struct CanvasPlacementFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_scale: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub z: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<CanvasAppearance>,
@@ -96,6 +101,7 @@ impl CanvasPlacementFields {
             && self.y.is_none()
             && self.width.is_none()
             && self.height.is_none()
+            && self.content_scale.is_none()
             && self.z.is_none()
             && self.appearance.is_none()
             && self.removed.is_none()
@@ -113,6 +119,9 @@ impl CanvasPlacementFields {
         }
         if let Some(height) = self.height {
             item.height = height;
+        }
+        if let Some(content_scale) = self.content_scale {
+            item.content_scale = content_scale;
         }
         if let Some(z) = self.z {
             item.z = z;
@@ -177,7 +186,30 @@ pub enum CanvasOperation {
         /// Omission preserves the existing idea description.
         #[serde(default)]
         description: Option<String>,
+        /// Omission preserves an existing arrangement; new compositions default to `free`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arrangement: Option<CanvasArrangement>,
         members: Vec<String>,
+    },
+    /// Reposition all direct object members using the composition's saved arrangement intent.
+    Arrange {
+        id: String,
+        expected_revision: u64,
+        /// Exact current presentation revisions for every direct object member.
+        expected_presentations: BTreeMap<String, u64>,
+    },
+    /// `expected_revision` 0 creates a durable annotation.
+    Annotate {
+        id: String,
+        expected_revision: u64,
+        anchor: crate::inbox::CanvasAnchor,
+        text: String,
+    },
+    /// Soft-remove or restore an annotation without losing its captured snapshot.
+    RemoveAnnotation {
+        id: String,
+        expected_revision: u64,
+        removed: bool,
     },
     Ungroup {
         id: String,
@@ -201,6 +233,13 @@ impl CanvasOperation {
             Self::Place { id, .. } => vec![(CanvasTargetKind::Presentation, id)],
             Self::Compose { id, .. } | Self::Ungroup { id, .. } => {
                 vec![(CanvasTargetKind::Composition, id)]
+            }
+            // Arrange writes member presentations discovered from live composition state. It
+            // deliberately has no static target here so create -> compose -> arrange can use
+            // the just-created presentation revisions in one atomic batch.
+            Self::Arrange { .. } => vec![],
+            Self::Annotate { id, .. } | Self::RemoveAnnotation { id, .. } => {
+                vec![(CanvasTargetKind::Annotation, id)]
             }
         }
     }
@@ -487,6 +526,29 @@ fn check_ownership(
                             .is_none_or(&owned)
                     })
             }
+            CanvasOperation::Arrange { id, .. } => canvas
+                .composition(id)
+                .is_none_or(|composition| {
+                    owned(&composition.source_id)
+                        && composition.members.iter().all(|member| {
+                            canvas
+                                .object(member)
+                                .map(|object| &object.source_id)
+                                .or_else(|| canvas.composition(member).map(|group| &group.source_id))
+                                .is_none_or(&owned)
+                        })
+                }),
+            CanvasOperation::Annotate { id, anchor, .. } => {
+                let existing = canvas.annotation(id);
+                existing.is_none_or(|annotation| owned(&annotation.source_id))
+                    && (existing.is_some_and(|annotation| annotation.anchor == *anchor)
+                        || canvas
+                            .object(&anchor.object_id)
+                            .is_none_or(|object| owned(&object.source_id)))
+            }
+            CanvasOperation::RemoveAnnotation { id, .. } => canvas
+                .annotation(id)
+                .is_none_or(|annotation| owned(&annotation.source_id)),
             CanvasOperation::Ungroup { id, .. } => {
                 canvas
                     .composition(id)
@@ -498,7 +560,7 @@ fn check_ownership(
         };
         check(
             ok,
-            "Agent 只能修改自己来源的对象和组合；其他来源的内容只能读取。",
+            "Agent 只能修改自己来源的对象、组合和注释；其他来源的内容只能读取。",
         )?;
     }
     Ok(())
@@ -702,14 +764,27 @@ fn create(
     if canvas.composition(id).is_some() {
         return Err((Content, Fail::invalid("这个 ID 已被一个组合使用。")));
     }
+    if canvas.annotation(id).is_some() {
+        return Err((Content, Fail::invalid("这个 ID 已被一条注释使用。")));
+    }
     content.validate().map_err(|e| (Content, e.into()))?;
     if let Some(origin) = origin {
         let path = origin.cwd.replace('\\', "/");
-        let absolute = path.starts_with('/') || (path.len() >= 3 && path.as_bytes()[0].is_ascii_alphabetic() && path.as_bytes()[1..3] == *b":/");
-        if !absolute || origin.cwd.len() > 4096 || origin.cwd.chars().any(char::is_control) || origin.label.chars().count() > 4000 {
+        let absolute = path.starts_with('/')
+            || (path.len() >= 3
+                && path.as_bytes()[0].is_ascii_alphabetic()
+                && path.as_bytes()[1..3] == *b":/");
+        if !absolute
+            || origin.cwd.len() > 4096
+            || origin.cwd.chars().any(char::is_control)
+            || origin.label.chars().count() > 4000
+        {
             return Err((Content, Fail::invalid("工作区来源需要有效的绝对路径。")));
         }
-        for id in [origin.thread_id.as_deref(), origin.source_id.as_deref()].into_iter().flatten() {
+        for id in [origin.thread_id.as_deref(), origin.source_id.as_deref()]
+            .into_iter()
+            .flatten()
+        {
             validate_id(id).map_err(|error| (Content, error.into()))?;
         }
     }
@@ -726,6 +801,7 @@ fn create(
         y: placement.y.unwrap_or(48.0),
         width: placement.width.unwrap_or(width),
         height: placement.height.unwrap_or(height),
+        content_scale: placement.content_scale.unwrap_or(1.0),
         user_modified: mode.mark_user,
     };
     item.validate().map_err(|e| (Presentation, e.into()))?;
@@ -1119,6 +1195,7 @@ fn compose(
     expected: u64,
     title: &str,
     description: Option<&str>,
+    arrangement: Option<CanvasArrangement>,
     members: &[String],
 ) -> Result<u64, Fail> {
     validate_new_id(id)?;
@@ -1126,8 +1203,8 @@ fn compose(
     let existing = canvas.composition(id).cloned();
     match (&existing, expected) {
         (None, 0) => {
-            if canvas.object(id).is_some() {
-                return Err(Fail::invalid("这个 ID 已被一个对象使用。"));
+            if canvas.object(id).is_some() || canvas.annotation(id).is_some() {
+                return Err(Fail::invalid("这个 ID 已被一个对象或注释使用。"));
             }
         }
         (None, _) => return Err(Fail::conflict(None, "组合不存在。")),
@@ -1191,13 +1268,21 @@ fn compose(
     let compositions = &mut next.board.canvas.compositions;
     if let Some(current) = compositions.iter_mut().find(|c| c.id == id) {
         let description = description.unwrap_or(&current.description).to_string();
-        if current.title == title && current.description == description && current.members == members {
+        let arrangement = arrangement.unwrap_or(current.arrangement);
+        if current.title == title
+            && current.description == description
+            && current.arrangement == arrangement
+            && current.members == members
+        {
             return Ok(current.revision);
         }
         current.title = title.to_string();
         current.description = description;
+        current.arrangement = arrangement;
         current.members = members.to_vec();
-        if mode.mark_user { current.user_modified = true; }
+        if mode.mark_user {
+            current.user_modified = true;
+        }
         current.revision += 1;
         Ok(current.revision)
     } else {
@@ -1206,12 +1291,320 @@ fn compose(
             revision: 1,
             title: title.to_string(),
             description: description.unwrap_or_default().to_string(),
+            arrangement: arrangement.unwrap_or_default(),
             members: members.to_vec(),
             source_id: mode.owner.map(String::from),
             user_modified: mode.mark_user,
         });
         Ok(1)
     }
+}
+
+fn composition_revision_after_compose(
+    canvas: &CanvasLayout,
+    id: &str,
+    title: &str,
+    description: Option<&str>,
+    arrangement: Option<CanvasArrangement>,
+    members: &[String],
+) -> u64 {
+    let Some(current) = canvas.composition(id) else {
+        return 1;
+    };
+    let description = description.unwrap_or(&current.description);
+    let arrangement = arrangement.unwrap_or(current.arrangement);
+    if current.title == title
+        && current.description == description
+        && current.arrangement == arrangement
+        && current.members == members
+    {
+        current.revision
+    } else {
+        current.revision + 1
+    }
+}
+
+struct ArrangementPlacement {
+    id: String,
+    expected_revision: u64,
+    fields: CanvasPlacementFields,
+}
+
+/// Build a placement-only plan from the saved composition intent. This does not mutate the
+/// composition or any member; callers use `place` for the actual guarded writes.
+fn arrangement_plan(
+    next: &Session,
+    mode: &Mode,
+    id: &str,
+    expected: u64,
+    expected_presentations: &BTreeMap<String, u64>,
+) -> Result<(u64, Vec<ArrangementPlacement>), Fail> {
+    let canvas = &next.board.canvas;
+    let composition = canvas
+        .composition(id)
+        .cloned()
+        .ok_or_else(|| Fail::conflict(None, "组合不存在。"))?;
+    expect_revision(
+        composition.revision,
+        expected,
+        "组合已经更新，请重新读取后再编排。",
+    )?;
+    if mode.agent && (composition.source_id.is_none() || composition.user_modified) {
+        return Err(Fail::protected(
+            composition.revision,
+            "用户自己的组合需要先确认提案再编排。",
+        ));
+    }
+    if composition.arrangement == CanvasArrangement::Free {
+        return Err(Fail::invalid(
+            "组合的 arrangement 为 free；请先保存一个明确的编排意图。",
+        ));
+    }
+
+    let mut items = Vec::with_capacity(composition.members.len());
+    for member in &composition.members {
+        if canvas.composition(member).is_some() {
+            return Err(Fail::invalid(
+                "首版编排只支持直接对象成员；嵌套组合不能自动展平。",
+            ));
+        }
+        let object = canvas
+            .object(member)
+            .ok_or_else(|| Fail::invalid(format!("成员 {member} 不存在。")))?;
+        let item = canvas
+            .placement(&object.id)
+            .cloned()
+            .ok_or_else(|| Fail::conflict(None, "画布呈现不存在。"))?;
+        item.validate()?;
+        if item.removed {
+            return Err(Fail::invalid(
+                "隐藏的成员不能参与编排；不会自动恢复隐藏内容。",
+            ));
+        }
+        items.push(item);
+    }
+
+    if expected_presentations.len() != items.len()
+        || items
+            .iter()
+            .any(|item| !expected_presentations.contains_key(&item.item_id))
+    {
+        return Err(Fail::invalid(
+            "编排必须且只能声明每个直接对象成员的当前呈现版本。",
+        ));
+    }
+
+    let left = items
+        .iter()
+        .map(|item| item.x)
+        .fold(f64::INFINITY, f64::min);
+    let top = items
+        .iter()
+        .map(|item| item.y)
+        .fold(f64::INFINITY, f64::min);
+    let max_width = items.iter().map(|item| item.width).fold(0.0, f64::max);
+    let mut placements = Vec::with_capacity(items.len());
+
+    match composition.arrangement {
+        CanvasArrangement::Free => unreachable!("free is rejected above"),
+        CanvasArrangement::SideBySide => {
+            let mut x = left;
+            for item in items {
+                placements.push(ArrangementPlacement {
+                    expected_revision: expected_presentations[&item.item_id],
+                    id: item.item_id.clone(),
+                    fields: CanvasPlacementFields {
+                        x: Some(x),
+                        y: Some(top),
+                        ..Default::default()
+                    },
+                });
+                x += item.width + 32.0;
+            }
+        }
+        CanvasArrangement::FigureCaption => {
+            let mut y = top;
+            for item in items {
+                placements.push(ArrangementPlacement {
+                    expected_revision: expected_presentations[&item.item_id],
+                    id: item.item_id.clone(),
+                    fields: CanvasPlacementFields {
+                        x: Some(left + (max_width - item.width) / 2.0),
+                        y: Some(y),
+                        ..Default::default()
+                    },
+                });
+                y += item.height + 16.0;
+            }
+        }
+        CanvasArrangement::Sequence => {
+            let mut y = top;
+            for item in items {
+                placements.push(ArrangementPlacement {
+                    expected_revision: expected_presentations[&item.item_id],
+                    id: item.item_id.clone(),
+                    fields: CanvasPlacementFields {
+                        x: Some(left),
+                        y: Some(y),
+                        ..Default::default()
+                    },
+                });
+                y += item.height + 48.0;
+            }
+        }
+    }
+
+    Ok((composition.revision, placements))
+}
+
+fn add_arrangement_error_targets(
+    targets: &mut Targets,
+    next: &Session,
+    id: &str,
+    expected_presentations: &BTreeMap<String, u64>,
+    fail: &Fail,
+) {
+    let Some(composition) = next.board.canvas.composition(id) else {
+        return;
+    };
+    for member in &composition.members {
+        if next.board.canvas.object(member).is_some() {
+            targets.push(status(
+                CanvasTargetKind::Presentation,
+                member,
+                expected_presentations.get(member).copied(),
+                Err(fail.clone()),
+            ));
+        }
+    }
+}
+
+fn annotate(
+    next: &mut Session,
+    mode: &Mode<'_>,
+    id: &str,
+    expected: u64,
+    anchor: &crate::inbox::CanvasAnchor,
+    text: &str,
+) -> Result<u64, Fail> {
+    validate_new_id(id)?;
+    if text.chars().count() > 8_000 {
+        return Err(Fail::invalid("注释正文最多 8000 字；请拆成几条注释。"));
+    }
+    if text.trim().is_empty() {
+        return Err(Fail::invalid("注释正文不能为空。"));
+    }
+    let existing = next.board.canvas.annotation(id).cloned();
+    match (&existing, expected) {
+        (None, 0) => {
+            if next.board.canvas.object(id).is_some()
+                || next.board.canvas.composition(id).is_some()
+            {
+                return Err(Fail::invalid("这个 ID 已被画布对象或组合使用。"));
+            }
+        }
+        (None, _) => return Err(Fail::conflict(None, "注释不存在。")),
+        (Some(annotation), revision) => {
+            expect_revision(
+                annotation.revision,
+                revision,
+                "注释已经更新，请重新读取后再修改。",
+            )?;
+            if mode.agent && annotation.source_id.as_deref() != mode.owner {
+                return Err(Fail::protected(
+                    annotation.revision,
+                    "用户或其他任务写的注释不能由当前 Agent 直接修改。",
+                ));
+            }
+        }
+    }
+
+    let (snapshot, origin) = if let Some(current) = &existing {
+        if current.anchor == *anchor {
+            (current.snapshot.clone(), current.origin.clone())
+        } else {
+            capture_anchor_snapshot(next, anchor, false)?
+        }
+    } else {
+        capture_anchor_snapshot(next, anchor, false)?
+    };
+    let source_id = mode.owner.map(String::from);
+    let mut candidate = CanvasAnnotation {
+        id: id.to_string(),
+        revision: existing.as_ref().map_or(1, |annotation| annotation.revision),
+        anchor: anchor.clone(),
+        snapshot,
+        text: text.to_string(),
+        origin,
+        source_id,
+        removed: existing.as_ref().is_some_and(|annotation| annotation.removed),
+    };
+    if serde_json::to_vec(&candidate)
+        .map_err(|error| Fail::invalid(error.to_string()))?
+        .len()
+        > 3 * 1024 * 1024
+    {
+        return Err(Fail::invalid(
+            "单条注释超过 3 MiB；请把图片保存为 immutable /artifacts 资源后重试。",
+        ));
+    }
+    if let Some(current) = existing {
+        if current == candidate {
+            return Ok(current.revision);
+        }
+        candidate.revision += 1;
+        *next
+            .board
+            .canvas
+            .annotations
+            .iter_mut()
+            .find(|annotation| annotation.id == id)
+            .expect("checked above") = candidate.clone();
+    } else {
+        next.board.canvas.annotations.push(candidate.clone());
+    }
+    Ok(candidate.revision)
+}
+
+fn remove_annotation(
+    next: &mut Session,
+    mode: &Mode<'_>,
+    id: &str,
+    expected: u64,
+    removed: bool,
+) -> Result<u64, Fail> {
+    let annotation = next
+        .board
+        .canvas
+        .annotation(id)
+        .cloned()
+        .ok_or_else(|| Fail::conflict(None, "注释不存在。"))?;
+    expect_revision(
+        annotation.revision,
+        expected,
+        "注释已经更新，请重新读取后再修改。",
+    )?;
+    if mode.agent && annotation.source_id.as_deref() != mode.owner {
+        return Err(Fail::protected(
+            annotation.revision,
+            "用户或其他任务写的注释不能由当前 Agent 直接移除。",
+        ));
+    }
+    let target = next
+        .board
+        .canvas
+        .annotations
+        .iter_mut()
+        .find(|annotation| annotation.id == id)
+        .expect("checked above");
+    if target.removed != removed {
+        target.removed = removed;
+        target.revision += 1;
+        if mode.mark_user {
+            target.source_id = None;
+        }
+    }
+    Ok(target.revision)
 }
 
 fn ungroup(next: &mut Session, mode: &Mode, id: &str, expected: u64) -> Result<(), Fail> {
@@ -1227,7 +1620,8 @@ fn ungroup(next: &mut Session, mode: &Mode, id: &str, expected: u64) -> Result<(
         "组合已经更新，请重新读取后再解组。",
     )?;
     if mode.agent
-        && (canvas.compositions[position].source_id.is_none() || canvas.compositions[position].user_modified
+        && (canvas.compositions[position].source_id.is_none()
+            || canvas.compositions[position].user_modified
             || canvas
                 .parent_of(id)
                 .is_some_and(|parent| parent.source_id.is_none() || parent.user_modified))
@@ -1252,19 +1646,31 @@ fn ungroup(next: &mut Session, mode: &Mode, id: &str, expected: u64) -> Result<(
             .members
             .splice(index..=index, removed.members.iter().cloned());
         parent.revision += 1;
-        if mode.mark_user { parent.user_modified = true; }
+        if mode.mark_user {
+            parent.user_modified = true;
+        }
     }
     Ok(())
+}
+
+fn content_has_image_references(content: &CanvasContent) -> bool {
+    matches!(content, CanvasContent::Block { block } if block.image_references().next().is_some())
+}
+
+fn content_has_artifact_references(content: &CanvasContent) -> bool {
+    matches!(content, CanvasContent::Block { block } if block.artifact_references().next().is_some())
 }
 
 /// Validate and apply every operation on a copy. The copy is only committed when every
 /// read and write target is ready; the caller decides.
 fn simulate(base: &Session, request: &CanvasBatchRequest, mode: &Mode) -> Outcome {
-    use CanvasTargetKind::{Composition, Content, Presentation};
+    use CanvasTargetKind::{Annotation, Composition, Content, Presentation};
     let mut next = base.clone();
     let mut targets = Targets::default();
     let mut created = HashSet::new();
     let mut binding_writes = Vec::new();
+    let mut image_reference_writes = Vec::new();
+    let mut artifact_reference_writes = Vec::new();
     for read in &request.reads {
         let actual = next.board.canvas.revision_of(read.kind, &read.id);
         let outcome = if actual == Some(read.revision) {
@@ -1282,31 +1688,40 @@ fn simulate(base: &Session, request: &CanvasBatchRequest, mode: &Mode) -> Outcom
                 origin,
                 placement,
                 bindings,
-            } => match create(
-                base, &mut next, request, mode, &created, id, content, origin, placement, bindings,
-            ) {
-                Ok(()) => {
-                    created.insert(id.clone());
-                    if !bindings.is_empty() {
-                        binding_writes.push((id.clone(), 0, true));
-                    }
-                    targets.push(status(Content, id, Some(0), Ok(Some(1))));
-                    targets.push(status(Presentation, id, Some(0), Ok(Some(1))));
+            } => {
+                if content_has_image_references(content) {
+                    image_reference_writes.push((id.clone(), 0));
                 }
-                Err((kind, fail)) => {
-                    targets.push(status(kind, id, Some(0), Err(fail)));
-                    if kind == Presentation {
-                        targets.push(status(Content, id, Some(0), Ok(None)));
-                    } else {
-                        targets.push(status(
-                            Presentation,
-                            id,
-                            Some(0),
-                            Err(Fail::invalid("内容创建未通过，呈现也不会写入。")),
-                        ));
+                if content_has_artifact_references(content) {
+                    artifact_reference_writes.push((id.clone(), 0));
+                }
+                match create(
+                    base, &mut next, request, mode, &created, id, content, origin, placement,
+                    bindings,
+                ) {
+                    Ok(()) => {
+                        created.insert(id.clone());
+                        if !bindings.is_empty() {
+                            binding_writes.push((id.clone(), 0, true));
+                        }
+                        targets.push(status(Content, id, Some(0), Ok(Some(1))));
+                        targets.push(status(Presentation, id, Some(0), Ok(Some(1))));
+                    }
+                    Err((kind, fail)) => {
+                        targets.push(status(kind, id, Some(0), Err(fail)));
+                        if kind == Presentation {
+                            targets.push(status(Content, id, Some(0), Ok(None)));
+                        } else {
+                            targets.push(status(
+                                Presentation,
+                                id,
+                                Some(0),
+                                Err(Fail::invalid("内容创建未通过，呈现也不会写入。")),
+                            ));
+                        }
                     }
                 }
-            },
+            }
             CanvasOperation::PatchContent {
                 id,
                 expected_revision,
@@ -1321,22 +1736,38 @@ fn simulate(base: &Session, request: &CanvasBatchRequest, mode: &Mode) -> Outcom
                 id,
                 expected_revision,
                 block,
-            } => targets.push(status(
-                Content,
-                id,
-                Some(*expected_revision),
-                patch_reply(&mut next, mode, id, *expected_revision, block).map(Some),
-            )),
+            } => {
+                if block.image_references().next().is_some() {
+                    image_reference_writes.push((id.clone(), *expected_revision));
+                }
+                if block.artifact_references().next().is_some() {
+                    artifact_reference_writes.push((id.clone(), *expected_revision));
+                }
+                targets.push(status(
+                    Content,
+                    id,
+                    Some(*expected_revision),
+                    patch_reply(&mut next, mode, id, *expected_revision, block).map(Some),
+                ));
+            }
             CanvasOperation::PatchBlock {
                 id,
                 expected_revision,
                 block,
-            } => targets.push(status(
-                Content,
-                id,
-                Some(*expected_revision),
-                patch_block(&mut next, mode, id, *expected_revision, block).map(Some),
-            )),
+            } => {
+                if block.image_references().next().is_some() {
+                    image_reference_writes.push((id.clone(), *expected_revision));
+                }
+                if block.artifact_references().next().is_some() {
+                    artifact_reference_writes.push((id.clone(), *expected_revision));
+                }
+                targets.push(status(
+                    Content,
+                    id,
+                    Some(*expected_revision),
+                    patch_block(&mut next, mode, id, *expected_revision, block).map(Some),
+                ));
+            }
             CanvasOperation::Place {
                 id,
                 expected_revision,
@@ -1373,12 +1804,102 @@ fn simulate(base: &Session, request: &CanvasBatchRequest, mode: &Mode) -> Outcom
                 expected_revision,
                 title,
                 description,
+                arrangement,
                 members,
             } => targets.push(status(
                 Composition,
                 id,
                 Some(*expected_revision),
-                compose(&mut next, mode, id, *expected_revision, title, description.as_deref(), members).map(Some),
+                compose(
+                    &mut next,
+                    mode,
+                    id,
+                    *expected_revision,
+                    title,
+                    description.as_deref(),
+                    *arrangement,
+                    members,
+                )
+                .map(Some),
+            )),
+            CanvasOperation::Arrange {
+                id,
+                expected_revision,
+                expected_presentations,
+            } => match arrangement_plan(
+                &next,
+                mode,
+                id,
+                *expected_revision,
+                expected_presentations,
+            ) {
+                Ok((revision, placements)) => {
+                    targets.push(status(
+                        Composition,
+                        id,
+                        Some(*expected_revision),
+                        Ok(Some(revision)),
+                    ));
+                    for placement in placements {
+                        targets.push(status(
+                            Presentation,
+                            &placement.id,
+                            Some(placement.expected_revision),
+                            place(
+                                &mut next,
+                                mode,
+                                &placement.id,
+                                placement.expected_revision,
+                                &placement.fields,
+                            )
+                            .map(Some),
+                        ));
+                    }
+                }
+                Err(fail) => {
+                    targets.push(status(
+                        Composition,
+                        id,
+                        Some(*expected_revision),
+                        Err(fail.clone()),
+                    ));
+                    add_arrangement_error_targets(
+                        &mut targets,
+                        &next,
+                        id,
+                        expected_presentations,
+                        &fail,
+                    );
+                }
+            },
+            CanvasOperation::Annotate {
+                id,
+                expected_revision,
+                anchor,
+                text,
+            } => targets.push(status(
+                Annotation,
+                id,
+                Some(*expected_revision),
+                annotate(
+                    &mut next,
+                    mode,
+                    id,
+                    *expected_revision,
+                    anchor,
+                    text,
+                )
+                .map(Some),
+            )),
+            CanvasOperation::RemoveAnnotation {
+                id,
+                expected_revision,
+                removed,
+            } => targets.push(status(
+                Annotation,
+                id,
+                Some(*expected_revision),
+                remove_annotation(&mut next, mode, id, *expected_revision, *removed).map(Some),
             )),
             CanvasOperation::Ungroup {
                 id,
@@ -1426,6 +1947,28 @@ fn simulate(base: &Session, request: &CanvasBatchRequest, mode: &Mode) -> Outcom
                     ));
                 }
             }
+        }
+    }
+    if let Err(error) = validate_image_references(base, &next) {
+        let message = error.to_string();
+        for (id, expected) in image_reference_writes {
+            targets.push(status(
+                Content,
+                &id,
+                Some(expected),
+                Err(Fail::invalid(message.clone())),
+            ));
+        }
+    }
+    if let Err(error) = validate_artifact_references(base, &next) {
+        let message = error.to_string();
+        for (id, expected) in artifact_reference_writes {
+            targets.push(status(
+                Content,
+                &id,
+                Some(expected),
+                Err(Fail::invalid(message.clone())),
+            ));
         }
     }
     Outcome {
@@ -1556,6 +2099,7 @@ impl Session {
         let mut request = proposal.request.clone();
         let mut required: Vec<(CanvasTargetKind, String)> = Vec::new();
         let mut parent_reads = Vec::new();
+        let mut composed_revisions = BTreeMap::new();
         for read in &mut request.reads {
             if let Some(live) = canvas.revision_of(read.kind, &read.id) {
                 read.revision = live;
@@ -1580,9 +2124,79 @@ impl Session {
             let (kind, id, expected, keep_zero) = match op {
                 CanvasOperation::Create { id, .. } => {
                     check(
-                        canvas.object(id).is_none(),
+                        canvas.object(id).is_none()
+                            && canvas.composition(id).is_none()
+                            && canvas.annotation(id).is_none(),
                         "提案要创建的对象已经存在，不能改为覆盖。",
                     )?;
+                    continue;
+                }
+                CanvasOperation::Annotate {
+                    id,
+                    expected_revision,
+                    ..
+                } => {
+                    if *expected_revision == 0 {
+                        check(
+                            canvas.annotation(id).is_none(),
+                            "提案要创建的注释已经存在，不能改为覆盖。",
+                        )?;
+                    } else if let Some(live) = canvas.revision_of(CanvasTargetKind::Annotation, id) {
+                        required.push((CanvasTargetKind::Annotation, id.clone()));
+                        *expected_revision = live;
+                    } else {
+                        return Err(SpellcastError::user("提案要修改的注释已经不存在。"));
+                    }
+                    continue;
+                }
+                CanvasOperation::Compose {
+                    id,
+                    expected_revision,
+                    title,
+                    description,
+                    arrangement,
+                    members,
+                } => {
+                    if let Some(live) = canvas.revision_of(CanvasTargetKind::Composition, id) {
+                        required.push((CanvasTargetKind::Composition, id.clone()));
+                        if *expected_revision != 0 {
+                            *expected_revision = live;
+                        }
+                    }
+                    composed_revisions.insert(
+                        id.clone(),
+                        composition_revision_after_compose(
+                            canvas,
+                            id,
+                            title,
+                            description.as_deref(),
+                            *arrangement,
+                            members,
+                        ),
+                    );
+                    continue;
+                }
+                CanvasOperation::Arrange {
+                    id,
+                    expected_revision,
+                    expected_presentations,
+                } => {
+                    if let Some(post_compose_revision) = composed_revisions.get(id) {
+                        *expected_revision = *post_compose_revision;
+                    } else if let Some(live) =
+                        canvas.revision_of(CanvasTargetKind::Composition, id)
+                    {
+                        required.push((CanvasTargetKind::Composition, id.clone()));
+                        *expected_revision = live;
+                    }
+                    for (member_id, expected_presentation) in expected_presentations {
+                        if let Some(live) =
+                            canvas.revision_of(CanvasTargetKind::Presentation, member_id)
+                        {
+                            required.push((CanvasTargetKind::Presentation, member_id.clone()));
+                            *expected_presentation = live;
+                        }
+                    }
                     continue;
                 }
                 CanvasOperation::PatchContent {
@@ -1610,11 +2224,11 @@ impl Session {
                     expected_revision,
                     ..
                 } => (CanvasTargetKind::Presentation, id, expected_revision, false),
-                CanvasOperation::Compose {
+                CanvasOperation::RemoveAnnotation {
                     id,
                     expected_revision,
                     ..
-                } => (CanvasTargetKind::Composition, id, expected_revision, true),
+                } => (CanvasTargetKind::Annotation, id, expected_revision, false),
                 CanvasOperation::Ungroup {
                     id,
                     expected_revision,
@@ -1685,7 +2299,8 @@ mod tests {
     use super::*;
     use crate::{
         validate_fill, validate_image_src, CanvasPatch, CanvasShape, NodeDraft, ReplyGraphEdge,
-        ReplyGraphNode, ReplyOption, ReplyRequest, ReplyStep, MAX_IMAGE_DATA_BYTES,
+        ReplyGraphNode, ReplyImageReference, ReplyOption, ReplyRequest, ReplyStep,
+        MAX_IMAGE_DATA_BYTES,
     };
 
     const AGENT: Option<&str> = Some("codex:one");
@@ -1693,10 +2308,26 @@ mod tests {
     #[test]
     fn idea_metadata_order_and_user_edits_survive_restart_and_agent_conflicts() {
         let mut session = Session::default();
-        let setup = batch("idea-setup", vec![text("one", "original one"), text("two", "original two"), compose("idea", 0, &["one", "two"])]);
-        assert_eq!(session.apply_canvas_batch(setup, AGENT).unwrap().status, CanvasBatchStatus::Applied);
+        let setup = batch(
+            "idea-setup",
+            vec![
+                text("one", "original one"),
+                text("two", "original two"),
+                compose("idea", 0, &["one", "two"]),
+            ],
+        );
+        assert_eq!(
+            session.apply_canvas_batch(setup, AGENT).unwrap().status,
+            CanvasBatchStatus::Applied
+        );
         let edit: CanvasOperation = serde_json::from_value(serde_json::json!({"op":"compose","id":"idea","expected_revision":1,"title":"一个完整想法","description":"两个组件表达同一个决定","members":["two","one"]})).unwrap();
-        assert_eq!(session.apply_canvas_batch(batch("idea-user", vec![edit]), None).unwrap().status, CanvasBatchStatus::Applied);
+        assert_eq!(
+            session
+                .apply_canvas_batch(batch("idea-user", vec![edit]), None)
+                .unwrap()
+                .status,
+            CanvasBatchStatus::Applied
+        );
         let saved = serde_json::to_string(&session).unwrap();
         let mut restored: Session = serde_json::from_str(&saved).unwrap();
         let group = restored.board.canvas.composition("idea").unwrap();
@@ -1704,13 +2335,44 @@ mod tests {
         assert_eq!(group.members, ["two", "one"]);
         assert!(group.user_modified);
         let before = restored.board.canvas.compositions.clone();
-        let result = restored.apply_canvas_batch(batch("idea-agent-overwrite", vec![compose("idea", 2, &["one", "two"]), patch_text("one", 1, "must not leak")]), AGENT).unwrap();
+        let result = restored
+            .apply_canvas_batch(
+                batch(
+                    "idea-agent-overwrite",
+                    vec![
+                        compose("idea", 2, &["one", "two"]),
+                        patch_text("one", 1, "must not leak"),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
         assert_eq!(result.status, CanvasBatchStatus::Proposed);
         assert_eq!(restored.board.canvas.compositions, before);
-        assert_eq!(restored.board.canvas.object("one").unwrap().content, CanvasContent::Text { title: String::new(), text: "original one".into() });
+        assert_eq!(
+            restored.board.canvas.object("one").unwrap().content,
+            CanvasContent::Text {
+                title: String::new(),
+                text: "original one".into()
+            }
+        );
         let omit_description = compose("idea", 2, &["two", "one"]);
-        assert_eq!(restored.apply_canvas_batch(batch("idea-old-client", vec![omit_description]), None).unwrap().status, CanvasBatchStatus::Applied);
-        assert_eq!(restored.board.canvas.composition("idea").unwrap().description, "两个组件表达同一个决定");
+        assert_eq!(
+            restored
+                .apply_canvas_batch(batch("idea-old-client", vec![omit_description]), None)
+                .unwrap()
+                .status,
+            CanvasBatchStatus::Applied
+        );
+        assert_eq!(
+            restored
+                .board
+                .canvas
+                .composition("idea")
+                .unwrap()
+                .description,
+            "两个组件表达同一个决定"
+        );
     }
 
     fn text(id: &str, body: &str) -> CanvasOperation {
@@ -1722,6 +2384,36 @@ mod tests {
                 text: body.into(),
             },
             placement: CanvasPlacementFields::default(),
+            bindings: vec![],
+        }
+    }
+
+    fn text_at(
+        id: &str,
+        body: &str,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        z: i32,
+        appearance: CanvasAppearance,
+    ) -> CanvasOperation {
+        CanvasOperation::Create {
+            origin: None,
+            id: id.into(),
+            content: CanvasContent::Text {
+                title: String::new(),
+                text: body.into(),
+            },
+            placement: CanvasPlacementFields {
+                x: Some(x),
+                y: Some(y),
+                width: Some(width),
+                height: Some(height),
+                z: Some(z),
+                appearance: Some(appearance),
+                ..Default::default()
+            },
             bindings: vec![],
         }
     }
@@ -1766,12 +2458,37 @@ mod tests {
     }
 
     fn compose(id: &str, expected: u64, members: &[&str]) -> CanvasOperation {
+        compose_with_arrangement(id, expected, members, None)
+    }
+
+    fn compose_with_arrangement(
+        id: &str,
+        expected: u64,
+        members: &[&str],
+        arrangement: Option<CanvasArrangement>,
+    ) -> CanvasOperation {
         CanvasOperation::Compose {
             id: id.into(),
             expected_revision: expected,
             title: String::new(),
             description: None,
+            arrangement,
             members: members.iter().map(|m| m.to_string()).collect(),
+        }
+    }
+
+    fn arrange(
+        id: &str,
+        expected_revision: u64,
+        expected_presentations: &[(&str, u64)],
+    ) -> CanvasOperation {
+        CanvasOperation::Arrange {
+            id: id.into(),
+            expected_revision,
+            expected_presentations: expected_presentations
+                .iter()
+                .map(|(id, revision)| ((*id).to_string(), *revision))
+                .collect(),
         }
     }
 
@@ -1823,6 +2540,7 @@ mod tests {
                     description: String::new(),
                     state: serde_json::json!({}),
                     state_revision: 0,
+                    state_preview: None,
                 }],
                 expected_revision: None,
             })
@@ -2145,6 +2863,96 @@ mod tests {
     }
 
     #[test]
+    fn batch_place_can_set_content_scale_and_rejects_out_of_range_values_atomically() {
+        let mut session = Session::default();
+        let created = session
+            .apply_canvas_batch(
+                batch(
+                    "scaled-create",
+                    vec![CanvasOperation::Create {
+                        id: "scaled".into(),
+                        content: CanvasContent::Text {
+                            title: String::new(),
+                            text: "Scaled".into(),
+                        },
+                        origin: None,
+                        placement: CanvasPlacementFields {
+                            content_scale: Some(1.5),
+                            ..Default::default()
+                        },
+                        bindings: vec![],
+                    }],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert!(created.is_applied(), "{:?}", created.targets);
+        assert_eq!(
+            session.board.canvas.placement("scaled").unwrap().content_scale,
+            1.5
+        );
+
+        let moved = session
+            .apply_canvas_batch(batch("scaled-move", vec![place("scaled", 1, 600.0)]), AGENT)
+            .unwrap();
+        assert!(moved.is_applied(), "{:?}", moved.targets);
+        let placement = session.board.canvas.placement("scaled").unwrap();
+        assert_eq!((placement.x, placement.content_scale), (600.0, 1.5));
+
+        let resized = session
+            .apply_canvas_batch(
+                batch(
+                    "scaled-update",
+                    vec![CanvasOperation::Place {
+                        id: "scaled".into(),
+                        expected_revision: 2,
+                        fields: CanvasPlacementFields {
+                            content_scale: Some(2.25),
+                            ..Default::default()
+                        },
+                    }],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert!(resized.is_applied(), "{:?}", resized.targets);
+        assert_eq!(
+            session.board.canvas.placement("scaled").unwrap().content_scale,
+            2.25
+        );
+
+        for (request_id, invalid) in [
+            ("scale-zero", 0.0),
+            ("scale-small", 0.009),
+            ("scale-large", 100.01),
+        ] {
+            let before = session.board.canvas.placement("scaled").unwrap().clone();
+            let rejected = session
+                .apply_canvas_batch(
+                    batch(
+                        request_id,
+                        vec![CanvasOperation::Place {
+                            id: "scaled".into(),
+                            expected_revision: before.revision,
+                            fields: CanvasPlacementFields {
+                                content_scale: Some(invalid),
+                                ..Default::default()
+                            },
+                        }],
+                    ),
+                    AGENT,
+                )
+                .unwrap();
+            assert_eq!(rejected.status, CanvasBatchStatus::Proposed);
+            assert!(rejected.targets.iter().any(|target| {
+                target.kind == CanvasTargetKind::Presentation
+                    && target.status == CanvasTargetState::Invalid
+            }));
+            assert_eq!(session.board.canvas.placement("scaled").unwrap(), &before);
+        }
+    }
+
+    #[test]
     fn user_edits_protect_against_agents_until_the_user_applies_the_proposal() {
         let mut session = Session::default();
         session
@@ -2462,12 +3270,16 @@ mod tests {
                             title: "X".into(),
                             summary: String::new(),
                             values: vec!["低".into()],
+                            image: None,
+                            artifact: None,
                         },
                         ReplyOption {
                             id: "y".into(),
                             title: "Y".into(),
                             summary: String::new(),
                             values: vec!["高".into()],
+                            image: None,
+                            artifact: None,
                         },
                     ],
                     selected_id: Some("y".into()),
@@ -3035,12 +3847,16 @@ mod tests {
                     title: first.into(),
                     summary: String::new(),
                     values: vec!["低".into()],
+                    image: None,
+                    artifact: None,
                 },
                 ReplyOption {
                     id: "y".into(),
                     title: "Y".into(),
                     summary: String::new(),
                     values: vec!["高".into()],
+                    image: None,
+                    artifact: None,
                 },
             ],
             selected_id: selected.map(String::from),
@@ -3084,8 +3900,341 @@ mod tests {
                 action: action.into(),
                 feedback: String::new(),
                 note: String::new(),
+                image: None,
+                artifact: None,
             }],
         }
+    }
+
+    fn image_reference(
+        object_id: &str,
+        content_revision: u64,
+        title: &str,
+        alt: &str,
+        src: &str,
+    ) -> ReplyImageReference {
+        serde_json::from_value(serde_json::json!({
+            "object_id": object_id,
+            "content_revision": content_revision,
+            "title": title,
+            "alt": alt,
+            "src": src,
+        }))
+        .unwrap()
+    }
+
+    fn option_image_block(id: &str, image: Option<ReplyImageReference>) -> ReplyBlock {
+        let mut block = comparison_block(id, "方案", None);
+        let ReplyBlock::Comparison { options, .. } = &mut block else {
+            unreachable!()
+        };
+        options[0].image = image;
+        block
+    }
+
+    fn image_object(id: &str, title: &str, alt: &str, src: &str) -> CanvasOperation {
+        CanvasOperation::Create {
+            origin: None,
+            id: id.into(),
+            content: CanvasContent::Image {
+                title: title.into(),
+                alt: alt.into(),
+                src: src.into(),
+            },
+            placement: CanvasPlacementFields::default(),
+            bindings: vec![],
+        }
+    }
+
+    fn option_image(session: &Session, owner_id: &str) -> ReplyImageReference {
+        let CanvasContent::Block {
+            block: ReplyBlock::Comparison { options, .. },
+        } = &session.board.canvas.object(owner_id).unwrap().content
+        else {
+            panic!("{owner_id} is not a comparison block object")
+        };
+        options[0].image.clone().expect("option image")
+    }
+
+    fn seed_fixed_option_image(session: &mut Session) -> ReplyImageReference {
+        let src = "/artifacts/bundle-one/first.png";
+        let snapshot = image_reference("image", 1, "初稿", "初始说明", src);
+        let result = session
+            .apply_canvas_batch(
+                batch(
+                    "seed-fixed-image",
+                    vec![
+                        image_object("image", "初稿", "初始说明", src),
+                        create_block(
+                            "owner",
+                            option_image_block("choice", Some(snapshot.clone())),
+                        ),
+                        compose("idea", 0, &["owner", "image"]),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert!(result.is_applied(), "{:?}", result.targets);
+        snapshot
+    }
+
+    #[test]
+    fn fixed_image_reference_accepts_same_idea_in_one_atomic_batch() {
+        let mut session = Session::default();
+        let snapshot = seed_fixed_option_image(&mut session);
+        assert_eq!(option_image(&session, "owner"), snapshot);
+        assert_eq!(
+            session.board.canvas.composition("idea").unwrap().members,
+            ["owner", "image"]
+        );
+    }
+
+    #[test]
+    fn image_reference_cross_group_and_cross_source_fail_atomically() {
+        let mut separate = Session::default();
+        let src = "/artifacts/bundle-one/first.png";
+        let snapshot = image_reference("image", 1, "初稿", "初始说明", src);
+        let result = separate
+            .apply_canvas_batch(
+                batch(
+                    "separate-ideas",
+                    vec![
+                        image_object("image", "初稿", "初始说明", src),
+                        create_block("owner", option_image_block("choice", Some(snapshot))),
+                        compose("image-idea", 0, &["image"]),
+                        compose("reply-idea", 0, &["owner"]),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(result.status, CanvasBatchStatus::Proposed);
+        assert_eq!(
+            result
+                .targets
+                .iter()
+                .find(|target| target.id == "owner" && target.kind == CanvasTargetKind::Content)
+                .unwrap()
+                .status,
+            CanvasTargetState::Invalid
+        );
+        assert!(separate.board.canvas.objects.is_empty());
+        assert!(separate.board.canvas.compositions.is_empty());
+
+        let mut sources = Session::default();
+        sources
+            .apply_canvas_batch(
+                batch(
+                    "foreign-image",
+                    vec![image_object("foreign-image", "外来", "外来说明", src)],
+                ),
+                Some("cursor:two"),
+            )
+            .unwrap();
+        sources
+            .apply_canvas_batch(
+                batch(
+                    "owned-block",
+                    vec![create_block("owner", option_image_block("choice", None))],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        sources
+            .apply_canvas_batch(
+                batch(
+                    "mixed-owner-idea",
+                    vec![compose("idea", 0, &["owner", "foreign-image"])],
+                ),
+                None,
+            )
+            .unwrap();
+        let result = sources
+            .apply_canvas_batch(
+                batch(
+                    "foreign-reference",
+                    vec![patch_block(
+                        "owner",
+                        1,
+                        option_image_block(
+                            "choice",
+                            Some(image_reference("foreign-image", 1, "外来", "外来说明", src)),
+                        ),
+                    )],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(result.status, CanvasBatchStatus::Proposed);
+        assert_eq!(result.targets[0].status, CanvasTargetState::Invalid);
+        let CanvasContent::Block {
+            block: ReplyBlock::Comparison { options, .. },
+        } = &sources.board.canvas.object("owner").unwrap().content
+        else {
+            panic!()
+        };
+        assert!(options[0].image.is_none());
+    }
+
+    #[test]
+    fn new_image_reference_requires_an_exact_immutable_bytes_snapshot() {
+        let mut session = Session::default();
+        let target = "data:image/png;base64,AAAA";
+        let different_bytes = "data:image/png;base64,AAAB";
+        let result = session
+            .apply_canvas_batch(
+                batch(
+                    "different-bytes",
+                    vec![
+                        image_object("image", "像素", "像素说明", target),
+                        create_block(
+                            "owner",
+                            option_image_block(
+                                "choice",
+                                Some(image_reference(
+                                    "image",
+                                    1,
+                                    "像素",
+                                    "像素说明",
+                                    different_bytes,
+                                )),
+                            ),
+                        ),
+                        compose("idea", 0, &["owner", "image"]),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(result.status, CanvasBatchStatus::Proposed);
+        assert!(result.targets.iter().any(|target| {
+            target.id == "owner"
+                && target.status == CanvasTargetState::Invalid
+                && target
+                    .message
+                    .as_deref()
+                    .is_some_and(|message| message.contains("精确匹配"))
+        }));
+        assert!(session.board.canvas.objects.is_empty());
+    }
+
+    #[test]
+    fn invalid_new_stale_image_reference_leaves_the_batch_uncommitted() {
+        let mut session = Session::default();
+        let src = "/artifacts/bundle-one/first.png";
+        let result = session
+            .apply_canvas_batch(
+                batch(
+                    "stale-reference",
+                    vec![
+                        image_object("image", "初稿", "初始说明", src),
+                        create_block(
+                            "owner",
+                            option_image_block(
+                                "choice",
+                                Some(image_reference("image", 0, "初稿", "初始说明", src)),
+                            ),
+                        ),
+                        compose("idea", 0, &["owner", "image"]),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(result.status, CanvasBatchStatus::Proposed);
+        assert_eq!(result.targets[0].status, CanvasTargetState::Ready);
+        assert!(result
+            .targets
+            .iter()
+            .any(|target| { target.id == "owner" && target.status == CanvasTargetState::Invalid }));
+        assert!(session.board.canvas.objects.is_empty());
+        assert!(session.board.canvas.compositions.is_empty());
+    }
+
+    #[test]
+    fn source_updates_and_idea_rename_reorder_preserve_existing_image_snapshot() {
+        let mut session = Session::default();
+        let snapshot = seed_fixed_option_image(&mut session);
+        let result = session
+            .apply_canvas_batch(
+                batch(
+                    "rename-reorder-after-source-update",
+                    vec![
+                        CanvasOperation::PatchContent {
+                            id: "image".into(),
+                            expected_revision: 1,
+                            fields: CanvasContentFields {
+                                title: Some("改名后的图片".into()),
+                                src: Some("/artifacts/bundle-one/second.png".into()),
+                                ..Default::default()
+                            },
+                        },
+                        CanvasOperation::Compose {
+                            id: "idea".into(),
+                            expected_revision: 1,
+                            title: "重新命名的想法".into(),
+                            description: None,
+                            arrangement: None,
+                            members: vec!["image".into(), "owner".into()],
+                        },
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert!(result.is_applied(), "{:?}", result.targets);
+        assert_eq!(option_image(&session, "owner"), snapshot);
+        let CanvasContent::Image { title, src, .. } =
+            &session.board.canvas.object("image").unwrap().content
+        else {
+            panic!()
+        };
+        assert_eq!(title, "改名后的图片");
+        assert_eq!(src, "/artifacts/bundle-one/second.png");
+        let idea = session.board.canvas.composition("idea").unwrap();
+        assert_eq!(idea.title, "重新命名的想法");
+        assert_eq!(idea.members, ["image", "owner"]);
+    }
+
+    #[test]
+    fn deleted_source_and_removed_group_keep_the_existing_snapshot() {
+        let mut session = Session::default();
+        let snapshot = seed_fixed_option_image(&mut session);
+        session
+            .delete_canvas_content(
+                "image",
+                1,
+                &[read(CanvasTargetKind::Composition, "idea", 1)],
+            )
+            .unwrap();
+        assert_eq!(option_image(&session, "owner"), snapshot);
+        assert_eq!(
+            session.board.canvas.composition("idea").unwrap().members,
+            ["owner"]
+        );
+        assert!(session
+            .apply_canvas_batch(
+                batch(
+                    "remove-idea-after-image-delete",
+                    vec![CanvasOperation::Ungroup {
+                        id: "idea".into(),
+                        expected_revision: 2,
+                    }],
+                ),
+                AGENT,
+            )
+            .unwrap()
+            .is_applied());
+        assert!(session.board.canvas.composition("idea").is_none());
+        assert!(session
+            .apply_canvas_batch(
+                batch("unrelated-owner-move", vec![place("owner", 1, 720.0)]),
+                AGENT
+            )
+            .unwrap()
+            .is_applied());
+        assert_eq!(option_image(&session, "owner"), snapshot);
     }
 
     fn create_block(id: &str, block: ReplyBlock) -> CanvasOperation {
@@ -3259,6 +4408,7 @@ mod tests {
             description: String::new(),
             state: serde_json::json!({}),
             state_revision: 0,
+            state_preview: None,
         };
         let cases: Vec<(&str, CanvasOperation)> = vec![
             (
@@ -3335,6 +4485,529 @@ mod tests {
         );
         assert_eq!(block_of(&session, "t"), text_block("t-body", "文字"));
         assert_eq!(revisions(&session, &["t", "g"]), vec![(1, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn composition_arrangement_is_saved_without_moving_presentations() {
+        let mut session = Session::default();
+        let result = session
+            .apply_canvas_batch(
+                batch(
+                    "arrangement-intent-seed",
+                    vec![
+                        text_at("a", "A", 640.0, 320.0, 200.0, 100.0, 7, CanvasAppearance::Card),
+                        text_at("b", "B", 80.0, 40.0, 120.0, 80.0, 8, CanvasAppearance::Plain),
+                        compose_with_arrangement(
+                            "idea",
+                            0,
+                            &["a", "b"],
+                            Some(CanvasArrangement::SideBySide),
+                        ),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert!(result.is_applied(), "{:?}", result.targets);
+        let positions = session.board.canvas.items.clone();
+        assert_eq!(
+            session.board.canvas.composition("idea").unwrap().arrangement,
+            CanvasArrangement::SideBySide
+        );
+
+        // Omitting arrangement keeps it, and changing only composition metadata does not move
+        // any presentation.
+        let result = session
+            .apply_canvas_batch(
+                batch(
+                    "arrangement-intent-omit",
+                    vec![CanvasOperation::Compose {
+                        id: "idea".into(),
+                        expected_revision: 1,
+                        title: "已保存的编排意图".into(),
+                        description: None,
+                        arrangement: None,
+                        members: vec!["a".into(), "b".into()],
+                    }],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert!(result.is_applied(), "{:?}", result.targets);
+        let group = session.board.canvas.composition("idea").unwrap();
+        assert_eq!(group.revision, 2);
+        assert_eq!(group.arrangement, CanvasArrangement::SideBySide);
+        assert_eq!(session.board.canvas.items, positions);
+
+        let legacy: crate::CanvasComposition = serde_json::from_value(serde_json::json!({
+            "id": "old-idea",
+            "members": ["a"]
+        }))
+        .unwrap();
+        assert_eq!(legacy.arrangement, CanvasArrangement::Free);
+
+        let mut free = Session::default();
+        free.apply_canvas_batch(
+            batch(
+                "free-arrangement-seed",
+                vec![text("only", "Only"), compose("free-idea", 0, &["only"])],
+            ),
+            AGENT,
+        )
+        .unwrap();
+        let rejected = free
+            .apply_canvas_batch(
+                batch(
+                    "free-arrangement-reject",
+                    vec![arrange("free-idea", 1, &[("only", 1)])],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(rejected.status, CanvasBatchStatus::Proposed);
+        assert!(rejected.targets.iter().any(|target| {
+            target.kind == CanvasTargetKind::Composition
+                && target.status == CanvasTargetState::Invalid
+        }));
+    }
+
+    #[test]
+    fn arrange_uses_each_saved_intent_and_preserves_nonposition_state() {
+        let cases = [
+            (
+                "side",
+                CanvasArrangement::SideBySide,
+                [("a", 20.0, 10.0), ("b", 252.0, 10.0), ("c", 384.0, 10.0)],
+            ),
+            (
+                "figure",
+                CanvasArrangement::FigureCaption,
+                [("a", 70.0, 10.0), ("b", 120.0, 126.0), ("c", 20.0, 192.0)],
+            ),
+            (
+                "sequence",
+                CanvasArrangement::Sequence,
+                [("a", 20.0, 10.0), ("b", 20.0, 158.0), ("c", 20.0, 256.0)],
+            ),
+        ];
+        for (name, arrangement, expected) in cases {
+            let mut session = Session::default();
+            let seeded = session
+                .apply_canvas_batch(
+                    batch(
+                        &format!("arrange-{name}-seed"),
+                        vec![
+                            text_at("a", "A", 100.0, 300.0, 200.0, 100.0, 17, CanvasAppearance::Card),
+                            text_at("b", "B", 20.0, 70.0, 100.0, 50.0, 18, CanvasAppearance::Plain),
+                            text_at("c", "C", 500.0, 10.0, 300.0, 80.0, 19, CanvasAppearance::Card),
+                            compose_with_arrangement(
+                                "idea",
+                                0,
+                                &["a", "b", "c"],
+                                Some(arrangement),
+                            ),
+                        ],
+                    ),
+                    AGENT,
+                )
+                .unwrap();
+            assert!(seeded.is_applied(), "{name}: {:?}", seeded.targets);
+            let before_objects = session.board.canvas.objects.clone();
+            let before_items = session.board.canvas.items.clone();
+            let before_group = session.board.canvas.composition("idea").unwrap().clone();
+
+            let result = session
+                .apply_canvas_batch(
+                    batch(
+                        &format!("arrange-{name}"),
+                        vec![arrange("idea", 1, &[("a", 1), ("b", 1), ("c", 1)])],
+                    ),
+                    AGENT,
+                )
+                .unwrap();
+            assert!(result.is_applied(), "{name}: {:?}", result.targets);
+            assert_eq!(session.board.canvas.objects, before_objects, "{name}");
+            assert_eq!(
+                session.board.canvas.composition("idea").unwrap(),
+                &before_group,
+                "{name}"
+            );
+            for (id, x, y) in expected {
+                let after = session.board.canvas.placement(id).unwrap();
+                let before = before_items.iter().find(|item| item.item_id == id).unwrap();
+                assert_eq!((after.x, after.y), (x, y), "{name}/{id}");
+                assert_eq!(
+                    (after.width, after.height, after.z, after.appearance, after.removed),
+                    (
+                        before.width,
+                        before.height,
+                        before.z,
+                        before.appearance,
+                        before.removed
+                    ),
+                    "{name}/{id}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn create_compose_and_arrange_can_land_atomically() {
+        let mut session = Session::default();
+        let result = session
+            .apply_canvas_batch(
+                batch(
+                    "create-compose-arrange",
+                    vec![
+                        text_at("a", "A", 200.0, 160.0, 200.0, 100.0, 1, CanvasAppearance::Card),
+                        text_at("b", "B", 40.0, 60.0, 120.0, 80.0, 2, CanvasAppearance::Plain),
+                        compose_with_arrangement(
+                            "idea",
+                            0,
+                            &["a", "b"],
+                            Some(CanvasArrangement::SideBySide),
+                        ),
+                        arrange("idea", 1, &[("a", 1), ("b", 1)]),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert!(result.is_applied(), "{:?}", result.targets);
+        assert_eq!(
+            (
+                session.board.canvas.placement("a").unwrap().x,
+                session.board.canvas.placement("a").unwrap().y
+            ),
+            (40.0, 60.0)
+        );
+        assert_eq!(
+            (
+                session.board.canvas.placement("b").unwrap().x,
+                session.board.canvas.placement("b").unwrap().y
+            ),
+            (272.0, 60.0)
+        );
+        assert!(result.targets.iter().all(|target| {
+            target.kind != CanvasTargetKind::Presentation
+                || !matches!(target.id.as_str(), "a" | "b")
+                || target.expected_revision == Some(1)
+        }));
+    }
+
+    #[test]
+    fn arrange_requires_exact_fresh_presentations_without_partial_writes() {
+        let mut session = Session::default();
+        session
+            .apply_canvas_batch(
+                batch(
+                    "arrange-fresh-seed",
+                    vec![
+                        text_at("a", "A", 400.0, 100.0, 200.0, 100.0, 1, CanvasAppearance::Card),
+                        text_at("b", "B", 20.0, 20.0, 120.0, 80.0, 2, CanvasAppearance::Plain),
+                        compose_with_arrangement(
+                            "idea",
+                            0,
+                            &["a", "b"],
+                            Some(CanvasArrangement::SideBySide),
+                        ),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        let before_items = session.board.canvas.items.clone();
+        let before_objects = session.board.canvas.objects.clone();
+        let before_group = session.board.canvas.composition("idea").unwrap().clone();
+
+        let stale = session
+            .apply_canvas_batch(
+                batch(
+                    "arrange-stale",
+                    vec![arrange("idea", 1, &[("a", 1), ("b", 0)])],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(stale.status, CanvasBatchStatus::Proposed);
+        assert!(stale.targets.iter().any(|target| {
+            target.kind == CanvasTargetKind::Presentation
+                && target.id == "b"
+                && target.status == CanvasTargetState::Conflict
+                && target.actual_revision == Some(1)
+        }));
+        assert_eq!(session.board.canvas.items, before_items);
+        assert_eq!(session.board.canvas.objects, before_objects);
+        assert_eq!(session.board.canvas.composition("idea"), Some(&before_group));
+
+        for (request_id, versions) in [
+            ("arrange-missing", vec![("a", 1)]),
+            ("arrange-extra", vec![("a", 1), ("b", 1), ("extra", 1)]),
+        ] {
+            let result = session
+                .apply_canvas_batch(
+                    batch(request_id, vec![arrange("idea", 1, &versions)]),
+                    AGENT,
+                )
+                .unwrap();
+            assert_eq!(result.status, CanvasBatchStatus::Proposed, "{request_id}");
+            assert!(result.targets.iter().any(|target| {
+                target.kind == CanvasTargetKind::Composition
+                    && target.id == "idea"
+                    && target.status == CanvasTargetState::Invalid
+            }));
+            assert_eq!(session.board.canvas.items, before_items, "{request_id}");
+        }
+    }
+
+    #[test]
+    fn arrange_proposals_guard_user_moves_and_refresh_compose_then_arrange_versions() {
+        let mut session = Session::default();
+        session
+            .apply_canvas_batch(
+                batch(
+                    "arrange-proposal-seed",
+                    vec![
+                        text_at("a", "A", 360.0, 160.0, 200.0, 100.0, 1, CanvasAppearance::Card),
+                        text_at("b", "B", 100.0, 20.0, 100.0, 80.0, 2, CanvasAppearance::Plain),
+                        compose_with_arrangement(
+                            "idea",
+                            0,
+                            &["a", "b"],
+                            Some(CanvasArrangement::SideBySide),
+                        ),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        session
+            .apply_canvas_batch(batch("user-move", vec![place("a", 1, 900.0)]), None)
+            .unwrap();
+        assert!(session.board.canvas.placement("a").unwrap().user_modified);
+        let before_agent_attempt = session.board.canvas.items.clone();
+
+        // The proposal first changes the saved intent, so Arrange must use revision 2 even
+        // though the live composition is still at revision 1.
+        let proposed = session
+            .apply_canvas_batch(
+                batch(
+                    "agent-compose-arrange",
+                    vec![
+                        compose_with_arrangement(
+                            "idea",
+                            1,
+                            &["a", "b"],
+                            Some(CanvasArrangement::Sequence),
+                        ),
+                        arrange("idea", 2, &[("a", 2), ("b", 1)]),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(proposed.status, CanvasBatchStatus::Proposed);
+        assert!(proposed.targets.iter().any(|target| {
+            target.kind == CanvasTargetKind::Presentation
+                && target.id == "a"
+                && target.status == CanvasTargetState::Protected
+        }));
+        assert_eq!(session.board.canvas.items, before_agent_attempt);
+        assert_eq!(
+            session.board.canvas.composition("idea").unwrap().arrangement,
+            CanvasArrangement::SideBySide
+        );
+
+        // Applying a proposal must demand every Arrange presentation version, then preserve the
+        // post-Compose expected composition revision rather than replacing it with live revision 1.
+        assert!(session
+            .apply_canvas_proposal(
+                "agent-compose-arrange",
+                vec![
+                    read(CanvasTargetKind::Composition, "idea", 1),
+                    read(CanvasTargetKind::Presentation, "a", 2),
+                ],
+            )
+            .is_err());
+        let accepted = session
+            .apply_canvas_proposal(
+                "agent-compose-arrange",
+                vec![
+                    read(CanvasTargetKind::Composition, "idea", 1),
+                    read(CanvasTargetKind::Presentation, "a", 2),
+                    read(CanvasTargetKind::Presentation, "b", 1),
+                ],
+            )
+            .unwrap();
+        assert!(accepted.is_applied(), "{:?}", accepted.targets);
+        assert_eq!(
+            session.board.canvas.composition("idea").unwrap().arrangement,
+            CanvasArrangement::Sequence
+        );
+        assert_eq!(
+            (
+                session.board.canvas.placement("a").unwrap().x,
+                session.board.canvas.placement("a").unwrap().y,
+                session.board.canvas.placement("b").unwrap().x,
+                session.board.canvas.placement("b").unwrap().y,
+            ),
+            (100.0, 20.0, 100.0, 168.0)
+        );
+
+        // A direct user arrange may change a presentation they previously moved.
+        session
+            .apply_canvas_batch(
+                batch(
+                    "user-save-figure",
+                    vec![compose_with_arrangement(
+                        "idea",
+                        2,
+                        &["a", "b"],
+                        Some(CanvasArrangement::FigureCaption),
+                    )],
+                ),
+                None,
+            )
+            .unwrap();
+        let direct = session
+            .apply_canvas_batch(
+                batch(
+                    "user-arrange",
+                    vec![arrange("idea", 3, &[("a", 3), ("b", 2)])],
+                ),
+                None,
+            )
+            .unwrap();
+        assert!(direct.is_applied(), "{:?}", direct.targets);
+        assert_eq!(
+            (
+                session.board.canvas.placement("a").unwrap().x,
+                session.board.canvas.placement("a").unwrap().y,
+                session.board.canvas.placement("b").unwrap().x,
+                session.board.canvas.placement("b").unwrap().y,
+            ),
+            (100.0, 20.0, 150.0, 136.0)
+        );
+        assert!(session.board.canvas.placement("b").unwrap().user_modified);
+    }
+
+    #[test]
+    fn arrange_rejects_hidden_nested_and_foreign_members_without_writes() {
+        let mut hidden = Session::default();
+        hidden
+            .apply_canvas_batch(
+                batch(
+                    "arrange-hidden-seed",
+                    vec![
+                        text("a", "A"),
+                        text("b", "B"),
+                        compose_with_arrangement(
+                            "idea",
+                            0,
+                            &["a", "b"],
+                            Some(CanvasArrangement::Sequence),
+                        ),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        hidden.set_canvas_removed("b", 1, true).unwrap();
+        let hidden_before = hidden.board.canvas.items.clone();
+        let hidden_result = hidden
+            .apply_canvas_batch(
+                batch(
+                    "arrange-hidden",
+                    vec![arrange("idea", 1, &[("a", 1), ("b", 2)])],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(hidden_result.status, CanvasBatchStatus::Proposed);
+        assert!(hidden_result.targets.iter().any(|target| {
+            target.kind == CanvasTargetKind::Composition
+                && target.status == CanvasTargetState::Invalid
+        }));
+        assert_eq!(hidden.board.canvas.items, hidden_before);
+        assert!(hidden.board.canvas.placement("b").unwrap().removed);
+
+        let mut nested = Session::default();
+        nested
+            .apply_canvas_batch(
+                batch(
+                    "arrange-nested-seed",
+                    vec![
+                        text("a", "A"),
+                        text("b", "B"),
+                        text("c", "C"),
+                        compose_with_arrangement(
+                            "inner",
+                            0,
+                            &["a", "b"],
+                            Some(CanvasArrangement::SideBySide),
+                        ),
+                        compose_with_arrangement(
+                            "outer",
+                            0,
+                            &["inner", "c"],
+                            Some(CanvasArrangement::Sequence),
+                        ),
+                    ],
+                ),
+                AGENT,
+            )
+            .unwrap();
+        let nested_before = nested.board.canvas.items.clone();
+        let nested_result = nested
+            .apply_canvas_batch(
+                batch("arrange-nested", vec![arrange("outer", 1, &[("c", 1)])]),
+                AGENT,
+            )
+            .unwrap();
+        assert_eq!(nested_result.status, CanvasBatchStatus::Proposed);
+        assert!(nested_result.targets.iter().any(|target| {
+            target.kind == CanvasTargetKind::Composition
+                && target.id == "outer"
+                && target.status == CanvasTargetState::Invalid
+        }));
+        assert_eq!(nested.board.canvas.items, nested_before);
+        assert_eq!(nested.board.canvas.composition("outer").unwrap().members, ["inner", "c"]);
+
+        let mut foreign = Session::default();
+        foreign
+            .apply_canvas_batch(batch("foreign-a", vec![text("a", "A")]), AGENT)
+            .unwrap();
+        foreign
+            .apply_canvas_batch(
+                batch("foreign-b", vec![text("b", "B")]),
+                Some("codex:two"),
+            )
+            .unwrap();
+        foreign
+            .apply_canvas_batch(
+                batch(
+                    "foreign-compose",
+                    vec![compose_with_arrangement(
+                        "idea",
+                        0,
+                        &["a", "b"],
+                        Some(CanvasArrangement::Sequence),
+                    )],
+                ),
+                None,
+            )
+            .unwrap();
+        let foreign_before = foreign.board.canvas.items.clone();
+        assert!(foreign
+            .apply_canvas_batch(
+                batch(
+                    "foreign-arrange",
+                    vec![arrange("idea", 1, &[("a", 1), ("b", 1)])],
+                ),
+                AGENT,
+            )
+            .is_err());
+        assert_eq!(foreign.board.canvas.items, foreign_before);
     }
 
     #[test]

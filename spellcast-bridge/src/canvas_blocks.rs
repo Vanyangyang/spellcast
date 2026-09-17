@@ -12,6 +12,7 @@ pub struct BlockActionRequest {
     #[serde(default)] pub source_id: Option<String>,
     #[serde(default)] pub option_id: Option<String>,
     #[serde(default)] pub text: Option<String>,
+    #[serde(default)] pub anchors: Vec<spellcast_core::inbox::CanvasAnchor>,
 }
 
 #[cfg(test)]
@@ -134,6 +135,24 @@ impl Bridge {
             }
             let source = object.source_id.clone().or(request.source_id.clone());
             if request.action == ReplyAction::Ask && source.is_none() { return Err(SpellcastError::user("请先选择接收这条输入的原任务。")); }
+            if request.action == ReplyAction::Ask && !request.anchors.is_empty() {
+                if request.anchors.iter().any(|anchor| anchor.object_id != id || anchor.block_id.as_deref() != Some(&request.block_id)) {
+                    return Err(SpellcastError::user("所选位置与讨论的组件不一致。"));
+                }
+                crate::canvas::validate_anchors(&state.session, &request.anchors)?;
+            }
+            let annotation_context = if request.action == ReplyAction::Ask {
+                crate::canvas::annotation_context(&state.session, &request.anchors)?
+            } else {
+                Vec::new()
+            };
+            if let Some(source) = source.as_deref() {
+                crate::canvas::validate_annotation_route(
+                    &state.session,
+                    &annotation_context,
+                    source,
+                )?;
+            }
             let mut changed = block.clone();
             let title = block.title().to_string();
             let text = match request.action {
@@ -163,8 +182,10 @@ impl Bridge {
                 .source(source).title(title).text(text);
             event.object_id = Some(id.to_string()); event.object_revision = Some(revision);
             event.block_id = Some(request.block_id.clone()); event.option_id = request.option_id.clone(); event.request_id = request.request_id.clone();
-            event.anchors.push(spellcast_core::inbox::CanvasAnchor { object_id: id.to_string(), content_revision: revision,
-                block_id: Some(request.block_id.clone()), selection: None, region: None, artifact: None, inputs: None, compositions: vec![] });
+            if request.action == ReplyAction::Ask && !request.anchors.is_empty() { event.anchors = request.anchors; }
+            else { event.anchors.push(spellcast_core::inbox::CanvasAnchor { object_id: id.to_string(), content_revision: revision,
+                target: None, image: None, artifact_reference: None, annotations: vec![], block_id: Some(request.block_id.clone()), selection: None, region: None, artifact: None, inputs: None, compositions: vec![] }); }
+            event.annotation_context = annotation_context;
             let event = state.record(event); state.stamp_request(event.seq, fingerprint);
             Ok(BlockActionOutcome { board: state.session.snapshot(), event })
         })?;
