@@ -3557,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "spellcast"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "embed-resource",
@@ -3582,7 +3582,7 @@ dependencies = [
 
 [[package]]
 name = "spellcast-bridge"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "axum",
  "rmcp",
@@ -3599,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "spellcast-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "schemars 1.2.2",
  "serde",
