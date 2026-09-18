@@ -29,11 +29,13 @@ This is an early preview, not a finished product. The path that is **supported a
 
 2. **A result on the Canvas**
 
-   When the session has a thought worth keeping, it can land on the Canvas as an idea — often under **Needs sorting**. That card is a result of the agent’s work, not something you spawned from a button.
+   ![Canvas with an idea card under Needs sorting](docs/media/01-canvas-idea.png)
+
+   An idea under **Needs sorting**. The agent placed this on the Canvas when the thought was worth keeping — not because you pressed a spawn button.
 
 3. **Claim, note, and tell the agent**
 
-   On the Canvas you can read a **Claim** or **Note**, then use **Tell the agent** to send a follow-up. The bar is how you continue the conversation. It is not how bubbles are created.
+   A **Claim** or **Note** on the Canvas, plus **Tell the agent**. That bar sends a follow-up into the session. It does not create bubbles.
 
 ## Where the preview stands
 
