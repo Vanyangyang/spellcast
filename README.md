@@ -1,6 +1,6 @@
 # Spellcast
 
-![Spellcast: a wand casting desktop aside bubbles](docs/media/spellcast-hero-wand.gif)
+![Spellcast: wand casts asides, then idea to inspiration to fireworks](docs/media/spellcast-hero-story.gif)
 
 **A stage of its own.** Desktop asides, a Canvas for ideas you can develop, and completion notices for Codex and Grok Build. Sending a request back to the original task still uses Codex Desktop.
 
