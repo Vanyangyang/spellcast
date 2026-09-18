@@ -146,7 +146,7 @@ function mainHintKey(report: SetupReport): MessageKey {
   }
   if (report.hook_trust === "modified") return "setup.hint.modified";
   if (report.hook_trust === "disabled") return "setup.hint.disabled";
-  if (report.kind === "not_installed" && report.complete_supported && !report.source_path) {
+  if (report.kind === "not_installed" && report.complete_supported && !report.source_path && !report.mcp_url) {
     return "setup.hint.desktopPreview";
   }
   return SETUP_KIND_HINT[report.kind] ?? "setup.hint.failed";

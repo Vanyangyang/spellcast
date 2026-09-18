@@ -162,6 +162,8 @@ const result = await page.evaluate(async () => {
     "setup.status.failed": "未完成",
     "setup.hint.unsupported": "此客户端不能完整接入，未执行安装。",
     "setup.hint.notInstalled": "可一次安装 MCP、hooks 与 Skill。",
+    "setup.status.conflictCustom": "自定义源冲突",
+    "setup.hint.conflictCustom": "现有插件源与发行包不同，未覆盖。",
     "setup.hint.desktopPreview": "浏览器为只读预览。请在 Spellcast 桌面应用中安装。",
     "setup.hint.installing": "正在安装，请稍候，不要重复点击。",
     "setup.hint.pendingTrust": "请在 Codex 的 /hooks 中信任 SessionStart 与 UserPromptSubmit。",
@@ -234,6 +236,38 @@ const result = await page.evaluate(async () => {
   check(view().hint.includes("可一次写入 MCP 与 Skill"), "native grok not-installed hint");
   paintSetupView(base({ client: "grok", kind: "not_installed" }), t);
   check(view().hint.includes("浏览器为只读预览"), "browser grok preview stays desktop-only");
+  paintSetupView(base({
+    kind: "not_installed",
+    mcp_url: "http://127.0.0.1:47194/mcp",
+    source_path: "C:/Users/x/.codex/hooks.json",
+  }), t);
+  snap = view();
+  check(snap.hint === "可一次安装 MCP、hooks 与 Skill。", `desktop file check not-installed hint ${snap.hint}`);
+  check(!snap.hint.includes("浏览器"), "desktop check must not look like browser preview");
+  check(!snap.status.includes("CLI"), "desktop check must not demand CLI");
+  paintSetupView(base({ kind: "not_installed" }), t);
+  check(view().hint.includes("浏览器为只读预览"), "browser preview stays desktop-only");
+  paintSetupView(base({
+    kind: "installed_pending_trust",
+    installed: true,
+    hook_trust: "unknown",
+    mcp_url: "http://127.0.0.1:47194/mcp",
+    source_path: "C:/Users/x/.codex/hooks.json",
+  }), t);
+  snap = view();
+  check(snap.status === "已安装，待信任", `file-complete check status ${snap.status}`);
+  check(snap.hint === "请在 Codex 的 /hooks 中信任 SessionStart 与 UserPromptSubmit。", `pending trust hint ${snap.hint}`);
+  check(!/CLI|missing_cli|未安装/.test(snap.status + snap.hint), "complete files must not look missing");
+  paintSetupView(base({
+    kind: "conflict_custom",
+    mcp_url: "http://127.0.0.1:47194/mcp",
+    source_path: "C:/Users/x/.codex/hooks.json",
+    conflicts: ["hooks.json 不是有效 JSON"],
+  }), t);
+  snap = view();
+  check(snap.status === "自定义源冲突", `protected check status ${snap.status}`);
+  check(snap.hint === "现有插件源与发行包不同，未覆盖。", `protected check hint ${snap.hint}`);
+  check(!snap.hint.includes("未安装"), "protected JSON is not not-installed");
   paintSetupView(base({
     kind: "verified",
     installed: true,

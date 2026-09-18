@@ -1,4 +1,5 @@
-//! Codex complete integration (MCP + hooks + Skill) via the official plugin CLI.
+//! Codex complete integration (MCP + hooks + Skill).
+//! The desktop one-step path writes `~/.codex` files and does not call `codex.exe`.
 //! Isolated from UI. Does not write hook trust, aside settings, or unrelated config.
 
 use std::cell::Cell;
@@ -14,7 +15,7 @@ use fs2::FileExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use toml_edit::{DocumentMut, Item};
+use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::configure;
 
@@ -2141,6 +2142,505 @@ fn grok_install_inner(client: &str, url: Option<&str>, paths: &SetupPaths) -> Se
     r
 }
 
+fn codex_config_path(codex_home: &Path) -> PathBuf {
+    config_path(codex_home)
+}
+
+fn codex_skill_md(codex_home: &Path) -> PathBuf {
+    standalone_skill_dir(codex_home).join("SKILL.md")
+}
+
+fn codex_user_hooks_path(codex_home: &Path) -> PathBuf {
+    codex_home.join("hooks.json")
+}
+
+fn aside_helper_dest(codex_home: &Path) -> PathBuf {
+    codex_home.join("spellcast").join("hooks").join(helper_name())
+}
+
+fn aside_helper_src(resource_root: &Path) -> PathBuf {
+    resource_root.join("bin").join(helper_name())
+}
+
+fn slash_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn posix_user_hook_command(helper: &Path, status: &str) -> String {
+    format!("\"{}\" --endpoint {status}", slash_path(helper))
+}
+
+fn windows_user_hook_command(helper: &Path, status: &str) -> String {
+    let path = helper.to_string_lossy().replace('\'', "''");
+    format!(
+        "powershell.exe -NoProfile -NonInteractive -Command \"& '{path}' --endpoint '{status}'\""
+    )
+}
+
+fn user_aside_hook(helper: &Path, status: &str) -> Value {
+    json!({
+        "type": "command",
+        "command": posix_user_hook_command(helper, status),
+        "commandWindows": windows_user_hook_command(helper, status),
+        "timeout": HOOK_TIMEOUT
+    })
+}
+
+fn command_is_spellcast_aside(command: &str) -> bool {
+    command.contains("spellcast-hook") && command.contains("--endpoint")
+}
+
+fn hook_is_spellcast_aside(hook: &Value) -> bool {
+    ["command", "commandWindows"].iter().any(|key| {
+        hook.get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(command_is_spellcast_aside)
+    })
+}
+
+fn group_is_spellcast_aside(group: &Value) -> bool {
+    group
+        .get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(|hooks| hooks.iter().any(hook_is_spellcast_aside))
+}
+
+fn hook_matches_helper_and_status(hook: &Value, helper: &Path, status: &str) -> bool {
+    let posix = posix_user_hook_command(helper, status);
+    let win = windows_user_hook_command(helper, status);
+    hook.get("command").and_then(Value::as_str) == Some(posix.as_str())
+        && hook.get("commandWindows").and_then(Value::as_str) == Some(win.as_str())
+        && hook.get("timeout").and_then(Value::as_u64) == Some(HOOK_TIMEOUT)
+}
+
+fn group_is_current_aside(group: &Value, helper: &Path, status: &str, matcher: Option<&str>) -> bool {
+    if matcher.is_some_and(|want| group.get("matcher").and_then(Value::as_str) != Some(want)) {
+        return false;
+    }
+    group.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
+        hooks
+            .iter()
+            .any(|hook| hook_matches_helper_and_status(hook, helper, status))
+    })
+}
+
+fn merge_codex_user_hooks(
+    existing: Option<&[u8]>,
+    helper: &Path,
+    status: &str,
+) -> Result<String, String> {
+    let mut doc = match existing {
+        None | Some(b"") => json!({ "hooks": {} }),
+        Some(bytes) => serde_json::from_slice(bytes)
+            .map_err(|err| format!("~/.codex/hooks.json 不是有效 JSON，已保护：{err}"))?,
+    };
+    let Some(root) = doc.as_object_mut() else {
+        return Err("~/.codex/hooks.json 顶层不是对象，已保护。".into());
+    };
+    let hooks = root
+        .entry("hooks".to_string())
+        .or_insert_with(|| json!({}));
+    let Some(hooks_map) = hooks.as_object_mut() else {
+        return Err("~/.codex/hooks.json 的 hooks 不是对象，已保护。".into());
+    };
+    let start_group = json!({
+        "matcher": MATCHER,
+        "hooks": [user_aside_hook(helper, status)]
+    });
+    let prompt_group = json!({ "hooks": [user_aside_hook(helper, status)] });
+    for (event, group) in [("SessionStart", start_group), ("UserPromptSubmit", prompt_group)] {
+        match hooks_map.get_mut(event) {
+            None => {
+                hooks_map.insert(event.into(), json!([group]));
+            }
+            Some(Value::Array(arr)) => {
+                arr.retain(|item| !group_is_spellcast_aside(item));
+                arr.push(group);
+            }
+            Some(_) => {
+                return Err(format!(
+                    "~/.codex/hooks.json 的 hooks.{event} 不是数组，已保护。"
+                ));
+            }
+        }
+    }
+    Ok(serde_json::to_string_pretty(&doc).map_err(|err| err.to_string())? + "\n")
+}
+
+fn inspect_codex_user_hooks(path: &Path) -> Result<Option<Value>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path).map_err(|err| format!("读不了 {}：{err}", path.display()))?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let doc: Value = serde_json::from_slice(&bytes)
+        .map_err(|err| format!("~/.codex/hooks.json 不是有效 JSON，已保护：{err}"))?;
+    if !doc.is_object() {
+        return Err("~/.codex/hooks.json 顶层不是对象，已保护。".into());
+    }
+    Ok(Some(doc))
+}
+
+fn aside_hooks_ready(doc: &Value, helper: &Path, status: &str) -> Result<bool, String> {
+    let Some(hooks) = doc.get("hooks") else {
+        return Ok(false);
+    };
+    if !hooks.is_object() {
+        return Err("~/.codex/hooks.json 的 hooks 不是对象，已保护。".into());
+    }
+    for (event, matcher) in [
+        ("SessionStart", Some(MATCHER)),
+        ("UserPromptSubmit", None),
+    ] {
+        match hooks.get(event) {
+            None => return Ok(false),
+            Some(Value::Array(arr)) => {
+                if !arr
+                    .iter()
+                    .any(|group| group_is_current_aside(group, helper, status, matcher))
+                {
+                    return Ok(false);
+                }
+            }
+            Some(_) => {
+                return Err(format!(
+                    "~/.codex/hooks.json 的 hooks.{event} 不是数组，已保护。"
+                ));
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn features_hooks_enabled(doc: &DocumentMut) -> Result<bool, String> {
+    match doc.get("features") {
+        None => Ok(false),
+        Some(item) if item.is_table() => Ok(item
+            .get("hooks")
+            .and_then(Item::as_value)
+            .and_then(|v| v.as_bool())
+            == Some(true)),
+        Some(_) => Err("config.toml 的 [features] 不是表，已保护。".into()),
+    }
+}
+
+fn ensure_features_hooks(path: &Path) -> Result<Option<PathBuf>, String> {
+    let text = if path.is_file() {
+        fs::read_to_string(path).map_err(|err| format!("读不了 {}：{err}", path.display()))?
+    } else {
+        String::new()
+    };
+    let mut doc = if text.is_empty() {
+        DocumentMut::new()
+    } else {
+        text.parse::<DocumentMut>()
+            .map_err(|err| format!("{} 不是有效 TOML，已保护：{err}", path.display()))?
+    };
+    if features_hooks_enabled(&doc)? {
+        return Ok(None);
+    }
+    if doc.get("features").is_none() {
+        doc["features"] = Item::Table(Table::new());
+    }
+    let Some(features) = doc["features"].as_table_mut() else {
+        return Err("config.toml 的 [features] 不是表，已保护。".into());
+    };
+    features["hooks"] = value(true);
+    configure::commit_with_backup(path, doc.to_string().as_bytes())
+}
+
+fn copy_aside_helper(src: &Path, dest: &Path) -> Result<Option<PathBuf>, String> {
+    regular_file(src, &format!("bin/{}", helper_name()))?;
+    let bytes = fs::read(src).map_err(|err| format!("读不了 {}：{err}", src.display()))?;
+    if dest.is_file() && fs::read(dest).ok().as_deref() == Some(bytes.as_slice()) {
+        return Ok(None);
+    }
+    let backup = configure::commit_with_backup(dest, &bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dest, fs::Permissions::from_mode(0o700))
+            .map_err(|err| format!("无法设置 helper 权限：{err}"))?;
+    }
+    Ok(backup)
+}
+
+fn locate_codex_direct(mut r: SetupReport, paths: &SetupPaths, mcp: &str) -> SetupReport {
+    r.mcp_url = Some(mcp.to_string());
+    r.source_path = Some(codex_user_hooks_path(&paths.codex_home).display().to_string());
+    r.cache_path = Some(aside_helper_dest(&paths.codex_home).display().to_string());
+    r
+}
+
+fn protected_file_error(err: &str) -> bool {
+    err.contains("已保护") || err.contains("不是有效 TOML")
+}
+
+fn protected_codex_direct(client: &str, err: String, paths: &SetupPaths, mcp: &str) -> SetupReport {
+    let mut r = SetupReport::base(client, SetupKind::ConflictCustom, &err);
+    r.conflicts.push(err);
+    r.not_done
+        .push("未改 Codex 配置、未安装 Skill、未写 hooks。".into());
+    locate_codex_direct(r, paths, mcp)
+}
+
+/// Read-only Codex status from files. Never calls `codex.exe`, never writes, never reports MissingCli.
+pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) -> SetupReport {
+    let mcp = match url
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(validate_loopback_mcp_url)
+        .unwrap_or_else(|| Ok("http://127.0.0.1:47194/mcp".into()))
+    {
+        Ok(v) => v,
+        Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+    };
+    let status = match status_url_for_mcp(&mcp) {
+        Ok(v) => v,
+        Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+    };
+    let config_path = codex_config_path(&paths.codex_home);
+    let mcp_state = match inspect_grok_config(&config_path, &mcp) {
+        Ok(state) => state,
+        Err(err) if protected_file_error(&err) => {
+            return protected_codex_direct(client, err, paths, &mcp);
+        }
+        Err(err) => {
+            return locate_codex_direct(SetupReport::base(client, SetupKind::Failed, &err), paths, &mcp);
+        }
+    };
+    match &mcp_state {
+        GrokMcp::Conflict(reason) => {
+            let mut r = SetupReport::base(client, SetupKind::ConflictEndpoint, reason);
+            r.conflicts.push(reason.clone());
+            r.not_done.push("未改 Codex 配置、未安装 Skill、未写 hooks。".into());
+            return locate_codex_direct(r, paths, &mcp);
+        }
+        GrokMcp::Shape(reason) => {
+            return protected_codex_direct(client, reason.clone(), paths, &mcp);
+        }
+        GrokMcp::Absent | GrokMcp::Ready | GrokMcp::Incomplete => {}
+    }
+    let features_ok = if config_path.is_file() {
+        match fs::read_to_string(&config_path)
+            .map_err(|err| format!("读不了 {}：{err}", config_path.display()))
+            .and_then(|text| {
+                text.parse::<DocumentMut>()
+                    .map_err(|err| format!("{} 不是有效 TOML，已保护：{err}", config_path.display()))
+            })
+            .and_then(|doc| features_hooks_enabled(&doc))
+        {
+            Ok(v) => v,
+            Err(err) if protected_file_error(&err) => {
+                return protected_codex_direct(client, err, paths, &mcp);
+            }
+            Err(err) => {
+                return locate_codex_direct(SetupReport::base(client, SetupKind::Failed, &err), paths, &mcp);
+            }
+        }
+    } else {
+        false
+    };
+    let skill_ok = configure::spellcast_skill_is_current(&codex_skill_md(&paths.codex_home));
+    let helper = aside_helper_dest(&paths.codex_home);
+    let helper_ok = helper.is_file();
+    let hooks_path = codex_user_hooks_path(&paths.codex_home);
+    let hooks_ready = match inspect_codex_user_hooks(&hooks_path) {
+        Ok(None) => Ok(false),
+        Ok(Some(doc)) => aside_hooks_ready(&doc, &helper, &status),
+        Err(err) => return protected_codex_direct(client, err, paths, &mcp),
+    };
+    let hooks_ok = match hooks_ready {
+        Ok(v) => v,
+        Err(err) => return protected_codex_direct(client, err, paths, &mcp),
+    };
+    if matches!(mcp_state, GrokMcp::Ready) && features_ok && skill_ok && helper_ok && hooks_ok {
+        let mut r = SetupReport::base(
+            client,
+            SetupKind::InstalledPendingTrust,
+            "文件已核验。请在 Codex /hooks 中信任 Spellcast 的 SessionStart 与 UserPromptSubmit。",
+        );
+        r.hook_trust = Some(HookTrust::Unknown);
+        r.done.push(format!("MCP：{}", config_path.display()));
+        r.done.push(format!("Skill：{}", codex_skill_md(&paths.codex_home).display()));
+        r.done.push(format!("Hooks：{}", hooks_path.display()));
+        r.done.push("未调用 Codex CLI。".into());
+        r.done.push("未写 hook trust。".into());
+        r.not_done.push("请在 Codex /hooks 中信任后再新开任务。".into());
+        return locate_codex_direct(r, paths, &mcp);
+    }
+    let mut r = SetupReport::base(
+        client,
+        SetupKind::NotInstalled,
+        "尚未安装完整 Spellcast 接入。",
+    );
+    if matches!(mcp_state, GrokMcp::Ready) {
+        r.done.push("MCP 已写入。".into());
+    } else {
+        r.not_done.push("MCP 未写入。".into());
+    }
+    if skill_ok {
+        r.done.push("Skill 已安装。".into());
+    } else {
+        r.not_done.push("Skill 未安装。".into());
+    }
+    if hooks_ok && helper_ok && features_ok {
+        r.done.push("Hooks 已写入。".into());
+    } else {
+        r.not_done.push("Hooks 未写入。".into());
+    }
+    locate_codex_direct(r, paths, &mcp)
+}
+
+/// One-step Codex install: MCP + Skill + user `hooks.json`. Does not call `codex.exe`.
+pub fn codex_direct_install(client: &str, url: Option<&str>, paths: &SetupPaths) -> SetupReport {
+    let _lock = match paths.lock.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return SetupReport::base(client, SetupKind::Installing, "已有安装正在进行。");
+        }
+    };
+    let mut probe = codex_direct_status(client, url, paths);
+    if matches!(
+        probe.kind,
+        SetupKind::Unsupported
+            | SetupKind::Failed
+            | SetupKind::ConflictEndpoint
+            | SetupKind::ConflictCustom
+            | SetupKind::Installing
+    ) {
+        probe.not_done.push("安装未开始。".into());
+        return probe;
+    }
+    if probe.kind == SetupKind::InstalledPendingTrust && probe.installed {
+        probe.note = "已是当前接入，未重复写入。".into();
+        probe.done.push("重新检查只读文件，未调用 Codex CLI。".into());
+        return probe;
+    }
+    let mcp = match validate_loopback_mcp_url(
+        probe
+            .mcp_url
+            .as_deref()
+            .unwrap_or("http://127.0.0.1:47194/mcp"),
+    ) {
+        Ok(v) => v,
+        Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+    };
+    let status = match status_url_for_mcp(&mcp) {
+        Ok(v) => v,
+        Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+    };
+    let src = aside_helper_src(&paths.resource_root);
+    if let Err(err) = regular_file(&src, &format!("bin/{}", helper_name())) {
+        return SetupReport::base(client, SetupKind::MissingResources, &err);
+    }
+    let config_path = codex_config_path(&paths.codex_home);
+    let mcp_state = match inspect_grok_config(&config_path, &mcp) {
+        Ok(state) => state,
+        Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+    };
+    let mut backup = None;
+    if !matches!(mcp_state, GrokMcp::Ready) {
+        match configure::merge_and_commit_codex_toml(&config_path, &mcp) {
+            Ok(Some(path)) => backup = Some(path.display().to_string()),
+            Ok(None) => {}
+            Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+        }
+    }
+    match ensure_features_hooks(&config_path) {
+        Ok(Some(path)) => {
+            if backup.is_none() {
+                backup = Some(path.display().to_string());
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            let mut r = SetupReport::base(client, SetupKind::Failed, &err);
+            r.partial = true;
+            r.mcp_url = Some(mcp);
+            r.backup = backup;
+            r.done.push("MCP 已核对，hooks 开关未完成。".into());
+            return r;
+        }
+    }
+    if !configure::spellcast_skill_is_current(&codex_skill_md(&paths.codex_home)) {
+        match configure::install_skill_files(&codex_skill_md(&paths.codex_home)) {
+            Ok(Some(path)) => {
+                if backup.is_none() {
+                    backup = Some(path.display().to_string());
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                let mut r = SetupReport::base(client, SetupKind::Failed, &err);
+                r.partial = true;
+                r.mcp_url = Some(mcp);
+                r.backup = backup;
+                r.done.push("MCP 已核对，Skill 未完成。".into());
+                return r;
+            }
+        }
+    }
+    let helper = aside_helper_dest(&paths.codex_home);
+    match copy_aside_helper(&src, &helper) {
+        Ok(Some(path)) => {
+            if backup.is_none() {
+                backup = Some(path.display().to_string());
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            let mut r = SetupReport::base(client, SetupKind::Failed, &err);
+            r.partial = true;
+            r.mcp_url = Some(mcp);
+            r.backup = backup;
+            r.done.push("MCP 与 Skill 已核对，Hook helper 未完成。".into());
+            return r;
+        }
+    }
+    let hooks_path = codex_user_hooks_path(&paths.codex_home);
+    let existing = fs::read(&hooks_path).ok();
+    match merge_codex_user_hooks(existing.as_deref(), &helper, &status) {
+        Ok(body) => {
+            if existing.as_deref() != Some(body.as_bytes()) {
+                match configure::commit_with_backup(&hooks_path, body.as_bytes()) {
+                    Ok(Some(path)) => {
+                        if backup.is_none() {
+                            backup = Some(path.display().to_string());
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        let mut r = SetupReport::base(client, SetupKind::Failed, &err);
+                        r.partial = true;
+                        r.mcp_url = Some(mcp);
+                        r.backup = backup;
+                        r.done.push("MCP 与 Skill 已核对，hooks.json 未完成。".into());
+                        return r;
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            let mut r = SetupReport::base(client, SetupKind::Failed, &err);
+            r.partial = true;
+            r.mcp_url = Some(mcp);
+            r.backup = backup;
+            r.done.push("MCP 与 Skill 已核对，hooks.json 未完成。".into());
+            return r;
+        }
+    }
+    let mut r = codex_direct_status(client, Some(&mcp), paths);
+    if r.backup.is_none() {
+        r.backup = backup;
+    }
+    r.done.insert(0, "未调用 Codex CLI。".into());
+    r.done.insert(0, "未写 hook trust。".into());
+    r
+}
+
 fn status_inner(
     client: &str,
     url: Option<&str>,
@@ -3528,6 +4028,210 @@ enabled = ["cursor-bridge"]
             "[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:9/mcp\"\n"
         );
         assert!(!grok_dir.join("skills").join("spellcast").join("SKILL.md").exists());
+        let _ = fs::remove_dir_all(user);
+    }
+
+    fn collect_files(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        fn walk(dir: &Path, out: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if let Ok(bytes) = fs::read(&path) {
+                    out.insert(path, bytes);
+                }
+            }
+        }
+        if root.exists() {
+            walk(root, &mut out);
+        }
+        out
+    }
+
+    fn isolated_direct(label: &str) -> (PathBuf, PathBuf, PathBuf, SetupPaths) {
+        let user = temp_dir(label);
+        let codex = user.join(".codex");
+        let bundle = user.join("bundle");
+        write_bundle(&bundle, b"HELPER");
+        let mut p = paths(&user, &codex, &bundle);
+        p.cli = None;
+        p.skip_path_lookup = true;
+        (user, codex, bundle, p)
+    }
+
+    #[test]
+    fn codex_direct_check_without_cli_is_not_missing_cli() {
+        let (user, _codex, _bundle, mut p) = isolated_direct("direct-no-cli");
+        p.skip_path_lookup = false;
+        let before = collect_files(&user);
+        let r = codex_direct_status("codex", None, &p);
+        assert_eq!(r.kind, SetupKind::NotInstalled, "{:?}", r);
+        assert_ne!(r.kind, SetupKind::MissingCli);
+        assert!(r.complete_supported);
+        assert!(!r.installed);
+        assert_eq!(r.mcp_url.as_deref(), Some("http://127.0.0.1:47194/mcp"));
+        assert!(r.source_path.is_some(), "{:?}", r.source_path);
+        assert_eq!(collect_files(&user), before);
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn codex_direct_check_is_read_only_and_never_verified() {
+        let (user, codex, _bundle, p) = isolated_direct("direct-readonly");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "model = \"keep\"\n\n[mcp_servers.other]\nurl = \"http://keep\"\n",
+        )
+        .unwrap();
+        fs::write(codex.join("auth.json"), "{\"keep\":true}\n").unwrap();
+        let before = collect_files(&user);
+        let r = codex_direct_status("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(r.kind, SetupKind::NotInstalled, "{:?}", r);
+        assert_ne!(r.kind, SetupKind::MissingCli);
+        assert_ne!(r.kind, SetupKind::Verified);
+        assert_eq!(collect_files(&user), before);
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn codex_direct_install_then_check_is_pending_trust_without_cli() {
+        let (user, codex, _bundle, p) = isolated_direct("direct-install");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "model = \"keep\"\n\n[mcp_servers.other]\nurl = \"http://keep\"\nstartup_timeout_sec = 12\n\n[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:47194/mcp\"\nstartup_timeout_sec = 30\n",
+        )
+        .unwrap();
+        fs::write(codex.join("auth.json"), "{\"keep\":true}\n").unwrap();
+        fs::write(
+            codex.join("hooks.json"),
+            r#"{
+  "hooks": {
+    "Stop": [{ "hooks": [{ "type": "command", "command": "echo keep-stop" }] }]
+  }
+}
+"#,
+        )
+        .unwrap();
+
+        let installed = codex_direct_install("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(installed.kind, SetupKind::InstalledPendingTrust, "{:?}", installed);
+        assert!(installed.installed);
+        assert_eq!(installed.hook_trust, Some(HookTrust::Unknown));
+        assert_ne!(installed.kind, SetupKind::MissingCli);
+        assert_ne!(installed.kind, SetupKind::Verified);
+        assert!(installed.note.contains("信任") || installed.done.iter().any(|line| line.contains("未调用 Codex CLI")), "{:?}", installed);
+
+        let text = fs::read_to_string(codex.join("config.toml")).unwrap();
+        assert!(text.contains("model = \"keep\""));
+        assert!(text.contains("[mcp_servers.other]"));
+        assert!(text.contains("startup_timeout_sec = 12"));
+        assert!(text.contains("startup_timeout_sec = 30"));
+        assert!(text.contains("url = \"http://127.0.0.1:47194/mcp\""));
+        assert!(text.contains("hooks = true"));
+        assert_eq!(fs::read_to_string(codex.join("auth.json")).unwrap(), "{\"keep\":true}\n");
+        let hooks = fs::read_to_string(codex.join("hooks.json")).unwrap();
+        assert!(hooks.contains("echo keep-stop"), "{hooks}");
+        assert!(hooks.contains("spellcast-hook"), "{hooks}");
+        assert_eq!(
+            fs::read(codex.join("spellcast").join("hooks").join(helper_name())).unwrap(),
+            b"HELPER"
+        );
+        assert_eq!(
+            fs::read_to_string(codex.join("skills").join("spellcast").join("SKILL.md")).unwrap(),
+            configure::SPELLCAST_SKILL
+        );
+
+        let after_install = collect_files(&user);
+        let checked = codex_direct_status("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(checked.kind, SetupKind::InstalledPendingTrust, "{:?}", checked);
+        assert_eq!(checked.hook_trust, Some(HookTrust::Unknown));
+        assert_ne!(checked.kind, SetupKind::NotInstalled);
+        assert_ne!(checked.kind, SetupKind::MissingCli);
+        assert_ne!(checked.kind, SetupKind::Verified);
+        assert_eq!(collect_files(&user), after_install);
+
+        let again = codex_direct_install("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(again.kind, SetupKind::InstalledPendingTrust, "{:?}", again);
+        assert!(again.note.contains("未重复写入"), "{:?}", again.note);
+        assert_eq!(collect_files(&user), after_install);
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn codex_direct_writes_split_codex_home_not_user_dot_codex() {
+        let user = temp_dir("direct-split-user");
+        let codex = temp_dir("direct-split-codex");
+        let bundle = user.join("bundle");
+        write_bundle(&bundle, b"HELPER");
+        let mut p = paths(&user, &codex, &bundle);
+        p.cli = None;
+        p.skip_path_lookup = true;
+        let r = codex_direct_install("codex", None, &p);
+        assert_eq!(r.kind, SetupKind::InstalledPendingTrust, "{:?}", r);
+        assert!(codex.join("config.toml").is_file());
+        assert!(codex.join("hooks.json").is_file());
+        assert!(codex.join("skills").join("spellcast").join("SKILL.md").is_file());
+        assert!(!user.join(".codex").join("config.toml").exists());
+        assert!(!user.join(".codex").join("hooks.json").exists());
+        let checked = codex_direct_status("codex", None, &p);
+        assert_eq!(checked.kind, SetupKind::InstalledPendingTrust, "{:?}", checked);
+        let _ = fs::remove_dir_all(user);
+        let _ = fs::remove_dir_all(codex);
+    }
+
+    #[test]
+    fn codex_direct_protects_invalid_hooks_and_toml_on_check_and_install() {
+        let (user, codex, _bundle, p) = isolated_direct("direct-protect");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(codex.join("hooks.json"), "not-json").unwrap();
+        fs::write(codex.join("config.toml"), "model = \"keep\"\n").unwrap();
+        let before = collect_files(&user);
+        let checked = codex_direct_status("codex", None, &p);
+        assert_eq!(checked.kind, SetupKind::ConflictCustom, "{:?}", checked);
+        assert!(!checked.installed);
+        assert_ne!(checked.kind, SetupKind::NotInstalled);
+        assert_ne!(checked.kind, SetupKind::MissingCli);
+        assert_eq!(collect_files(&user), before);
+        let installed = codex_direct_install("codex", None, &p);
+        assert_eq!(installed.kind, SetupKind::ConflictCustom, "{:?}", installed);
+        assert!(!installed.installed);
+        assert_eq!(collect_files(&user), before);
+
+        fs::write(codex.join("hooks.json"), "{}\n").unwrap();
+        fs::write(codex.join("config.toml"), "this is : not toml").unwrap();
+        let toml_before = collect_files(&user);
+        let bad_toml = codex_direct_status("codex", None, &p);
+        assert_eq!(bad_toml.kind, SetupKind::ConflictCustom, "{:?}", bad_toml);
+        assert_eq!(collect_files(&user), toml_before);
+        let bad_install = codex_direct_install("codex", None, &p);
+        assert_eq!(bad_install.kind, SetupKind::ConflictCustom, "{:?}", bad_install);
+        assert_eq!(collect_files(&user), toml_before);
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn codex_direct_conflict_endpoint_does_not_overwrite() {
+        let (user, codex, _bundle, p) = isolated_direct("direct-conflict-url");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:9/mcp\"\n",
+        )
+        .unwrap();
+        let before = collect_files(&user);
+        let r = codex_direct_status("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(r.kind, SetupKind::ConflictEndpoint, "{:?}", r);
+        assert_eq!(collect_files(&user), before);
+        let installed = codex_direct_install("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(installed.kind, SetupKind::ConflictEndpoint, "{:?}", installed);
+        assert!(!installed.installed);
+        assert_eq!(collect_files(&user), before);
         let _ = fs::remove_dir_all(user);
     }
 

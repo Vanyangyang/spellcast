@@ -315,13 +315,6 @@ fn complete_setup_paths(app: &AppHandle) -> Result<complete_setup::SetupPaths, S
     complete_setup::default_paths(home, resource_root)
 }
 
-fn complete_setup_cli(paths: &complete_setup::SetupPaths) -> Option<complete_setup::ProcessCli> {
-    paths.cli.as_ref().map(|program| complete_setup::ProcessCli {
-        program: program.clone(),
-        timeout: paths.cli_timeout,
-    })
-}
-
 #[tauri::command]
 async fn complete_setup_status(
     app: AppHandle,
@@ -332,11 +325,11 @@ async fn complete_setup_status(
         return Ok(complete_setup::grok_deferred());
     }
     let paths = complete_setup_paths(&app)?;
-    let cli = complete_setup_cli(&paths);
     tauri::async_runtime::spawn_blocking(move || {
-        match &cli {
-            Some(cli) => complete_setup::status_with_cli(&client, url.as_deref(), &paths, cli),
-            None => complete_setup::status(&client, url.as_deref(), &paths),
+        if client == "codex" {
+            complete_setup::codex_direct_status(&client, url.as_deref(), &paths)
+        } else {
+            complete_setup::status(&client, url.as_deref(), &paths)
         }
     })
     .await
@@ -353,11 +346,11 @@ async fn complete_setup_install(
         return Ok(complete_setup::grok_deferred());
     }
     let paths = complete_setup_paths(&app)?;
-    let cli = complete_setup_cli(&paths);
     tauri::async_runtime::spawn_blocking(move || {
-        match cli {
-            Some(cli) => complete_setup::install(&client, url.as_deref(), &paths, &cli),
-            None => complete_setup::status(&client, url.as_deref(), &paths),
+        if client == "codex" {
+            complete_setup::codex_direct_install(&client, url.as_deref(), &paths)
+        } else {
+            complete_setup::status(&client, url.as_deref(), &paths)
         }
     })
     .await

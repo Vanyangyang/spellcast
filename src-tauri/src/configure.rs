@@ -377,6 +377,27 @@ fn merge_codex_toml(path: &Path, url: &str) -> Result<String, String> {
     Ok(doc.to_string())
 }
 
+pub(crate) fn merge_and_commit_codex_toml(path: &Path, url: &str) -> Result<Option<PathBuf>, String> {
+    commit_with_backup(path, merge_codex_toml(path, url)?.as_bytes())
+}
+
+pub(crate) fn install_skill_files(skill_md: &Path) -> Result<Option<PathBuf>, String> {
+    let dir = skill_md
+        .parent()
+        .ok_or_else(|| format!("Skill 路径没有父目录：{}", skill_md.display()))?;
+    let mut backup = None;
+    for (relative, contents) in skill_reference_files() {
+        let dest = dir.join(Path::new(relative));
+        if let Some(path) = commit_with_backup(&dest, contents.as_bytes())? {
+            backup = Some(path);
+        }
+    }
+    if let Some(path) = commit_with_backup(skill_md, SPELLCAST_SKILL.as_bytes())? {
+        backup = Some(path);
+    }
+    Ok(backup)
+}
+
 pub(crate) fn commit_with_backup(path: &Path, contents: &[u8]) -> Result<Option<PathBuf>, String> {
     if path.exists() {
         let meta = fs::symlink_metadata(path)
