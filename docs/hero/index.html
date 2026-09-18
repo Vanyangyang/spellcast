@@ -24,13 +24,16 @@
         position: relative;
         width: 1000px;
         height: 436px;
-        background: #07080c;
+        background:
+          radial-gradient(ellipse 320px 200px at 214px 286px, rgba(214, 184, 122, 0.11), transparent 68%),
+          radial-gradient(ellipse 260px 180px at 640px 168px, rgba(176, 154, 226, 0.055), transparent 70%),
+          #07080c;
       }
 
       .title {
         position: absolute;
         left: 40px;
-        top: 36px;
+        top: 34px;
         margin: 0;
         font-size: 34px;
         font-weight: 500;
@@ -44,11 +47,11 @@
 
       .wand-wrap {
         position: absolute;
-        left: 92px;
-        top: 236px;
-        width: 180px;
-        height: 120px;
-        transform-origin: 18px 96px;
+        left: 58px;
+        top: 188px;
+        width: 280px;
+        height: 170px;
+        transform-origin: 30px 124px;
       }
 
       .wand-svg {
@@ -60,10 +63,15 @@
         position: absolute;
         width: 188px;
         padding: 12px 16px 14px;
-        border-radius: 12px;
-        background: #f3efe4;
+        border-radius: 13px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.34), transparent 42%),
+          #f4efe4;
         color: #1b1820;
-        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.55),
+          0 1px 0 rgba(255, 248, 232, 0.08),
+          0 14px 28px rgba(0, 0, 0, 0.32);
       }
 
       .card .k {
@@ -88,23 +96,69 @@
         letter-spacing: 0.01em;
         word-spacing: 0.06em;
       }
+
+      .mote {
+        position: absolute;
+        width: 5px;
+        height: 5px;
+        margin: -2.5px 0 0 -2.5px;
+        border-radius: 50%;
+        background: #fff4d2;
+        box-shadow: 0 0 10px 3px rgba(240, 195, 106, 0.38);
+        pointer-events: none;
+        opacity: 0;
+      }
     </style>
   </head>
   <body>
     <div id="stage">
       <h1 class="title">Spellcast</h1>
       <div class="wand-wrap" id="wand">
-        <svg class="wand-svg" width="180" height="120" viewBox="0 0 180 120">
-          <g transform="rotate(-34 16 104)">
-            <rect x="8" y="99" width="108" height="10" rx="5" fill="#efe8d8" />
-            <circle cx="42" cy="104" r="4.2" fill="#6b5340" />
-            <circle cx="56" cy="104" r="4.2" fill="#6b5340" />
-            <circle cx="70" cy="104" r="4.2" fill="#6b5340" />
-            <circle cx="126" cy="104" r="12" fill="#c8b6f2" />
-            <circle cx="126" cy="104" r="4.5" fill="#f4f1ea" />
+        <svg class="wand-svg" width="280" height="170" viewBox="0 0 280 170">
+          <defs>
+            <linearGradient id="grip" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#5c4334" />
+              <stop offset="0.5" stop-color="#3a281e" />
+              <stop offset="1" stop-color="#1a120e" />
+            </linearGradient>
+            <linearGradient id="shaft" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#f8f0de" />
+              <stop offset="0.4" stop-color="#e2d0a8" />
+              <stop offset="1" stop-color="#b08958" />
+            </linearGradient>
+            <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#f3e0b0" />
+              <stop offset="0.5" stop-color="#c9a35a" />
+              <stop offset="1" stop-color="#7d5a24" />
+            </linearGradient>
+            <linearGradient id="gem" x1="0.12" y1="0.08" x2="0.92" y2="0.96">
+              <stop offset="0" stop-color="#fffaf3" />
+              <stop offset="0.28" stop-color="#ecd9ff" />
+              <stop offset="0.7" stop-color="#a888d4" />
+              <stop offset="1" stop-color="#5d478c" />
+            </linearGradient>
+            <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+              <stop offset="0" stop-color="#f0c36a" stop-opacity="0.55" />
+              <stop offset="0.45" stop-color="#d4b3ff" stop-opacity="0.16" />
+              <stop offset="1" stop-color="#f0c36a" stop-opacity="0" />
+            </radialGradient>
+          </defs>
+          <g transform="rotate(-28 28 124)">
+            <circle id="tip-glow" cx="202" cy="124" r="28" fill="url(#halo)" opacity="0.7" />
+            <rect x="14" y="116.2" width="39.2" height="15.6" rx="7.8" fill="url(#grip)" />
+            <rect x="52.4" y="115.2" width="4.6" height="17.6" rx="1.1" fill="url(#gold)" />
+            <path d="M56.8 116.8 L167.6 120.15 L167.6 127.85 L56.8 131.2 Z" fill="url(#shaft)" />
+            <path d="M58 117.55 L166.8 120.7" stroke="rgba(255,248,232,0.4)" stroke-width="0.9" fill="none" />
+            <path d="M165.8 118.1 L176.8 119.5 L176.8 128.5 L165.8 129.9 Z" fill="url(#gold)" />
+            <path fill="url(#gem)" d="M173.6 124 L187.8 110.8 L214.2 124 L187.8 137.2 Z" />
+            <path fill="rgba(255,255,255,0.42)" d="M176.8 124 L187.8 114.2 L198.4 124 Z" />
+            <path fill="none" stroke="rgba(255,248,236,0.28)" stroke-width="0.8" d="M173.6 124 L187.8 110.8 L214.2 124 L187.8 137.2 Z" />
           </g>
         </svg>
       </div>
+      <div class="mote" data-mote="0"></div>
+      <div class="mote" data-mote="1"></div>
+      <div class="mote" data-mote="2"></div>
       <article class="card" data-card="0">
         <div class="k">
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
@@ -134,15 +188,18 @@
       </article>
     </div>
     <script>
-      const DURATION = 4200;
+      const DURATION = 4800;
       const CARD_HOME = [
-        { x: 368, y: 148 },
-        { x: 598, y: 88 },
-        { x: 778, y: 190 },
+        { x: 372, y: 146 },
+        { x: 602, y: 86 },
+        { x: 780, y: 196 },
       ];
-      const ORIGIN = { x: 184, y: 274 };
+      const ORIGIN = { x: 262, y: 228 };
+      const CASTS = [640, 1680, 2680];
       const cards = [...document.querySelectorAll("[data-card]")];
+      const motes = [...document.querySelectorAll("[data-mote]")];
       const wand = document.getElementById("wand");
+      const tipGlow = document.getElementById("tip-glow");
 
       function clamp(v, a, b) {
         return Math.max(a, Math.min(b, v));
@@ -153,22 +210,57 @@
       function easeOut(t) {
         return 1 - (1 - t) ** 3;
       }
+      function easeInOut(t) {
+        return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+      }
+      function pulse(t, at, span = 420) {
+        const d = t - at;
+        if (d < 0 || d > span) return 0;
+        return Math.sin((d / span) * Math.PI) ** 1.15;
+      }
+
+      function wandAngle(t) {
+        if (t < 560) return -6 + easeInOut(range(t, 180, 560)) * -8;
+        if (t < 860) return -14 + easeOut(range(t, 560, 860)) * 18;
+        if (t < 1220) return 4 + easeInOut(range(t, 860, 1220)) * -7;
+        if (t < 1680) return -3;
+        if (t < 1900) return -3 + easeOut(range(t, 1680, 1900)) * 8;
+        if (t < 2160) return 5 + easeInOut(range(t, 1900, 2160)) * -8;
+        if (t < 2680) return -3;
+        if (t < 2900) return -3 + easeOut(range(t, 2680, 2900)) * 8;
+        if (t < 3180) return 5 + easeInOut(range(t, 2900, 3180)) * -8;
+        return -3;
+      }
 
       function apply(t) {
         t = ((t % DURATION) + DURATION) % DURATION;
-        const fade = 1 - range(t, 3600, 4000);
-        const wandIn = easeOut(range(t, 60, 360));
+        const fade = 1 - range(t, 4180, 4580);
         wand.style.opacity = String(fade);
-        wand.style.transform = `rotate(${-8 + wandIn * 10}deg)`;
+        wand.style.transform = `rotate(${wandAngle(t)}deg)`;
+        const glow = 0.16 + Math.max(pulse(t, CASTS[0]), pulse(t, CASTS[1]), pulse(t, CASTS[2])) * 0.62;
+        tipGlow.setAttribute("opacity", String(glow));
+
         cards.forEach((card, i) => {
-          const start = 240 + i * 240;
-          const p = easeOut(range(t, start, start + 480));
+          const start = CASTS[i];
+          const p = easeOut(range(t, start, start + 560));
           const x = ORIGIN.x + (CARD_HOME[i].x - ORIGIN.x) * p;
-          const y = ORIGIN.y + (CARD_HOME[i].y - ORIGIN.y) * p - Math.sin(p * Math.PI) * 18;
+          const y = ORIGIN.y + (CARD_HOME[i].y - ORIGIN.y) * p - Math.sin(p * Math.PI) * 26;
+          const hover = p >= 1 ? Math.sin((t / 900 + i * 1.1) * Math.PI) * 1.6 : 0;
           card.style.left = x + "px";
-          card.style.top = y + "px";
+          card.style.top = y + hover + "px";
           card.style.opacity = String(p * fade);
-          card.style.transform = `scale(${0.72 + 0.28 * p})`;
+          card.style.transform = `rotate(${(1 - p) * -7}deg) scale(${0.68 + 0.32 * p})`;
+        });
+
+        motes.forEach((mote, i) => {
+          const start = CASTS[i];
+          const p = easeOut(range(t, start, start + 380));
+          const visible = t >= start && t < start + 420 ? (1 - range(t, start + 220, start + 420)) * fade : 0;
+          const x = ORIGIN.x + (CARD_HOME[i].x - ORIGIN.x) * p * 0.42;
+          const y = ORIGIN.y + (CARD_HOME[i].y - ORIGIN.y) * p * 0.42 - Math.sin(p * Math.PI) * 10;
+          mote.style.left = x + "px";
+          mote.style.top = y + "px";
+          mote.style.opacity = String(visible);
         });
       }
 
