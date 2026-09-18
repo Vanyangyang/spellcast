@@ -17,7 +17,7 @@ const framesDir = path.join(root, "docs/hero/.frames");
 const WIDTH = 1000;
 const HEIGHT = 436;
 const FPS = 20;
-const DURATION_MS = 4200;
+const DURATION_MS = 4800;
 const FRAME_COUNT = Math.round((DURATION_MS / 1000) * FPS);
 
 const chrome =
@@ -71,7 +71,7 @@ await run("ffmpeg", [
   "-i",
   path.join(framesDir, "f%04d.png"),
   "-vf",
-  "scale=1000:436:flags=neighbor,palettegen=max_colors=160:stats_mode=full",
+  "scale=1000:436:flags=lanczos,palettegen=max_colors=192:stats_mode=full",
   palette,
 ]);
 await run("ffmpeg", [
@@ -83,7 +83,7 @@ await run("ffmpeg", [
   "-i",
   palette,
   "-lavfi",
-  "scale=1000:436:flags=neighbor[x];[x][1:v]paletteuse=dither=floyd_steinberg",
+  "scale=1000:436:flags=lanczos[x];[x][1:v]paletteuse=dither=sierra2_4a",
   "-loop",
   "0",
   outGif,
