@@ -11,13 +11,29 @@ Your agent keeps working on your task. Its asides appear as bubbles on the displ
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows only tested)](https://github.com/Vanyangyang/spellcast/releases/latest)
 
-https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
+## How it looks
 
-In this earlier demo I am building a calendar app with Codex CLI. Spellcast pops up ideas I had not thought of as desktop bubbles; I star one, drag it, and take it to the Canvas to brainstorm and develop it. Real Windows desktop, real mouse input, waits trimmed, nothing synthesized. Direct feedback to the original task still uses Codex Desktop.
+This is an early preview, not a finished product. The path that is **supported and tested today is Codex on Windows.** Unsigned macOS builds exist from CI; they have not been run.
 
-**Grok Build demo (September 2026):** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt launch](https://www.producthunt.com/products/spellcast). Grok Build adds a best-time record to a small platformer while Spellcast shows the three things it does: a bubble with Grok's side thought (starred, then opened on the Canvas), Grok's result written onto the Canvas, and a completion card with a spoken alert when the turn ends. Recorded on a real Windows desktop; clicks were scripted, waits trimmed. It was recorded with Grok Build because the Codex quota ran out on launch day; the Codex flow (deep-linking a card back into its task, Canvas send-back) is described below.
+**Bubbles and asides are passive.** There is no “spawn bubble” button. With **Show asides** on, the running agent session may produce a desktop bubble when something is worth saying — a roast, a reminder, or a spark. Silence is a valid outcome. Hooks do not guarantee a bubble on every turn.
 
-![Grok Build, the platformer, the Canvas and a completion card on one screen](docs/media/spellcast-grok-demo-overview.png)
+1. **Turn asides on for Codex**
+
+   ![Desktop settings: Show asides On, Codex selected. Bubbles appear only when progress is worth saying.](docs/media/02-desktop-asides-codex.png)
+
+   Desktop settings with **Show asides** On and **Codex** selected. The copy is explicit: when the task has new progress, a separate look runs once, with no chat history; only something worth saying becomes a bubble. Off keeps the main chat and Canvas only.
+
+2. **A result on the Canvas**
+
+   ![Canvas with an idea card under Needs sorting](docs/media/01-canvas-idea.png)
+
+   An idea under **Needs sorting**. The agent placed this on the Canvas when the thought was worth keeping — not because you pressed a spawn button.
+
+3. **Claim, note, and tell the agent**
+
+   ![Canvas Claim and Note card with the Tell the agent bar](docs/media/03-canvas-claim-note.png)
+
+   A **Claim** or **Note** on the Canvas, plus **Tell the agent**. That bar sends a follow-up into the session. It does not create bubbles.
 
 ## Where the preview stands
 

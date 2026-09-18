@@ -11,13 +11,29 @@
 
 [English](README.md) · 简体中文 · [下载体验版（仅 Windows 经过测试）](https://github.com/Vanyangyang/spellcast/releases/latest)
 
-https://github.com/user-attachments/assets/208efd3b-cd68-44b8-b45e-8468dcbcdf4b
+## 现在长什么样
 
-这段早期演示里，我正在用 Codex CLI 开发一个日历应用。Spellcast 把一些我没想到的点子以桌面气泡弹出来；我给其中一个点星、拖动，再带到画布上头脑风暴、继续发展。真实 Windows 桌面、真实鼠标操作，只剪掉了等待，没有任何合成。直接回发原任务仍使用 Codex Desktop。
+这是早期预览，不是成品。**当前支持并经过测试的路径是 Codex + Windows。** CI 会打出未签名的 macOS 包，但还没有人实际跑过。
 
-**Grok Build 演示（2026 年 9 月）：** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt 发布页](https://www.producthunt.com/products/spellcast)。Grok Build 给一个小平台跳跃游戏加“最佳用时”记录，Spellcast 同时展示三件事：Grok 的旁念以气泡浮出（点星保留、双击带上画布）、Grok 把结果写到画布上、回合结束时弹出完成卡片并语音提醒。真实 Windows 桌面录制，点击由脚本驱动，剪掉了等待。发布当天 Codex 额度用尽，所以这条用 Grok Build 录制；Codex 侧的流程（卡片回跳原任务、画布回发）见下文说明。
+**旁念和气泡是被动的。** 没有“生成气泡”按钮。打开**显示旁念**后，由正在进行的 Agent 会话在“有值得说的内容”时才可能冒出桌面气泡——一句吐槽、提醒或灵感。保持安静也是正常结果。Hooks 不保证每一轮都会冒泡。
 
-![Grok Build、平台游戏、画布和完成卡片同屏](docs/media/spellcast-grok-demo-overview.png)
+1. **先为 Codex 打开旁念**
+
+   ![桌面设置：显示旁念已开启，并选中 Codex。只有值得说的进展才会变成气泡。](docs/media/02-desktop-asides-codex.png)
+
+   桌面设置里 **显示旁念** 为开，并选中 **Codex**。文案写得很清楚：任务有新进展时另看一眼，不读聊天记录；有值得说的才冒泡。关掉则只留主对话和画布。
+
+2. **画布上的结果**
+
+   ![画布上「待整理」里的一条 Idea 卡片](docs/media/01-canvas-idea.png)
+
+   **待整理**里的一条 Idea。这是 Agent 觉得值得留下时放到画布上的，不是你按按钮生成的。
+
+3. **主张、批注，再说给 Agent**
+
+   ![画布上的主张与批注卡片，以及说给 Agent 输入栏](docs/media/03-canvas-claim-note.png)
+
+   画布上的 **主张** 或 **批注**，以及 **说给 Agent**。这条输入栏用来回会话，不会生成气泡。
 
 ## 体验版现在到哪了
 
