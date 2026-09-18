@@ -2182,8 +2182,14 @@ fn setup_lock_path(codex_home: &Path) -> PathBuf {
 fn is_lock_busy(err: &std::io::Error) -> bool {
     matches!(
         err.kind(),
-        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::AlreadyExists
-    ) || matches!(err.raw_os_error(), Some(32) | Some(33) | Some(167))
+        ErrorKind::WouldBlock
+            | ErrorKind::TimedOut
+            | ErrorKind::AlreadyExists
+            | ErrorKind::ResourceBusy
+    ) || matches!(
+        err.raw_os_error(),
+        Some(11) | Some(16) | Some(32) | Some(33) | Some(35) | Some(167)
+    )
 }
 
 fn same_existing_path(a: &Path, b: &Path) -> bool {
@@ -4252,6 +4258,9 @@ mod tests {
         assert!(!msg.contains("已终止本次 Job 内进程树"));
     }
 
+    // Nested libtest spawn of this Tauri --lib binary is Windows-CI proven.
+    // macOS children link AppKit/WebKit and never write the lock-ready file.
+    #[cfg(windows)]
     #[test]
     fn two_processes_contend_same_profile() {
         if std::env::var_os("SPELLCAST_SETUP_LOCK_CHILD").is_some() {

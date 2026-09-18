@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "spellcast-bridge"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "axum",
  "http-body-util",
@@ -1185,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "spellcast-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "schemars",
  "serde",
@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "spellcast-hook"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "fs2",
  "serde",
@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "spellcast-server"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "axum",
  "spellcast-bridge",
