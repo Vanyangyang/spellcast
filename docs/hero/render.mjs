@@ -17,7 +17,7 @@ const framesDir = path.join(root, "docs/hero/.frames");
 const WIDTH = 1000;
 const HEIGHT = 436;
 const FPS = 20;
-const DURATION_MS = 6300;
+const DURATION_MS = 4200;
 const FRAME_COUNT = Math.round((DURATION_MS / 1000) * FPS);
 
 const chrome =
