@@ -11,13 +11,9 @@
 
 [English](README.md) · 简体中文 · [下载体验版（仅 Windows 经过测试）](https://github.com/Vanyangyang/spellcast/releases/latest)
 
-https://github.com/user-attachments/assets/208efd3b-cd68-44b8-b45e-8468dcbcdf4b
-
-这段早期演示里，我正在用 Codex CLI 开发一个日历应用。Spellcast 把一些我没想到的点子以桌面气泡弹出来；我给其中一个点星、拖动，再带到画布上头脑风暴、继续发展。真实 Windows 桌面、真实鼠标操作，只剪掉了等待，没有任何合成。直接回发原任务仍使用 Codex Desktop。
-
 ## 现在长什么样
 
-这是早期预览，不是成品。**当前支持并经过测试的路径是 Codex + Windows。** CI 会打出未签名的 macOS 包，但还没有人实际跑过。下面更靠后的 Grok Build 录像只作为可选、历史演示保留。
+这是早期预览，不是成品。**当前支持并经过测试的路径是 Codex + Windows。** CI 会打出未签名的 macOS 包，但还没有人实际跑过。
 
 **旁念和气泡是被动的。** 没有“生成气泡”按钮。打开**显示旁念**后，由正在进行的 Agent 会话在“有值得说的内容”时才可能冒出桌面气泡——一句吐槽、提醒或灵感。保持安静也是正常结果。Hooks 不保证每一轮都会冒泡。
 
@@ -90,10 +86,6 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 使用期间需要保持 Spellcast 运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。**接入界面当前支持 Codex 与 Grok Build**，Cursor、Claude Code、Windsurf 和“其他”保留显示，但置灰且不可选。
 
 发布流程也会产出 Apple Silicon 和 Intel macOS 构建，但[只有 Windows 经过测试](docs/releases/0.4.2.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。
-
-**可选 / 历史记录 — Grok Build 演示（2026 年 9 月）：** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt 发布页](https://www.producthunt.com/products/spellcast)。Grok Build 给一个小平台跳跃游戏加“最佳用时”记录，Spellcast 同时展示旁念、画布结果和带语音的完成卡片。真实 Windows 桌面录制，点击由脚本驱动，剪掉了等待。发布当天 Codex 额度用尽，所以这条用 Grok Build 录制；Codex 侧的流程（卡片回跳原任务、画布回发）见上文。这不是当前主路径。
-
-![Grok Build、平台游戏、画布和完成卡片同屏](docs/media/spellcast-grok-demo-overview.png)
 
 ## 本地开发
 
