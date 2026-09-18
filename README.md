@@ -19,7 +19,7 @@ Your agent keeps working on your task. Its asides appear as bubbles on the displ
 
 This is an early preview, not a finished product. The path that is **supported and tested today is Codex on Windows.** Unsigned macOS builds exist from CI; they have not been run.
 
-**Bubbles and asides are passive.** There is no “spawn bubble” button. With **Show asides** on, the running agent session may produce a desktop bubble when something is worth saying — a roast, a reminder, or a spark. Silence is a valid outcome. Hooks do not guarantee a bubble on every turn. Steps 4 and 5 below are **Grok Build on Windows** shots of that same bubble and completion-notice UI, not Codex.
+**Bubbles and asides are passive.** There is no “spawn bubble” button. With **Show asides** on, the running agent session may produce a desktop bubble when something is worth saying — a roast, a reminder, or a spark. Silence is a valid outcome. Hooks do not guarantee a bubble on every turn. Step 4 is a **Grok Build** GIF of a TAKE/aside bubble animating in over a TUI session. Step 5 is a **Grok Build** completion-notice shot. Neither is Codex.
 
 1. **Turn asides on for Codex**
 
@@ -41,9 +41,9 @@ This is an early preview, not a finished product. The path that is **supported a
 
 4. **A floating desktop bubble**
 
-   ![A TAKE bubble floating over a Grok Build TUI session on Windows](docs/media/02-desktop-asides-grok.png)
+   ![A TAKE/aside bubble animating in over a Grok Build TUI session](docs/media/02-desktop-asides-bubble.gif)
 
-   A passive **TAKE** bubble over the real desktop / TUI. This shot is **Grok Build on Windows** — the same aside UI, not Codex. There is still no spawn button; the running session produced the bubble.
+   A **Grok Build** TUI session with a **TAKE**/aside bubble animating in. This is the same aside UI, not Codex. There is still no spawn button; the running session produced the bubble.
 
 5. **A completion notice**
 
