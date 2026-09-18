@@ -21,8 +21,8 @@ https://github.com/user-attachments/assets/208efd3b-cd68-44b8-b45e-8468dcbcdf4b
 
 ## 体验版现在到哪了
 
-- **已发布的构建：** [0.4.2](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.2)，含 Windows x64 安装包和 Apple Silicon、Intel 两个 `.dmg`。**只有 Windows 经过测试。** macOS 构建只是 CI 打包出来的未签名产物，没有人实际运行过，不保证可用。详见 [0.4.2 说明](docs/releases/0.4.2.md) 与 [0.4.0 工作台说明](docs/releases/0.4.0.md)。
-- **当前源码和已在本机测试的 Windows 运行版：** 可编辑画布组件、带名称的 Idea 组合、按工作区和任务整理、直接回发原 Codex Desktop 任务、Codex 一键接入（MCP + Hooks + Skill）、Grok Build 的 MCP + Skill 接入、按发送请求展示的回复面板。这些能力已包含在 0.4.2 体验版中。详见[运行验收](docs/reviews/2026-09-14-workbench-runtime-acceptance.md)、[回复面板](docs/reviews/2026-09-15-replies-inbox.md)和 [Grok Build 接入](docs/reviews/2026-09-18-grok-build-entry.md)。[仅 Codex 接入](docs/reviews/2026-09-15-codex-only-entry.md) 是当时的记录，不是当前界面。
+- **已发布的构建：** [0.4.4](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.4)，含 Windows x64 安装包。**只有 Windows 经过测试。** 发布流程也可能附上未签名的 macOS `.dmg`，不保证可用。详见 [0.4.4 说明](docs/releases/0.4.4.md) 与 [0.4.0 工作台说明](docs/releases/0.4.0.md)。
+- **当前源码和已在本机测试的 Windows 运行版：** 可编辑画布组件、带名称的 Idea 组合、按工作区和任务整理、直接回发原 Codex Desktop 任务、Codex 一键接入（MCP + Hooks + Skill）、按发送请求展示的回复面板。**Grok Build 接入将在未来版本加入**（设置里按钮仍显示，但不可安装）。详见[运行验收](docs/reviews/2026-09-14-workbench-runtime-acceptance.md)和[回复面板](docs/reviews/2026-09-15-replies-inbox.md)。[仅 Codex 接入](docs/reviews/2026-09-15-codex-only-entry.md)与当前安装界面一致。
 - **已知缺口：** 组件粒度尚未完全统一，一个组件不能同时属于多个 Idea，来源不完整的历史请求还存在分类遗漏；回复与历史界面仍需收敛。详见[下一步改善提示词](docs/next-improvement-prompt.md)。
 - **会有毛边。** 版式、文案和 Agent Skill 在各个体验版之间还会变，欢迎反馈和提 issue。
 
@@ -50,7 +50,7 @@ https://github.com/user-attachments/assets/208efd3b-cd68-44b8-b45e-8468dcbcdf4b
 
 Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不需要填写模型 API Key。Agent 继续使用原来的宿主和模型。
 
-明确发送后，Spellcast 通过运行中的 **Codex Desktop** 直接把请求交给对应任务，包括当前空闲的任务；结果可以回写原画布内容。应用关闭、任务删除、工具不可用或投递失败时，不会把请求显示为已成功执行。Codex 完整接入包含 MCP、Hooks 和行为说明，收到请求与实际完成分别记录。Grok Build 获得本机 MCP、Skill，以及通过其生命周期 `Stop` hook 触发的完成提醒；不能把画布请求回发到 Grok 会话。
+明确发送后，Spellcast 通过运行中的 **Codex Desktop** 直接把请求交给对应任务，包括当前空闲的任务；结果可以回写原画布内容。应用关闭、任务删除、工具不可用或投递失败时，不会把请求显示为已成功执行。Codex 完整接入包含 MCP、Hooks 和行为说明，收到请求与实际完成分别记录。本预览不含 Grok Build 接入。
 
 **完成提醒**会在你正在使用的显示器上以一张置顶小卡片出现，可选语音播报（“Codex 有任务完成了。” / “A Codex task is ready.”，跟随界面语言）。Codex 的卡片双击回跳到 Codex Desktop 里的原任务；Grok Build 的卡片双击关闭。界面提供简体中文和英文；卡片、语音短句和接入页跟随同一个设置。
 
@@ -60,18 +60,18 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 ## 开始使用
 
-![Spellcast 桌面设置：旁念开关、MCP 地址，以及 Codex / Grok Build 一步接入](docs/media/spellcast-desktop-settings.png)
+![Spellcast 桌面设置：旁念开关、MCP 地址，以及 Codex 一步接入](docs/media/spellcast-desktop-settings.png)
 
 1. 按下文从当前源码运行，或安装[公开的 Windows 体验版](https://github.com/Vanyangyang/spellcast/releases/latest)。
 2. **Codex：** 打开**设置**，保持选中 Codex，安装或更新 Spellcast 接入。一次写入 MCP、Hooks 和行为 Skill，并完成备份及冲突检查。然后重载 Codex，按接入状态中的提示信任 Hooks。
-3. **Grok Build：** 在同一设置页选择 Grok Build 并安装。这会把 MCP + Skill 写入 `~/.grok`（`config.toml` 的 `[mcp_servers.spellcast]` 与 `skills/spellcast/`），并在 `~/.grok/hooks/spellcast.json` 写入完成提醒 hook（生命周期 `Stop` hook，调用 Spellcast 的助手程序）。然后重载 Grok Build。这条路径不安装 Codex 插件，也不会把画布请求回发到 Grok 会话。
+3. **Grok Build 将在未来版本加入。** 设置里仍能看到按钮，但无法安装。
 4. 需要独立旁念时，在 Spellcast 中打开旁念开关（能自动拉起旁念的是 Codex Hooks）。
 
 接入详情：[docs/codex-observer-hooks.md](docs/codex-observer-hooks.md) 与包内 [hooks/INSTALL.md](hooks/INSTALL.md)。
 
-使用期间需要保持 Spellcast 运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。**接入界面当前支持 Codex 与 Grok Build**，Cursor、Claude Code、Windsurf 和“其他”保留显示，但置灰且不可选。
+使用期间需要保持 Spellcast 运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。**接入界面当前支持 Codex。** Grok Build、Cursor、Claude Code、Windsurf 和“其他”保留显示，但置灰且不可选。
 
-发布流程也会产出 Apple Silicon 和 Intel macOS 构建，但[只有 Windows 经过测试](docs/releases/0.4.2.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。
+发布流程也会产出 Apple Silicon 和 Intel macOS 构建，但[只有 Windows 经过测试](docs/releases/0.4.4.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。
 
 ## 本地开发
 

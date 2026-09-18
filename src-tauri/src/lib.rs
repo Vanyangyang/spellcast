@@ -284,11 +284,17 @@ fn configure_client(
     client: String,
     url: Option<String>,
 ) -> Result<configure::ClientConfig, String> {
+    if client == "grok" {
+        return Err("Grok Build 将在未来版本加入。".into());
+    }
     configure::write(&client, state.bridge.status().port, url.as_deref())
 }
 
 #[tauri::command]
 fn install_client_skill(client: String) -> Result<configure::SkillInstall, String> {
+    if client == "grok" {
+        return Err("Grok Build 将在未来版本加入。".into());
+    }
     configure::install_skill(&client)
 }
 
@@ -316,38 +322,18 @@ fn complete_setup_cli(paths: &complete_setup::SetupPaths) -> Option<complete_set
     })
 }
 
-struct GrokUnusedCli;
-
-impl complete_setup::PluginCli for GrokUnusedCli {
-    fn plugin_add(
-        &self,
-        _selector: &str,
-        _env: &complete_setup::CliEnv,
-    ) -> Result<complete_setup::CliOutcome, String> {
-        Err("Grok Build 接入不使用 Codex CLI。".into())
-    }
-
-    fn plugin_list(
-        &self,
-        _marketplace: &str,
-        _env: &complete_setup::CliEnv,
-    ) -> Result<complete_setup::CliOutcome, String> {
-        Err("Grok Build 接入不使用 Codex CLI。".into())
-    }
-}
-
 #[tauri::command]
 async fn complete_setup_status(
     app: AppHandle,
     client: String,
     url: Option<String>,
 ) -> Result<complete_setup::SetupReport, String> {
+    if client == "grok" {
+        return Ok(complete_setup::grok_deferred());
+    }
     let paths = complete_setup_paths(&app)?;
     let cli = complete_setup_cli(&paths);
     tauri::async_runtime::spawn_blocking(move || {
-        if client == "grok" {
-            return complete_setup::status(&client, url.as_deref(), &paths);
-        }
         match &cli {
             Some(cli) => complete_setup::status_with_cli(&client, url.as_deref(), &paths, cli),
             None => complete_setup::status(&client, url.as_deref(), &paths),
@@ -363,12 +349,12 @@ async fn complete_setup_install(
     client: String,
     url: Option<String>,
 ) -> Result<complete_setup::SetupReport, String> {
+    if client == "grok" {
+        return Ok(complete_setup::grok_deferred());
+    }
     let paths = complete_setup_paths(&app)?;
     let cli = complete_setup_cli(&paths);
     tauri::async_runtime::spawn_blocking(move || {
-        if client == "grok" {
-            return complete_setup::install(&client, url.as_deref(), &paths, &GrokUnusedCli);
-        }
         match cli {
             Some(cli) => complete_setup::install(&client, url.as_deref(), &paths, &cli),
             None => complete_setup::status(&client, url.as_deref(), &paths),

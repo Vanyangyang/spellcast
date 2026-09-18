@@ -87,4 +87,8 @@ export function applyDom(root: ParentNode = document) {
     const key = el.dataset.i18nAria as MessageKey | undefined;
     if (key) el.setAttribute("aria-label", t(key));
   });
+  root.querySelectorAll<HTMLElement>("[data-i18n-title]").forEach((el) => {
+    const key = el.dataset.i18nTitle as MessageKey | undefined;
+    if (key) el.title = t(key);
+  });
 }

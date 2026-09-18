@@ -365,14 +365,70 @@ pub fn grok_hook_command(root: &Path) -> String {
 
 pub fn grok_hook_path(grok_home: &Path) -> PathBuf { grok_home.join("hooks").join(GROK_HOOK_FILE) }
 
-fn grok_hook_document(root: &Path) -> Value {
+fn grok_notify_group(root: &Path) -> Value {
     serde_json::json!({
-        "hooks": {
-            "Stop": [{
-                "hooks": [{ "type": "command", "command": grok_hook_command(root), "timeout": 10 }]
-            }]
-        }
+        "hooks": [{ "type": "command", "command": grok_hook_command(root), "timeout": 10 }]
     })
+}
+
+fn group_runs_grok_notify(group: &Value) -> bool {
+    group["hooks"].as_array().is_some_and(|hooks| {
+        hooks.iter().any(|hook| {
+            hook["command"].as_str().is_some_and(|c| c.contains(GROK_NOTIFY_FLAG))
+        })
+    })
+}
+
+/// Merge our `Stop` group into an existing hook file. Other events, other Stop groups, and
+/// unknown top-level keys stay. Invalid JSON is refused so a user file is never replaced blindly.
+fn merge_grok_hook_file(existing: Option<&[u8]>, root: &Path) -> Result<String, String> {
+    let mut doc = match existing {
+        None | Some(b"") => serde_json::json!({ "hooks": {} }),
+        Some(bytes) => serde_json::from_slice(bytes)
+            .map_err(|e| format!("~/.grok/hooks/spellcast.json 不是有效 JSON，已保护：{e}"))?,
+    };
+    let Some(root_obj) = doc.as_object_mut() else {
+        return Err("~/.grok/hooks/spellcast.json 顶层不是对象，已保护。".into());
+    };
+    let hooks = root_obj.entry("hooks".to_string()).or_insert_with(|| serde_json::json!({}));
+    let Some(hooks_map) = hooks.as_object_mut() else {
+        return Err("~/.grok/hooks/spellcast.json 的 hooks 不是对象，已保护。".into());
+    };
+    match hooks_map.get_mut("Stop") {
+        None => {
+            hooks_map.insert("Stop".into(), serde_json::json!([grok_notify_group(root)]));
+        }
+        Some(Value::Array(arr)) => {
+            arr.retain(|group| !group_runs_grok_notify(group));
+            arr.push(grok_notify_group(root));
+        }
+        Some(_) => return Err("~/.grok/hooks/spellcast.json 的 hooks.Stop 不是数组，已保护。".into()),
+    }
+    Ok(serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())? + "\n")
+}
+
+fn strip_grok_notify_from_hook_file(existing: &[u8]) -> Result<Option<String>, String> {
+    let mut doc: Value = serde_json::from_slice(existing)
+        .map_err(|e| format!("~/.grok/hooks/spellcast.json 不是有效 JSON，已保护：{e}"))?;
+    let Some(hooks_map) = doc.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return Ok(Some(String::from_utf8_lossy(existing).into_owned()));
+    };
+    let mut changed = false;
+    if let Some(Value::Array(arr)) = hooks_map.get_mut("Stop") {
+        let before = arr.len();
+        arr.retain(|group| !group_runs_grok_notify(group));
+        changed = arr.len() != before;
+        if arr.is_empty() {
+            hooks_map.remove("Stop");
+        }
+    }
+    if !changed {
+        return Ok(Some(String::from_utf8_lossy(existing).into_owned()));
+    }
+    if hooks_map.is_empty() && doc.as_object().is_some_and(|o| o.len() == 1 && o.contains_key("hooks")) {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())? + "\n"))
 }
 
 fn hook_file_command(path: &Path) -> Option<String> {
@@ -425,7 +481,8 @@ pub fn install_grok(grok_home: &Path, root: &Path, executable: &Path) -> Result<
     }
     let hook_path = grok_hook_path(grok_home);
     fs::create_dir_all(hook_path.parent().unwrap_or(grok_home)).map_err(|e| e.to_string())?;
-    let body = serde_json::to_string_pretty(&grok_hook_document(root)).map_err(|e| e.to_string())? + "\n";
+    let existing = fs::read(&hook_path).ok();
+    let body = merge_grok_hook_file(existing.as_deref(), root)?;
     crate::configure::commit_with_backup(&hook_path, body.as_bytes())?;
     remove_legacy_notification_hook(grok_home)?;
     Ok(format!("已安装 Grok Build 完成通知：{}", hook_path.display()))
@@ -434,7 +491,13 @@ pub fn install_grok(grok_home: &Path, root: &Path, executable: &Path) -> Result<
 pub fn uninstall_grok(grok_home: &Path) -> Result<String, String> {
     let hook_path = grok_hook_path(grok_home);
     let had_file = hook_file_command(&hook_path).is_some();
-    if had_file { fs::remove_file(&hook_path).map_err(|e| e.to_string())?; }
+    if had_file {
+        let bytes = fs::read(&hook_path).map_err(|e| e.to_string())?;
+        match strip_grok_notify_from_hook_file(&bytes)? {
+            None => fs::remove_file(&hook_path).map_err(|e| e.to_string())?,
+            Some(rest) => { crate::configure::commit_with_backup(&hook_path, rest.as_bytes())?; }
+        }
+    }
     let had_legacy = remove_legacy_notification_hook(grok_home)?;
     if !had_file && !had_legacy { return Err("Grok 里没有 Spellcast 完成通知，未修改。".into()); }
     Ok("已移除 Grok Build 完成通知。".into())
@@ -614,6 +677,43 @@ mod tests {
         let spaced = grok_hook_command(Path::new("C:\\Users\\Jane Doe\\.codex\\spellcast\\completions"));
         assert!(spaced.contains("\"C:/Users/Jane Doe/.codex/spellcast/completions/spellcast-notify"), "{spaced}");
         if cfg!(windows) { assert!(spaced.starts_with("& \""), "{spaced}"); }
+        fs::remove_dir_all(p).unwrap();
+    }
+
+    #[test]
+    fn grok_hook_install_merges_stop_and_refuses_to_clobber_user_json() {
+        let p=dir(); let home=p.join("grok"); fs::create_dir_all(home.join("hooks")).unwrap();
+        let root=p.join("completion"); let exe=p.join("fake.exe"); fs::write(&exe,b"helper").unwrap();
+        let user_hook = serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "SessionStart": [{ "hooks": [{ "type": "command", "command": "echo keep-session" }] }],
+                "Stop": [
+                    { "hooks": [{ "type": "command", "command": "echo keep-stop" }] }
+                ]
+            }
+        });
+        fs::write(home.join("hooks").join("spellcast.json"), serde_json::to_string_pretty(&user_hook).unwrap()).unwrap();
+        fs::write(home.join("hooks").join("user-other.json"), "{\"keep\":true}\n").unwrap();
+        install_grok(&home,&root,&exe).unwrap();
+        let doc: Value = serde_json::from_str(&fs::read_to_string(grok_hook_path(&home)).unwrap()).unwrap();
+        assert_eq!(doc["version"], 1);
+        assert_eq!(doc["hooks"]["SessionStart"][0]["hooks"][0]["command"], "echo keep-session");
+        let stop = doc["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"][0]["command"], "echo keep-stop");
+        assert!(stop[1]["hooks"][0]["command"].as_str().unwrap().contains("--grok-notify"));
+        assert_eq!(fs::read_to_string(home.join("hooks").join("user-other.json")).unwrap(), "{\"keep\":true}\n");
+        uninstall_grok(&home).unwrap();
+        let after: Value = serde_json::from_str(&fs::read_to_string(grok_hook_path(&home)).unwrap()).unwrap();
+        assert_eq!(after["version"], 1);
+        assert_eq!(after["hooks"]["SessionStart"][0]["hooks"][0]["command"], "echo keep-session");
+        assert_eq!(after["hooks"]["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(after["hooks"]["Stop"][0]["hooks"][0]["command"], "echo keep-stop");
+        fs::write(grok_hook_path(&home), "not-json").unwrap();
+        let err = install_grok(&home,&root,&exe).unwrap_err();
+        assert!(err.contains("已保护"), "{err}");
+        assert_eq!(fs::read_to_string(grok_hook_path(&home)).unwrap(), "not-json");
         fs::remove_dir_all(p).unwrap();
     }
 }

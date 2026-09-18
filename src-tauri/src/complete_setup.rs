@@ -1970,6 +1970,18 @@ fn locate_grok(mut r: SetupReport, mcp: &str) -> SetupReport {
     r
 }
 
+/// Settings no longer offers Grok Build install. Library install helpers stay for a later release.
+pub fn grok_deferred() -> SetupReport {
+    let mut r = SetupReport::base(
+        "grok",
+        SetupKind::Unsupported,
+        "Grok Build 将在未来版本加入。",
+    );
+    r.complete_supported = false;
+    r.not_done.push("安装入口已关闭，未写入配置。".into());
+    r
+}
+
 fn grok_status(client: &str, url: Option<&str>, paths: &SetupPaths) -> SetupReport {
     let mcp = match url
         .map(str::trim)
@@ -2075,37 +2087,54 @@ fn grok_install_inner(client: &str, url: Option<&str>, paths: &SetupPaths) -> Se
         Ok(v) => v,
         Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
     };
-    let written = match configure::write_for_home(client, &paths.user_home, &mcp) {
-        Ok(cfg) => cfg,
+    let grok_home = paths.user_home.join(".grok");
+    let skill_md = grok_skill_root(&paths.user_home).join("SKILL.md");
+    let mcp_state = match inspect_grok_config(&grok_config_path(&paths.user_home), &mcp) {
+        Ok(state) => state,
         Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
     };
-    let skill = match configure::install_skill_for_home(client, &paths.user_home) {
-        Ok(installed) => installed,
-        Err(err) => {
+    let mut backup = None;
+    if !matches!(mcp_state, GrokMcp::Ready) {
+        match configure::write_for_home(client, &paths.user_home, &mcp) {
+            Ok(cfg) => backup = cfg.backup,
+            Err(err) => return SetupReport::base(client, SetupKind::Failed, &err),
+        }
+    }
+    if !configure::spellcast_skill_is_current(&skill_md) {
+        match configure::install_skill_for_home(client, &paths.user_home) {
+            Ok(installed) => {
+                if backup.is_none() {
+                    backup = installed.backup;
+                }
+            }
+            Err(err) => {
+                let mut r = SetupReport::base(client, SetupKind::Failed, &err);
+                r.partial = true;
+                r.mcp_url = Some(mcp);
+                r.done.push("MCP 已核对，Skill 未完成。".into());
+                r.backup = backup;
+                return r;
+            }
+        }
+    }
+    // Grok Build's Stop lifecycle hook (~/.grok/hooks/spellcast.json) is the completion signal, like Codex notify.
+    if !crate::completion_hook::grok_hook_installed(&grok_home, &paths.completion_root) {
+        if let Err(err) = crate::completion_hook::install_grok(
+            &grok_home,
+            &paths.completion_root,
+            &paths.notify_helper,
+        ) {
             let mut r = SetupReport::base(client, SetupKind::Failed, &err);
             r.partial = true;
             r.mcp_url = Some(mcp);
-            r.done.push("MCP 已写入，Skill 未完成。".into());
-            r.backup = written.backup;
+            r.done.push("MCP 与 Skill 已核对，完成通知未完成。".into());
+            r.backup = backup;
             return r;
         }
-    };
-    // Grok Build's Stop lifecycle hook (~/.grok/hooks/spellcast.json) is the completion signal, like Codex notify.
-    if let Err(err) = crate::completion_hook::install_grok(
-        &paths.user_home.join(".grok"),
-        &paths.completion_root,
-        &paths.notify_helper,
-    ) {
-        let mut r = SetupReport::base(client, SetupKind::Failed, &err);
-        r.partial = true;
-        r.mcp_url = Some(mcp);
-        r.done.push("MCP 与 Skill 已写入，完成通知未完成。".into());
-        r.backup = written.backup.or(skill.backup);
-        return r;
     }
     let mut r = grok_status(client, Some(&mcp), paths);
     if r.backup.is_none() {
-        r.backup = written.backup.or(skill.backup);
+        r.backup = backup;
     }
     r.done.insert(0, "未调用 Codex CLI。".into());
     r.done.insert(0, "未写 hook trust。".into());
@@ -2927,6 +2956,124 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    /// Snapshot of the operator's live `~/.grok/config.toml` (LF, trailing newline).
+    const LIVE_GROK_CONFIG: &str = r#"disabled_mcp_servers = ["notion"]
+
+[cli]
+installer = "internal"
+channel = "alpha"
+auto_update = true
+
+[marketplace]
+official_marketplace_auto_installed = true
+default_skills_installs_purged = true
+
+[[marketplace.sources]]
+name = "xAI Official"
+git = "https://github.com/xai-org/plugin-marketplace.git"
+
+[[marketplace.sources]]
+name = "cursor-bridge"
+git = "https://github.com/Vanyangyang/cursor-bridge.git"
+
+[ui]
+max_thoughts_width = 120
+fork_secondary_model = "grok-build"
+yolo = false
+compact_mode = false
+permission_mode = "always-approve"
+screen_mode = "fullscreen"
+show_thinking_blocks = true
+scroll_speed = 80
+scroll_lines = 4
+collapsed_edit_blocks = true
+
+[ui.notifications]
+method = "auto"
+condition = "always"
+idle_threshold_secs = 0
+events = [
+    "turn_complete",
+    "task_complete",
+    "agent_error",
+]
+
+[[ui.notifications.hooks]]
+command = "powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File C:/Users/Administrator/.grok/hooks/notify-task-complete.ps1"
+events = [
+    "turn_complete",
+    "task_complete",
+    "agent_error",
+]
+only_unfocused = false
+timeout_secs = 20
+
+[compat.claude]
+hooks = false
+
+[mcp_servers.ai-game-developer]
+url = "http://127.0.0.1:22769"
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+
+[mcp_servers.spellcast]
+enabled = true
+url = "http://127.0.0.1:47194/mcp"
+
+[skills]
+paths = []
+ignore = []
+disabled = [
+    "comfyui-workflow",
+    "comfyui-cloud",
+]
+server_skill_dirs = []
+bundled_skill_dirs = []
+
+[models]
+default = "grok-4.6"
+default_reasoning_effort = "xhigh"
+
+[privacy]
+privacy_banner_acked = "2026-08-13T07:58:34Z"
+
+[plugins]
+enabled = ["cursor-bridge"]
+"#;
+
+    fn live_grok_home() -> PathBuf {
+        std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Users\Administrator"))
+            .join(".grok")
+    }
+
+    fn snapshot_live_grok_user_files() -> Vec<(PathBuf, Vec<u8>)> {
+        let grok = live_grok_home();
+        [
+            grok.join("config.toml"),
+            grok.join("hooks").join("spellcast.json"),
+            grok.join("hooks").join("notify-task-complete.ps1"),
+            grok.join("skills").join("spellcast").join("SKILL.md"),
+            grok.join("skills").join("spellcast").join("references").join("asides.md"),
+        ]
+        .into_iter()
+        .filter_map(|path| fs::read(&path).ok().map(|bytes| (path, bytes)))
+        .collect()
+    }
+
+    fn assert_live_grok_user_files_untouched(before: &[(PathBuf, Vec<u8>)]) {
+        for (path, bytes) in before {
+            assert_eq!(
+                fs::read(path).unwrap_or_default(),
+                *bytes,
+                "live Grok file was mutated: {}",
+                path.display()
+            );
+        }
+    }
+
     fn temp_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "spellcast-{label}-{}-{}",
@@ -3117,6 +3264,11 @@ mod tests {
             assert!(!r.installed);
             assert!(!r.complete_supported);
         }
+        let deferred = grok_deferred();
+        assert_eq!(deferred.kind, SetupKind::Unsupported);
+        assert!(!deferred.complete_supported);
+        assert!(!deferred.installed);
+        assert!(deferred.note.contains("未来版本"), "{:?}", deferred.note);
     }
 
     struct PanicCli;
@@ -3200,6 +3352,155 @@ mod tests {
         let again = install("grok", Some("http://127.0.0.1:47194/mcp"), &p, &PanicCli);
         assert_eq!(again.kind, SetupKind::Verified);
         assert!(again.note.contains("未重复写入"));
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn grok_install_does_not_touch_user_hooks_skills_or_other_mcp() {
+        let live = snapshot_live_grok_user_files();
+        let user = temp_dir("grok-preserve");
+        let bundle = user.join("bundle");
+        write_bundle(&bundle, b"HELPER");
+        let grok_dir = user.join(".grok");
+        fs::create_dir_all(grok_dir.join("hooks")).unwrap();
+        fs::create_dir_all(grok_dir.join("skills").join("user-own")).unwrap();
+        fs::create_dir_all(grok_dir.join("skills").join("spellcast").join("references")).unwrap();
+        let config = r#"disabled_mcp_servers = ["notion"]
+
+[marketplace]
+official_marketplace_auto_installed = true
+
+[[marketplace.sources]]
+name = "xAI Official"
+git = "https://github.com/xai-org/plugin-marketplace.git"
+
+[[marketplace.sources]]
+name = "cursor-bridge"
+git = "https://github.com/Vanyangyang/cursor-bridge.git"
+
+[ui]
+permission_mode = "always-approve"
+
+[ui.notifications]
+method = "auto"
+
+[[ui.notifications.hooks]]
+command = "powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File C:/Users/Administrator/.grok/hooks/notify-task-complete.ps1"
+events = ["turn_complete", "task_complete", "agent_error"]
+only_unfocused = false
+timeout_secs = 20
+
+[mcp_servers.ai-game-developer]
+url = "http://127.0.0.1:22769"
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+
+[skills]
+disabled = ["comfyui-workflow", "comfyui-cloud"]
+
+[models]
+default = "grok-4.6"
+
+[plugins]
+enabled = ["cursor-bridge"]
+"#;
+        fs::write(grok_dir.join("config.toml"), config).unwrap();
+        fs::write(grok_dir.join("hooks").join("notify-task-complete.ps1"), b"user-ps1").unwrap();
+        fs::write(grok_dir.join("hooks").join("user-other.json"), "{\"keep\":true}\n").unwrap();
+        fs::write(grok_dir.join("skills").join("user-own").join("SKILL.md"), "mine").unwrap();
+        fs::write(grok_dir.join("skills").join("spellcast").join("notes-keep.txt"), "leave me").unwrap();
+        let mut p = paths(&user, &user.join(".codex"), &bundle);
+        p.cli = None;
+        p.skip_path_lookup = true;
+        let installed = install("grok", Some("http://127.0.0.1:47194/mcp"), &p, &PanicCli);
+        assert_eq!(installed.kind, SetupKind::Verified, "{:?}", installed);
+        let text = fs::read_to_string(grok_dir.join("config.toml")).unwrap();
+        assert!(text.contains("notify-task-complete.ps1"), "{text}");
+        assert!(text.contains("only_unfocused = false"));
+        assert!(text.contains("timeout_secs = 20"));
+        assert!(text.contains("name = \"xAI Official\""));
+        assert!(text.contains("name = \"cursor-bridge\""));
+        assert!(text.contains("url = \"http://127.0.0.1:22769\""));
+        assert!(text.contains("startup_timeout_sec = 30"));
+        assert!(text.contains("tool_timeout_sec = 300"));
+        assert!(text.contains("disabled = [\"comfyui-workflow\", \"comfyui-cloud\"]"));
+        assert!(text.contains("enabled = [\"cursor-bridge\"]"));
+        assert!(text.contains("default = \"grok-4.6\""));
+        assert!(text.contains("permission_mode = \"always-approve\""));
+        assert!(text.contains("disabled_mcp_servers = [\"notion\"]"));
+        assert!(!text.contains("--grok-notify"), "{text}");
+        assert_eq!(fs::read_to_string(grok_dir.join("hooks").join("notify-task-complete.ps1")).unwrap(), "user-ps1");
+        assert_eq!(fs::read_to_string(grok_dir.join("hooks").join("user-other.json")).unwrap(), "{\"keep\":true}\n");
+        assert_eq!(fs::read_to_string(grok_dir.join("skills").join("user-own").join("SKILL.md")).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(grok_dir.join("skills").join("spellcast").join("notes-keep.txt")).unwrap(), "leave me");
+        let hook = fs::read_to_string(grok_dir.join("hooks").join("spellcast.json")).unwrap();
+        assert!(hook.contains("--grok-notify"), "{hook}");
+        assert_live_grok_user_files_untouched(&live);
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn grok_install_does_not_rewrite_ready_mcp_or_current_skill() {
+        let live = snapshot_live_grok_user_files();
+        let user = temp_dir("grok-hook-only");
+        let bundle = user.join("bundle");
+        write_bundle(&bundle, b"HELPER");
+        let grok_dir = user.join(".grok");
+        fs::create_dir_all(grok_dir.join("hooks")).unwrap();
+        fs::create_dir_all(grok_dir.join("sessions").join("keep")).unwrap();
+        fs::create_dir_all(grok_dir.join("memory-v2")).unwrap();
+        fs::write(grok_dir.join("config.toml"), LIVE_GROK_CONFIG).unwrap();
+        fs::write(grok_dir.join("hooks").join("notify-task-complete.ps1"), b"user-ps1").unwrap();
+        fs::write(grok_dir.join("hooks").join("user-other.json"), "{\"keep\":true}\n").unwrap();
+        fs::write(
+            grok_dir.join("hooks").join("spellcast.json"),
+            r#"{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "echo keep-session" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "echo keep-stop" }] }]
+  }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(grok_dir.join("sessions").join("keep").join("summary.json"), "user-session").unwrap();
+        fs::write(grok_dir.join("models_cache.json"), "cache").unwrap();
+        fs::write(grok_dir.join("memory-v2").join("MEMORY.md"), "remember").unwrap();
+        configure::install_skill_for_home("grok", &user).unwrap();
+        let skill = grok_dir.join("skills").join("spellcast");
+        fs::write(skill.join("notes-keep.txt"), "leave me").unwrap();
+        fs::create_dir_all(grok_dir.join("skills").join("user-own")).unwrap();
+        fs::write(grok_dir.join("skills").join("user-own").join("SKILL.md"), "mine").unwrap();
+        let config_before = fs::read(grok_dir.join("config.toml")).unwrap();
+        let skill_before = fs::read(skill.join("SKILL.md")).unwrap();
+        let asides_before = fs::read(skill.join("references").join("asides.md")).unwrap();
+        let mut p = paths(&user, &user.join(".codex"), &bundle);
+        p.cli = None;
+        p.skip_path_lookup = true;
+        let installed = install("grok", Some("http://127.0.0.1:47194/mcp"), &p, &PanicCli);
+        assert_eq!(installed.kind, SetupKind::Verified, "{:?}", installed);
+        assert_eq!(fs::read(grok_dir.join("config.toml")).unwrap(), config_before);
+        assert_eq!(fs::read(skill.join("SKILL.md")).unwrap(), skill_before);
+        assert_eq!(fs::read(skill.join("references").join("asides.md")).unwrap(), asides_before);
+        assert!(!skill.join("SKILL.md.spellcast.bak").exists());
+        assert_eq!(fs::read_to_string(skill.join("notes-keep.txt")).unwrap(), "leave me");
+        assert_eq!(fs::read_to_string(grok_dir.join("skills").join("user-own").join("SKILL.md")).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(grok_dir.join("hooks").join("notify-task-complete.ps1")).unwrap(), "user-ps1");
+        assert_eq!(fs::read_to_string(grok_dir.join("hooks").join("user-other.json")).unwrap(), "{\"keep\":true}\n");
+        assert_eq!(fs::read_to_string(grok_dir.join("sessions").join("keep").join("summary.json")).unwrap(), "user-session");
+        assert_eq!(fs::read_to_string(grok_dir.join("models_cache.json")).unwrap(), "cache");
+        assert_eq!(fs::read_to_string(grok_dir.join("memory-v2").join("MEMORY.md")).unwrap(), "remember");
+        let hook: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(grok_dir.join("hooks").join("spellcast.json")).unwrap()).unwrap();
+        assert_eq!(hook["version"], 1);
+        assert_eq!(hook["hooks"]["SessionStart"][0]["hooks"][0]["command"], "echo keep-session");
+        let stop = hook["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"][0]["command"], "echo keep-stop");
+        assert!(stop[1]["hooks"][0]["command"].as_str().unwrap().contains("--grok-notify"));
+        assert_live_grok_user_files_untouched(&live);
         let _ = fs::remove_dir_all(user);
     }
 

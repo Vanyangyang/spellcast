@@ -298,12 +298,58 @@ fn merge_json(path: &Path, url: &str, url_key: &str, include_type: bool) -> Resu
     Ok(rendered)
 }
 
+fn spellcast_toml_ready(doc: &DocumentMut, url: &str) -> bool {
+    let Some(entry) = doc
+        .get("mcp_servers")
+        .and_then(|servers| servers.get("spellcast"))
+        .and_then(Item::as_table)
+    else {
+        return false;
+    };
+    let enabled = entry
+        .get("enabled")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_bool())
+        == Some(true);
+    let found = entry
+        .get("url")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        == Some(url);
+    let residue = ["command", "args", "type"]
+        .iter()
+        .any(|key| entry.contains_key(key));
+    enabled && found && !residue
+}
+
+/// True when `skills/spellcast` already has the bundled Skill files, so install can skip a rewrite.
+pub(crate) fn spellcast_skill_is_current(skill_md: &Path) -> bool {
+    let Some(dir) = skill_md.parent() else {
+        return false;
+    };
+    match fs::read(skill_md) {
+        Ok(bytes) if bytes == SPELLCAST_SKILL.as_bytes() => {}
+        _ => return false,
+    }
+    skill_reference_files().iter().all(|(relative, contents)| {
+        fs::read(dir.join(Path::new(relative)))
+            .ok()
+            .as_deref()
+            == Some(contents.as_bytes())
+    })
+}
+
 fn merge_codex_toml(path: &Path, url: &str) -> Result<String, String> {
     let mut doc = if path.exists() {
         let text =
             fs::read_to_string(path).map_err(|err| format!("读不了 {}：{err}", path.display()))?;
-        text.parse::<DocumentMut>()
-            .map_err(|err| format!("{} 不是有效 TOML，未写入：{err}", path.display()))?
+        let parsed = text
+            .parse::<DocumentMut>()
+            .map_err(|err| format!("{} 不是有效 TOML，未写入：{err}", path.display()))?;
+        if spellcast_toml_ready(&parsed, url) {
+            return Ok(text);
+        }
+        parsed
     } else {
         DocumentMut::new()
     };
@@ -405,6 +451,92 @@ fn unique_sibling(path: &Path, suffix: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Snapshot of the operator's live `~/.grok/config.toml` (LF, trailing newline).
+    const LIVE_GROK_CONFIG: &str = r#"disabled_mcp_servers = ["notion"]
+
+[cli]
+installer = "internal"
+channel = "alpha"
+auto_update = true
+
+[marketplace]
+official_marketplace_auto_installed = true
+default_skills_installs_purged = true
+
+[[marketplace.sources]]
+name = "xAI Official"
+git = "https://github.com/xai-org/plugin-marketplace.git"
+
+[[marketplace.sources]]
+name = "cursor-bridge"
+git = "https://github.com/Vanyangyang/cursor-bridge.git"
+
+[ui]
+max_thoughts_width = 120
+fork_secondary_model = "grok-build"
+yolo = false
+compact_mode = false
+permission_mode = "always-approve"
+screen_mode = "fullscreen"
+show_thinking_blocks = true
+scroll_speed = 80
+scroll_lines = 4
+collapsed_edit_blocks = true
+
+[ui.notifications]
+method = "auto"
+condition = "always"
+idle_threshold_secs = 0
+events = [
+    "turn_complete",
+    "task_complete",
+    "agent_error",
+]
+
+[[ui.notifications.hooks]]
+command = "powershell.exe -STA -NoProfile -ExecutionPolicy Bypass -File C:/Users/Administrator/.grok/hooks/notify-task-complete.ps1"
+events = [
+    "turn_complete",
+    "task_complete",
+    "agent_error",
+]
+only_unfocused = false
+timeout_secs = 20
+
+[compat.claude]
+hooks = false
+
+[mcp_servers.ai-game-developer]
+url = "http://127.0.0.1:22769"
+enabled = true
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+
+[mcp_servers.spellcast]
+enabled = true
+url = "http://127.0.0.1:47194/mcp"
+
+[skills]
+paths = []
+ignore = []
+disabled = [
+    "comfyui-workflow",
+    "comfyui-cloud",
+]
+server_skill_dirs = []
+bundled_skill_dirs = []
+
+[models]
+default = "grok-4.6"
+default_reasoning_effort = "xhigh"
+
+[privacy]
+privacy_banner_acked = "2026-08-13T07:58:34Z"
+
+[plugins]
+enabled = ["cursor-bridge"]
+"#;
 
     #[test]
     fn cursor_merge_preserves_root_fields_and_other_servers() {
@@ -533,6 +665,79 @@ mod tests {
         assert!(!next.contains("command"));
         assert!(!next.contains("args"));
         assert!(!next.contains("type ="));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grok_merge_preserves_array_of_tables_and_unrelated_notification_hooks() {
+        let dir = test_dir("grok-aot");
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            "disabled_mcp_servers = [\"notion\"]\n\n[marketplace]\nofficial_marketplace_auto_installed = true\n\n[[marketplace.sources]]\nname = \"xAI Official\"\ngit = \"https://github.com/xai-org/plugin-marketplace.git\"\n\n[[marketplace.sources]]\nname = \"cursor-bridge\"\ngit = \"https://github.com/Vanyangyang/cursor-bridge.git\"\n\n[ui.notifications]\nmethod = \"auto\"\n\n[[ui.notifications.hooks]]\ncommand = \"powershell.exe -File C:/Users/Administrator/.grok/hooks/notify-task-complete.ps1\"\nevents = [\"turn_complete\"]\nonly_unfocused = false\n\n[mcp_servers.ai-game-developer]\nurl = \"http://127.0.0.1:22769\"\nenabled = true\nstartup_timeout_sec = 30\n\n[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:9/mcp\"\n\n[skills]\ndisabled = [\"comfyui-workflow\", \"comfyui-cloud\"]\n\n[plugins]\nenabled = [\"cursor-bridge\"]\n",
+        )
+        .unwrap();
+        let next = merge_codex_toml(&path, "http://127.0.0.1:47194/mcp").unwrap();
+        assert!(next.contains("disabled_mcp_servers = [\"notion\"]"));
+        assert!(next.contains("name = \"xAI Official\""));
+        assert!(next.contains("name = \"cursor-bridge\""));
+        assert!(next.contains("notify-task-complete.ps1"));
+        assert!(next.contains("only_unfocused = false"));
+        assert!(next.contains("url = \"http://127.0.0.1:22769\""));
+        assert!(next.contains("startup_timeout_sec = 30"));
+        assert!(next.contains("disabled = [\"comfyui-workflow\", \"comfyui-cloud\"]"));
+        assert!(next.contains("enabled = [\"cursor-bridge\"]"));
+        assert!(next.contains("url = \"http://127.0.0.1:47194/mcp\""));
+        assert!(!next.contains("http://127.0.0.1:9/mcp"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grok_merge_returns_original_bytes_when_spellcast_already_ready() {
+        let dir = test_dir("grok-ready");
+        let path = dir.join("config.toml");
+        let original = LIVE_GROK_CONFIG;
+        fs::write(&path, original).unwrap();
+        let next = merge_codex_toml(&path, "http://127.0.0.1:47194/mcp").unwrap();
+        assert_eq!(next, original);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grok_merge_is_byte_identical_to_operator_live_config_when_present() {
+        let live = std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Users\Administrator"))
+            .join(".grok")
+            .join("config.toml");
+        if !live.is_file() {
+            return;
+        }
+        let original = fs::read_to_string(&live).unwrap();
+        let dir = test_dir("grok-live-copy");
+        let path = dir.join("config.toml");
+        fs::write(&path, &original).unwrap();
+        let next = merge_codex_toml(&path, "http://127.0.0.1:47194/mcp").unwrap();
+        assert_eq!(next, original, "merge must not rewrite a Ready Grok config");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grok_merge_preserves_comments_when_inserting_spellcast() {
+        let dir = test_dir("grok-comments");
+        let path = dir.join("config.toml");
+        fs::write(
+            &path,
+            "# keep this cli comment\n[cli]\ninstaller = \"internal\"\n\n[mcp_servers.other]\nurl = \"http://other\"\n",
+        )
+        .unwrap();
+        let next = merge_codex_toml(&path, "http://127.0.0.1:47194/mcp").unwrap();
+        assert!(next.contains("# keep this cli comment"), "{next}");
+        assert!(next.contains("installer = \"internal\""));
+        assert!(next.contains("[mcp_servers.other]"));
+        assert!(next.contains("url = \"http://other\""));
+        assert!(next.contains("[mcp_servers.spellcast]"));
+        assert!(next.contains("url = \"http://127.0.0.1:47194/mcp\""));
         let _ = fs::remove_dir_all(dir);
     }
 
