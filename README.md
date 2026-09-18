@@ -71,7 +71,7 @@ Integration details: [docs/codex-observer-hooks.md](docs/codex-observer-hooks.md
 
 The Spellcast app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. **The setup UI currently supports Codex and Grok Build.** Cursor, Claude Code, Windsurf, and Other remain visible but disabled.
 
-The release workflow also produces Apple Silicon and Intel macOS builds, but [only Windows has been tested](docs/releases/0.4.2.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures.
+The release workflow also produces Apple Silicon and Intel macOS builds plus Linux AppImage and `.deb` packages, but [only Windows has been tested](docs/releases/0.4.2.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures. The Linux packages are CI packaging output and have not been runtime-tested.
 
 ## Develop locally
 
@@ -83,7 +83,7 @@ npm run prepare:codex-plugin
 npm run desktop
 ```
 
-Use Node.js 22+, the repository's Rust toolchain, and the platform's Tauri prerequisites. Windows builds require Visual Studio C++ build tools, Windows SDK, and WebView2.
+Use Node.js 22+, the repository's Rust toolchain, and the platform's Tauri prerequisites. Windows builds require Visual Studio C++ build tools, Windows SDK, and WebView2. Linux builds need WebKitGTK 4.1 and the other packages from the [Tauri 2 Linux prerequisites](https://v2.tauri.app/start/prerequisites/#linux).
 
 `npm start` opens a browser preview of the Canvas. OS bubbles require `npm run desktop` or the installed app. `npm run desktop` / `tauri dev` hot-reload against Vite at `http://127.0.0.1:47193`; without Vite, that debug process shows `ERR_CONNECTION_REFUSED`. For a double-clickable local runtime, build a self-contained debug exe with `npx tauri build --debug --no-bundle` (`src-tauri/target/debug/spellcast.exe`; the desktop shortcut on this machine already points there). Browser acceptance scripts under `scripts/` include local development harnesses; some require the Codex-bundled Playwright runtime. Their fixture results are not proof of a real Codex model turn.
 
@@ -92,6 +92,7 @@ npm run build
 cargo test --workspace
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 npm run tauri -- build --bundles nsis
+# Linux: npm run tauri -- build --bundles appimage,deb
 ```
 
 ## Built with Astra

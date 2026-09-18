@@ -12,7 +12,7 @@ on:
         type: choice
         required: true
         default: all
-        options: [all, windows, macos-arm64, macos-x64]
+        options: [all, windows, macos-arm64, macos-x64, linux]
   push:
     tags:
       - "v*"
@@ -25,13 +25,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.target != 'all') && format('["{0}"]', inputs.target) || '["windows","macos-arm64","macos-x64"]') }}
+        target: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.target != 'all') && format('["{0}"]', inputs.target) || '["windows","macos-arm64","macos-x64","linux"]') }}
 
-    runs-on: ${{ startsWith(matrix.target, 'macos') && 'macos-latest' || 'windows-latest' }}
+    runs-on: ${{ startsWith(matrix.target, 'macos') && 'macos-latest' || matrix.target == 'linux' && 'ubuntu-latest' || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -58,4 +63,4 @@ jobs:
           releaseName: Spellcast ${{ inputs.tag || github.ref_name }}
           generateReleaseNotes: true
           releaseDraft: true
-          args: ${{ matrix.target == 'macos-arm64' && '--target aarch64-apple-darwin --bundles dmg' || matrix.target == 'macos-x64' && '--target x86_64-apple-darwin --bundles dmg' || '--bundles nsis' }}
+          args: ${{ matrix.target == 'macos-arm64' && '--target aarch64-apple-darwin --bundles dmg' || matrix.target == 'macos-x64' && '--target x86_64-apple-darwin --bundles dmg' || matrix.target == 'linux' && '--bundles appimage,deb' || '--bundles nsis' }}
