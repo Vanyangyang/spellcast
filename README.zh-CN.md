@@ -15,7 +15,7 @@
 
 这是早期预览，不是成品。**当前支持并经过测试的路径是 Codex + Windows。** CI 会打出未签名的 macOS 包，但还没有人实际跑过。
 
-**旁念和气泡是被动的。** 没有“生成气泡”按钮。打开**显示旁念**后，由正在进行的 Agent 会话在“有值得说的内容”时才可能冒出桌面气泡——一句吐槽、提醒或灵感。保持安静也是正常结果。Hooks 不保证每一轮都会冒泡。
+**旁念和气泡是被动的。** 没有“生成气泡”按钮。打开**显示旁念**后，由正在进行的 Agent 会话在“有值得说的内容”时才可能冒出桌面气泡——一句吐槽、提醒或灵感。保持安静也是正常结果。Hooks 不保证每一轮都会冒泡。下面第 4、5 步是 **Windows 上 Grok Build** 的同一套气泡和完成提醒界面，不是 Codex。
 
 1. **先为 Codex 打开旁念**
 
@@ -34,6 +34,18 @@
    ![画布上的主张与批注卡片，以及说给 Agent 输入栏](docs/media/03-canvas-claim-note.png)
 
    画布上的 **主张** 或 **批注**，以及 **说给 Agent**。这条输入栏用来回会话，不会生成气泡。
+
+4. **桌面上的旁念气泡**
+
+   ![Windows 上 Grok Build TUI 会话上方浮动的 TAKE 气泡](docs/media/02-desktop-asides-grok.png)
+
+   真实桌面 / TUI 上的被动 **TAKE** 气泡。这张图是 **Windows 上的 Grok Build**，展示的是同一套旁念界面，不是 Codex。仍然没有“生成气泡”按钮，气泡由正在进行的会话自己冒出来。
+
+5. **完成提醒**
+
+   ![完成提醒卡片：Task complete，页脚为 Grok Build · Double-click to dismiss](docs/media/04-completion-notice.png)
+
+   完成提醒卡片，可选语音播报。页脚显示 **Grok Build**；双击关闭。这张图是 Grok Build，不是 Codex。
 
 ## 体验版现在到哪了
 

@@ -15,7 +15,7 @@ Your agent keeps working on your task. Its asides appear as bubbles on the displ
 
 This is an early preview, not a finished product. The path that is **supported and tested today is Codex on Windows.** Unsigned macOS builds exist from CI; they have not been run.
 
-**Bubbles and asides are passive.** There is no “spawn bubble” button. With **Show asides** on, the running agent session may produce a desktop bubble when something is worth saying — a roast, a reminder, or a spark. Silence is a valid outcome. Hooks do not guarantee a bubble on every turn.
+**Bubbles and asides are passive.** There is no “spawn bubble” button. With **Show asides** on, the running agent session may produce a desktop bubble when something is worth saying — a roast, a reminder, or a spark. Silence is a valid outcome. Hooks do not guarantee a bubble on every turn. Steps 4 and 5 below are **Grok Build on Windows** shots of that same bubble and completion-notice UI, not Codex.
 
 1. **Turn asides on for Codex**
 
@@ -34,6 +34,18 @@ This is an early preview, not a finished product. The path that is **supported a
    ![Canvas Claim and Note card with the Tell the agent bar](docs/media/03-canvas-claim-note.png)
 
    A **Claim** or **Note** on the Canvas, plus **Tell the agent**. That bar sends a follow-up into the session. It does not create bubbles.
+
+4. **A floating desktop bubble**
+
+   ![A TAKE bubble floating over a Grok Build TUI session on Windows](docs/media/02-desktop-asides-grok.png)
+
+   A passive **TAKE** bubble over the real desktop / TUI. This shot is **Grok Build on Windows** — the same aside UI, not Codex. There is still no spawn button; the running session produced the bubble.
+
+5. **A completion notice**
+
+   ![Completion notice card: Task complete, footer Grok Build · Double-click to dismiss](docs/media/04-completion-notice.png)
+
+   A completion card with an optional spoken alert. The footer shows **Grok Build**; double-click dismisses the card. This shot is Grok Build, not Codex.
 
 ## Where the preview stands
 
