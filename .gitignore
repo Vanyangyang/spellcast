@@ -18,6 +18,7 @@ data/session.json
 /data/*.sqlite3*
 /artifacts
 /.playwright-mcp
+/docs/hero/.frames
 .vscode
 .idea
 /src-tauri/target-test
