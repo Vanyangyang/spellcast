@@ -15,9 +15,25 @@ https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
 In this earlier demo I am building a calendar app with Codex CLI. Spellcast pops up ideas I had not thought of as desktop bubbles; I star one, drag it, and take it to the Canvas to brainstorm and develop it. Real Windows desktop, real mouse input, waits trimmed, nothing synthesized. Direct feedback to the original task still uses Codex Desktop.
 
-**Grok Build demo (September 2026):** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt launch](https://www.producthunt.com/products/spellcast). Grok Build adds a best-time record to a small platformer while Spellcast shows the three things it does: a bubble with Grok's side thought (starred, then opened on the Canvas), Grok's result written onto the Canvas, and a completion card with a spoken alert when the turn ends. Recorded on a real Windows desktop; clicks were scripted, waits trimmed. It was recorded with Grok Build because the Codex quota ran out on launch day; the Codex flow (deep-linking a card back into its task, Canvas send-back) is described below.
+## How it looks
 
-![Grok Build, the platformer, the Canvas and a completion card on one screen](docs/media/spellcast-grok-demo-overview.png)
+This is an early preview, not a finished product. The path that is **supported and tested today is Codex on Windows.** Unsigned macOS builds exist from CI; they have not been run. A Grok Build recording is kept further down as an optional, historical demo.
+
+**Bubbles and asides are passive.** There is no “spawn bubble” button. With **Show asides** on, the running agent session may produce a desktop bubble when something is worth saying — a roast, a reminder, or a spark. Silence is a valid outcome. Hooks do not guarantee a bubble on every turn.
+
+1. **Turn asides on for Codex**
+
+   ![Desktop settings: Show asides On, Codex selected. Bubbles appear only when progress is worth saying.](docs/media/02-desktop-asides-codex.png)
+
+   Desktop settings with **Show asides** On and **Codex** selected. The copy is explicit: when the task has new progress, a separate look runs once, with no chat history; only something worth saying becomes a bubble. Off keeps the main chat and Canvas only.
+
+2. **A result on the Canvas**
+
+   When the session has a thought worth keeping, it can land on the Canvas as an idea — often under **Needs sorting**. That card is a result of the agent’s work, not something you spawned from a button.
+
+3. **Claim, note, and tell the agent**
+
+   On the Canvas you can read a **Claim** or **Note**, then use **Tell the agent** to send a follow-up. The bar is how you continue the conversation. It is not how bubbles are created.
 
 ## Where the preview stands
 
@@ -72,6 +88,10 @@ Integration details: [docs/codex-observer-hooks.md](docs/codex-observer-hooks.md
 The Spellcast app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. **The setup UI currently supports Codex and Grok Build.** Cursor, Claude Code, Windsurf, and Other remain visible but disabled.
 
 The release workflow also produces Apple Silicon and Intel macOS builds, but [only Windows has been tested](docs/releases/0.4.2.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures.
+
+**Optional / historical — Grok Build demo (September 2026):** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt launch](https://www.producthunt.com/products/spellcast). Grok Build adds a best-time record to a small platformer while Spellcast shows a side thought, Canvas output, and a completion card with a spoken alert. Recorded on a real Windows desktop; clicks were scripted, waits trimmed. It was recorded with Grok Build because the Codex quota ran out on launch day; the Codex flow (deep-linking a card back into its task, Canvas send-back) is described above. This is not the primary supported path.
+
+![Grok Build, the platformer, the Canvas and a completion card on one screen](docs/media/spellcast-grok-demo-overview.png)
 
 ## Develop locally
 

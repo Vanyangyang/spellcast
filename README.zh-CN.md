@@ -15,9 +15,25 @@ https://github.com/user-attachments/assets/208efd3b-cd68-44b8-b45e-8468dcbcdf4b
 
 这段早期演示里，我正在用 Codex CLI 开发一个日历应用。Spellcast 把一些我没想到的点子以桌面气泡弹出来；我给其中一个点星、拖动，再带到画布上头脑风暴、继续发展。真实 Windows 桌面、真实鼠标操作，只剪掉了等待，没有任何合成。直接回发原任务仍使用 Codex Desktop。
 
-**Grok Build 演示（2026 年 9 月）：** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt 发布页](https://www.producthunt.com/products/spellcast)。Grok Build 给一个小平台跳跃游戏加“最佳用时”记录，Spellcast 同时展示三件事：Grok 的旁念以气泡浮出（点星保留、双击带上画布）、Grok 把结果写到画布上、回合结束时弹出完成卡片并语音提醒。真实 Windows 桌面录制，点击由脚本驱动，剪掉了等待。发布当天 Codex 额度用尽，所以这条用 Grok Build 录制；Codex 侧的流程（卡片回跳原任务、画布回发）见下文说明。
+## 现在长什么样
 
-![Grok Build、平台游戏、画布和完成卡片同屏](docs/media/spellcast-grok-demo-overview.png)
+这是早期预览，不是成品。**当前支持并经过测试的路径是 Codex + Windows。** CI 会打出未签名的 macOS 包，但还没有人实际跑过。下面更靠后的 Grok Build 录像只作为可选、历史演示保留。
+
+**旁念和气泡是被动的。** 没有“生成气泡”按钮。打开**显示旁念**后，由正在进行的 Agent 会话在“有值得说的内容”时才可能冒出桌面气泡——一句吐槽、提醒或灵感。保持安静也是正常结果。Hooks 不保证每一轮都会冒泡。
+
+1. **先为 Codex 打开旁念**
+
+   ![桌面设置：显示旁念已开启，并选中 Codex。只有值得说的进展才会变成气泡。](docs/media/02-desktop-asides-codex.png)
+
+   桌面设置里 **显示旁念** 为开，并选中 **Codex**。文案写得很清楚：任务有新进展时另看一眼，不读聊天记录；有值得说的才冒泡。关掉则只留主对话和画布。
+
+2. **画布上的结果**
+
+   会话里有值得留下的想法时，可以落到画布上成为一条 Idea——常常在**待整理**里。这是 Agent 工作的结果，不是你按按钮生成的。
+
+3. **主张、批注，再说给 Agent**
+
+   在画布上可以阅读 **主张** 或 **批注**，再用 **说给 Agent** 发送后续。这条输入栏用来继续对话，不是用来生成气泡的。
 
 ## 体验版现在到哪了
 
@@ -72,6 +88,10 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 使用期间需要保持 Spellcast 运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。**接入界面当前支持 Codex 与 Grok Build**，Cursor、Claude Code、Windsurf 和“其他”保留显示，但置灰且不可选。
 
 发布流程也会产出 Apple Silicon 和 Intel macOS 构建，但[只有 Windows 经过测试](docs/releases/0.4.2.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。
+
+**可选 / 历史记录 — Grok Build 演示（2026 年 9 月）：** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt 发布页](https://www.producthunt.com/products/spellcast)。Grok Build 给一个小平台跳跃游戏加“最佳用时”记录，Spellcast 同时展示旁念、画布结果和带语音的完成卡片。真实 Windows 桌面录制，点击由脚本驱动，剪掉了等待。发布当天 Codex 额度用尽，所以这条用 Grok Build 录制；Codex 侧的流程（卡片回跳原任务、画布回发）见上文。这不是当前主路径。
+
+![Grok Build、平台游戏、画布和完成卡片同屏](docs/media/spellcast-grok-demo-overview.png)
 
 ## 本地开发
 
