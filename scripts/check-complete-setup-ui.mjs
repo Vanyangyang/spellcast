@@ -141,6 +141,7 @@ const result = await page.evaluate(async () => {
     "setup.hint.modified": "Hook 已更新，请重新信任。",
     "setup.hint.disabled": "请在 Codex 启用 Hook。",
     "setup.hooks.trusted": "已信任",
+    "setup.hooks.untrusted": "待信任",
     "setup.hooks.unknown": "信任未核验",
     "setup.hooks.modified": "需重新信任",
     "setup.hooks.disabled": "已停用",
@@ -250,14 +251,25 @@ const result = await page.evaluate(async () => {
   paintSetupView(base({
     kind: "installed_pending_trust",
     installed: true,
-    hook_trust: "unknown",
+    hook_trust: "untrusted",
     mcp_url: "http://127.0.0.1:47194/mcp",
     source_path: "C:/Users/x/.codex/hooks.json",
   }), t);
   snap = view();
   check(snap.status === "已安装，待信任", `file-complete check status ${snap.status}`);
   check(snap.hint === "请在 Codex 的 /hooks 中信任 SessionStart 与 UserPromptSubmit。", `pending trust hint ${snap.hint}`);
-  check(!/CLI|missing_cli|未安装/.test(snap.status + snap.hint), "complete files must not look missing");
+  check(document.querySelector('[data-setup-component="hooks"]').textContent === "待信任", "pending hooks row is untrusted");
+  check(!/CLI|missing_cli|未安装|信任未核验/.test(snap.status + snap.hint + document.querySelector('[data-setup-component="hooks"]').textContent), "complete files must not look missing or unverified");
+  paintSetupView(base({
+    kind: "verified",
+    installed: true,
+    hook_trust: "trusted",
+    mcp_url: "http://127.0.0.1:47194/mcp",
+    source_path: "C:/Users/x/.codex/hooks.json",
+  }), t);
+  snap = view();
+  check(snap.status === "已安装 · Hooks 已信任", `file-complete trusted status ${snap.status}`);
+  check(document.querySelector('[data-setup-component="hooks"]').textContent === "已信任", "file-complete trusted hooks row");
   paintSetupView(base({
     kind: "conflict_custom",
     mcp_url: "http://127.0.0.1:47194/mcp",

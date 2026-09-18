@@ -15,7 +15,7 @@ use fs2::FileExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use toml_edit::{value, DocumentMut, Item, Table};
+use toml_edit::{value, DocumentMut, Item, Table, TableLike};
 
 use crate::configure;
 
@@ -2314,6 +2314,262 @@ fn aside_hooks_ready(doc: &Value, helper: &Path, status: &str) -> Result<bool, S
     Ok(true)
 }
 
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut sorted = serde_json::Map::new();
+            for key in keys {
+                if let Some(val) = map.get(key) {
+                    sorted.insert(key.clone(), canonical_json(val));
+                }
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical_json).collect()),
+        other => other.clone(),
+    }
+}
+
+fn version_for_json(value: &Value) -> String {
+    let body = serde_json::to_vec(&canonical_json(value)).unwrap_or_default();
+    format!("sha256:{}", sha256_bytes(&body))
+}
+
+fn command_hook_hash(event_key: &str, matcher: Option<&str>, command: &str, timeout: u64) -> String {
+    let mut identity = serde_json::Map::new();
+    identity.insert("event_name".into(), json!(event_key));
+    if let Some(matcher) = matcher {
+        identity.insert("matcher".into(), json!(matcher));
+    }
+    identity.insert(
+        "hooks".into(),
+        json!([{
+            "type": "command",
+            "command": command,
+            "timeout": timeout,
+            "async": false
+        }]),
+    );
+    version_for_json(&Value::Object(identity))
+}
+
+fn effective_aside_command(hook: &Value) -> Option<&str> {
+    #[cfg(windows)]
+    {
+        let windows = hook.get("commandWindows").and_then(Value::as_str);
+        if windows.is_some_and(|command| !command.trim().is_empty()) {
+            windows
+        } else {
+            hook.get("command").and_then(Value::as_str)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        hook.get("command").and_then(Value::as_str)
+    }
+}
+
+fn hook_timeout_sec(hook: &Value) -> u64 {
+    hook.get("timeout")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            hook.get("timeout")
+                .and_then(Value::as_i64)
+                .and_then(|n| u64::try_from(n).ok())
+        })
+        .unwrap_or(600)
+        .max(1)
+}
+
+fn spellcast_aside_location<'a>(
+    hooks_doc: &'a Value,
+    event: &str,
+    helper: &Path,
+    status: &str,
+    required_matcher: Option<&str>,
+) -> Option<(usize, usize, String, u64, Option<&'a str>)> {
+    let arr = hooks_doc.get("hooks")?.get(event)?.as_array()?;
+    for (group_index, group) in arr.iter().enumerate() {
+        if !group_is_current_aside(group, helper, status, required_matcher) {
+            continue;
+        }
+        let hash_matcher = if required_matcher.is_some() {
+            group.get("matcher").and_then(Value::as_str)
+        } else {
+            None
+        };
+        let hooks = group.get("hooks")?.as_array()?;
+        for (handler_index, hook) in hooks.iter().enumerate() {
+            if hook_matches_helper_and_status(hook, helper, status) {
+                let command = effective_aside_command(hook)?.to_string();
+                return Some((
+                    group_index,
+                    handler_index,
+                    command,
+                    hook_timeout_sec(hook),
+                    hash_matcher,
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn hook_state_key_candidates(
+    hooks_path: &Path,
+    event_key: &str,
+    group: usize,
+    handler: usize,
+) -> Vec<String> {
+    let suffix = format!("{event_key}:{group}:{handler}");
+    let mut keys = Vec::new();
+    let mut push = |path: &str| {
+        if path.is_empty() {
+            return;
+        }
+        let key = format!("{path}:{suffix}");
+        if !keys.iter().any(|existing| existing == &key) {
+            keys.push(key);
+        }
+    };
+    let display = hooks_path.display().to_string();
+    push(&display);
+    push(&slash_path(hooks_path));
+    #[cfg(windows)]
+    {
+        push(&display.replace('/', "\\"));
+    }
+    if let Ok(canon) = fs::canonicalize(hooks_path) {
+        let text = canon.display().to_string();
+        push(&text);
+        push(&slash_path(&canon));
+        if let Some(stripped) = text.strip_prefix(r"\\?\") {
+            push(stripped);
+            push(&stripped.replace('\\', "/"));
+        }
+    }
+    keys
+}
+
+fn hook_state_table(doc: &DocumentMut) -> Option<&dyn TableLike> {
+    doc.get("hooks")?.get("state")?.as_table_like()
+}
+
+fn inspect_one_user_hook(
+    state: Option<&dyn TableLike>,
+    hooks_path: &Path,
+    event_key: &str,
+    group: usize,
+    handler: usize,
+    current_hash: &str,
+) -> HookTrust {
+    let Some(state) = state else {
+        return HookTrust::Untrusted;
+    };
+    let keys = hook_state_key_candidates(hooks_path, event_key, group, handler);
+    let Some(entry) = keys
+        .iter()
+        .find_map(|key| state.get(key.as_str()))
+        .and_then(Item::as_table_like)
+    else {
+        return HookTrust::Untrusted;
+    };
+    let enabled = entry
+        .get("enabled")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_bool());
+    if enabled == Some(false) {
+        return HookTrust::Disabled;
+    }
+    match entry
+        .get("trusted_hash")
+        .and_then(Item::as_str)
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty())
+    {
+        Some(trusted) if trusted == current_hash => HookTrust::Trusted,
+        Some(_) => HookTrust::Modified,
+        None => HookTrust::Untrusted,
+    }
+}
+
+fn rollup_hook_trust(states: [HookTrust; 2]) -> HookTrust {
+    if states.contains(&HookTrust::Unknown) {
+        return HookTrust::Unknown;
+    }
+    for state in [HookTrust::Disabled, HookTrust::Modified, HookTrust::Untrusted] {
+        if states.contains(&state) {
+            return state;
+        }
+    }
+    HookTrust::Trusted
+}
+
+fn inspect_user_aside_trust(
+    config: &DocumentMut,
+    hooks_path: &Path,
+    hooks_doc: &Value,
+    helper: &Path,
+    status: &str,
+) -> HookTrust {
+    let state = hook_state_table(config);
+    let mut states = [HookTrust::Unknown, HookTrust::Unknown];
+    for (index, (event, event_key, matcher)) in [
+        ("SessionStart", "session_start", Some(MATCHER)),
+        ("UserPromptSubmit", "user_prompt_submit", None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Some((group, handler, command, timeout, hash_matcher)) =
+            spellcast_aside_location(hooks_doc, event, helper, status, matcher)
+        else {
+            return HookTrust::Unknown;
+        };
+        let current = command_hook_hash(event_key, hash_matcher, &command, timeout);
+        states[index] = inspect_one_user_hook(state, hooks_path, event_key, group, handler, &current);
+    }
+    rollup_hook_trust(states)
+}
+
+fn user_aside_files_report(client: &str, trust: HookTrust) -> SetupReport {
+    let (kind, note, extra) = match trust {
+        HookTrust::Trusted => (
+            SetupKind::Verified,
+            "MCP、Hooks 和 Skill 已安装；Codex 配置显示当前两项 Hook 已信任。",
+            None,
+        ),
+        HookTrust::Untrusted => (
+            SetupKind::InstalledPendingTrust,
+            "文件已核验。请在 Codex /hooks 中信任 Spellcast 的 SessionStart 与 UserPromptSubmit。",
+            Some("请在 Codex /hooks 中信任后再新开任务。"),
+        ),
+        HookTrust::Modified => (
+            SetupKind::InstalledPendingTrust,
+            "已安装。Hook 内容发生变化，请在 Codex /hooks 重新检查并信任。",
+            Some("请在 Codex /hooks 中重新信任后再新开任务。"),
+        ),
+        HookTrust::Disabled => (
+            SetupKind::InstalledUnverified,
+            "已安装，但 Codex 中的 Spellcast Hook 已停用。请在 /hooks 中启用。",
+            Some("请在 Codex /hooks 中启用 Spellcast Hook。"),
+        ),
+        HookTrust::Unknown => (
+            SetupKind::InstalledUnverified,
+            "已安装；暂时无法核验 Hook 信任状态。已信任时无需重复安装，可重新检查。",
+            None,
+        ),
+    };
+    let mut r = SetupReport::base(client, kind, note);
+    r.hook_trust = Some(trust);
+    if let Some(line) = extra {
+        r.not_done.push(line.into());
+    }
+    r
+}
+
 fn features_hooks_enabled(doc: &DocumentMut) -> Result<bool, String> {
     match doc.get("features") {
         None => Ok(false),
@@ -2423,16 +2679,14 @@ pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) 
         }
         GrokMcp::Absent | GrokMcp::Ready | GrokMcp::Incomplete => {}
     }
-    let features_ok = if config_path.is_file() {
+    let config_doc = if config_path.is_file() {
         match fs::read_to_string(&config_path)
             .map_err(|err| format!("读不了 {}：{err}", config_path.display()))
             .and_then(|text| {
                 text.parse::<DocumentMut>()
                     .map_err(|err| format!("{} 不是有效 TOML，已保护：{err}", config_path.display()))
-            })
-            .and_then(|doc| features_hooks_enabled(&doc))
-        {
-            Ok(v) => v,
+            }) {
+            Ok(doc) => Some(doc),
             Err(err) if protected_file_error(&err) => {
                 return protected_codex_direct(client, err, paths, &mcp);
             }
@@ -2441,34 +2695,48 @@ pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) 
             }
         }
     } else {
-        false
+        None
+    };
+    let features_ok = match config_doc.as_ref() {
+        None => false,
+        Some(doc) => match features_hooks_enabled(doc) {
+            Ok(v) => v,
+            Err(err) if protected_file_error(&err) => {
+                return protected_codex_direct(client, err, paths, &mcp);
+            }
+            Err(err) => {
+                return locate_codex_direct(SetupReport::base(client, SetupKind::Failed, &err), paths, &mcp);
+            }
+        },
     };
     let skill_ok = configure::spellcast_skill_is_current(&codex_skill_md(&paths.codex_home));
     let helper = aside_helper_dest(&paths.codex_home);
     let helper_ok = helper.is_file();
     let hooks_path = codex_user_hooks_path(&paths.codex_home);
-    let hooks_ready = match inspect_codex_user_hooks(&hooks_path) {
-        Ok(None) => Ok(false),
-        Ok(Some(doc)) => aside_hooks_ready(&doc, &helper, &status),
+    let hooks_doc = match inspect_codex_user_hooks(&hooks_path) {
+        Ok(doc) => doc,
         Err(err) => return protected_codex_direct(client, err, paths, &mcp),
     };
-    let hooks_ok = match hooks_ready {
-        Ok(v) => v,
-        Err(err) => return protected_codex_direct(client, err, paths, &mcp),
+    let hooks_ok = match hooks_doc.as_ref() {
+        None => false,
+        Some(doc) => match aside_hooks_ready(doc, &helper, &status) {
+            Ok(v) => v,
+            Err(err) => return protected_codex_direct(client, err, paths, &mcp),
+        },
     };
     if matches!(mcp_state, GrokMcp::Ready) && features_ok && skill_ok && helper_ok && hooks_ok {
-        let mut r = SetupReport::base(
-            client,
-            SetupKind::InstalledPendingTrust,
-            "文件已核验。请在 Codex /hooks 中信任 Spellcast 的 SessionStart 与 UserPromptSubmit。",
-        );
-        r.hook_trust = Some(HookTrust::Unknown);
+        let trust = match (config_doc.as_ref(), hooks_doc.as_ref()) {
+            (Some(cfg), Some(hooks)) => {
+                inspect_user_aside_trust(cfg, &hooks_path, hooks, &helper, &status)
+            }
+            _ => HookTrust::Unknown,
+        };
+        let mut r = user_aside_files_report(client, trust);
         r.done.push(format!("MCP：{}", config_path.display()));
         r.done.push(format!("Skill：{}", codex_skill_md(&paths.codex_home).display()));
         r.done.push(format!("Hooks：{}", hooks_path.display()));
         r.done.push("未调用 Codex CLI。".into());
         r.done.push("未写 hook trust。".into());
-        r.not_done.push("请在 Codex /hooks 中信任后再新开任务。".into());
         return locate_codex_direct(r, paths, &mcp);
     }
     let mut r = SetupReport::base(
@@ -2514,7 +2782,7 @@ pub fn codex_direct_install(client: &str, url: Option<&str>, paths: &SetupPaths)
         probe.not_done.push("安装未开始。".into());
         return probe;
     }
-    if probe.kind == SetupKind::InstalledPendingTrust && probe.installed {
+    if probe.installed {
         probe.note = "已是当前接入，未重复写入。".into();
         probe.done.push("重新检查只读文件，未调用 Codex CLI。".into());
         return probe;
@@ -4063,6 +4331,58 @@ enabled = ["cursor-bridge"]
         (user, codex, bundle, p)
     }
 
+    fn installed_aside_command(codex: &Path) -> String {
+        let doc: Value = serde_json::from_str(&fs::read_to_string(codex.join("hooks.json")).unwrap()).unwrap();
+        for group in doc["hooks"]["SessionStart"].as_array().unwrap() {
+            let command = if cfg!(windows) {
+                group["hooks"][0]["commandWindows"].as_str()
+            } else {
+                group["hooks"][0]["command"].as_str()
+            };
+            if let Some(command) = command.filter(|text| text.contains("spellcast-hook")) {
+                return command.to_string();
+            }
+        }
+        panic!("missing aside command");
+    }
+
+    fn write_user_hook_trust(
+        codex: &Path,
+        start_group: usize,
+        prompt_group: usize,
+        start_hash: &str,
+        prompt_hash: &str,
+    ) {
+        write_user_hook_state(codex, start_group, prompt_group, start_hash, prompt_hash, None);
+    }
+
+    fn write_user_hook_state(
+        codex: &Path,
+        start_group: usize,
+        prompt_group: usize,
+        start_hash: &str,
+        prompt_hash: &str,
+        start_enabled: Option<bool>,
+    ) {
+        let config = codex.join("config.toml");
+        let hooks = codex.join("hooks.json");
+        let mut text = fs::read_to_string(&config).unwrap();
+        if !text.contains("[hooks.state]") {
+            text.push_str("\n[hooks.state]\n");
+        }
+        for (event, group, hash, enabled) in [
+            ("session_start", start_group, start_hash, start_enabled),
+            ("user_prompt_submit", prompt_group, prompt_hash, None),
+        ] {
+            let key = format!("{}:{event}:{group}:0", hooks.display());
+            text.push_str(&format!("\n[hooks.state.'{key}']\ntrusted_hash = \"{hash}\"\n"));
+            if let Some(enabled) = enabled {
+                text.push_str(&format!("enabled = {enabled}\n"));
+            }
+        }
+        fs::write(&config, text).unwrap();
+    }
+
     #[test]
     fn codex_direct_check_without_cli_is_not_missing_cli() {
         let (user, _codex, _bundle, mut p) = isolated_direct("direct-no-cli");
@@ -4122,7 +4442,7 @@ enabled = ["cursor-bridge"]
         let installed = codex_direct_install("codex", Some("http://127.0.0.1:47194/mcp"), &p);
         assert_eq!(installed.kind, SetupKind::InstalledPendingTrust, "{:?}", installed);
         assert!(installed.installed);
-        assert_eq!(installed.hook_trust, Some(HookTrust::Unknown));
+        assert_eq!(installed.hook_trust, Some(HookTrust::Untrusted));
         assert_ne!(installed.kind, SetupKind::MissingCli);
         assert_ne!(installed.kind, SetupKind::Verified);
         assert!(installed.note.contains("信任") || installed.done.iter().any(|line| line.contains("未调用 Codex CLI")), "{:?}", installed);
@@ -4150,7 +4470,7 @@ enabled = ["cursor-bridge"]
         let after_install = collect_files(&user);
         let checked = codex_direct_status("codex", Some("http://127.0.0.1:47194/mcp"), &p);
         assert_eq!(checked.kind, SetupKind::InstalledPendingTrust, "{:?}", checked);
-        assert_eq!(checked.hook_trust, Some(HookTrust::Unknown));
+        assert_eq!(checked.hook_trust, Some(HookTrust::Untrusted));
         assert_ne!(checked.kind, SetupKind::NotInstalled);
         assert_ne!(checked.kind, SetupKind::MissingCli);
         assert_ne!(checked.kind, SetupKind::Verified);
@@ -4160,6 +4480,151 @@ enabled = ["cursor-bridge"]
         assert_eq!(again.kind, SetupKind::InstalledPendingTrust, "{:?}", again);
         assert!(again.note.contains("未重复写入"), "{:?}", again.note);
         assert_eq!(collect_files(&user), after_install);
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn command_hook_hash_matches_live_codex_user_hooks() {
+        let command = "powershell.exe -NoProfile -NonInteractive -Command \"& 'C:\\Users\\Administrator\\.codex\\spellcast\\hooks\\spellcast-hook.exe' --endpoint 'http://127.0.0.1:47194/api/observer/status'\"";
+        assert_eq!(
+            command_hook_hash("session_start", Some(MATCHER), command, HOOK_TIMEOUT),
+            "sha256:11a228f2dc2eb12086d4e237622e5b4feb4db9d57d2c34f660fb97409d31fa26"
+        );
+        assert_eq!(
+            command_hook_hash("user_prompt_submit", None, command, HOOK_TIMEOUT),
+            "sha256:013119aa8a296c3935c447b7547341a687de33b5b1d15cbb92ddcfa20d250b36"
+        );
+        assert_ne!(
+            command_hook_hash("user_prompt_submit", Some("*"), command, HOOK_TIMEOUT),
+            "sha256:013119aa8a296c3935c447b7547341a687de33b5b1d15cbb92ddcfa20d250b36"
+        );
+    }
+
+    #[test]
+    fn codex_direct_check_reads_user_hooks_state_without_writing() {
+        let (user, codex, _bundle, p) = isolated_direct("direct-trust-read");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "model = \"keep\"\n\n[mcp_servers.other]\nurl = \"http://keep\"\n\n[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:47194/mcp\"\n",
+        )
+        .unwrap();
+        assert!(codex_direct_install("codex", Some("http://127.0.0.1:47194/mcp"), &p).installed);
+        let command = installed_aside_command(&codex);
+        let start = command_hook_hash("session_start", Some(MATCHER), &command, HOOK_TIMEOUT);
+        let prompt = command_hook_hash("user_prompt_submit", None, &command, HOOK_TIMEOUT);
+        write_user_hook_trust(&codex, 0, 0, &start, &prompt);
+        let mut text = fs::read_to_string(codex.join("config.toml")).unwrap();
+        text.push_str("\n[hooks.state.\"spellcast@personal:hooks/hooks.json:session_start:0:0\"]\ntrusted_hash = \"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n");
+        fs::write(codex.join("config.toml"), text).unwrap();
+
+        let before = collect_files(&user);
+        let checked = codex_direct_status("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(checked.kind, SetupKind::Verified, "{:?}", checked);
+        assert_eq!(checked.hook_trust, Some(HookTrust::Trusted));
+        assert!(checked.note.contains("已信任"), "{:?}", checked.note);
+        assert!(!checked.not_done.iter().any(|line| line.contains("信任后再")), "{:?}", checked.not_done);
+        assert_eq!(collect_files(&user), before);
+
+        let again = codex_direct_install("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(again.kind, SetupKind::Verified, "{:?}", again);
+        assert!(again.note.contains("未重复写入"), "{:?}", again.note);
+        assert_eq!(collect_files(&user), before);
+
+        let hooks = codex.join("hooks.json");
+        let mut doc = fs::read_to_string(codex.join("config.toml"))
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        let start_key = format!("{}:session_start:0:0", hooks.display());
+        doc["hooks"]["state"]
+            .as_table_mut()
+            .unwrap()
+            .get_mut(start_key.as_str())
+            .unwrap()["trusted_hash"] = value(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        fs::write(codex.join("config.toml"), doc.to_string()).unwrap();
+        let modified = codex_direct_status("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        assert_eq!(modified.kind, SetupKind::InstalledPendingTrust, "{:?}", modified);
+        assert_eq!(modified.hook_trust, Some(HookTrust::Modified));
+        assert!(modified.note.contains("变化"), "{:?}", modified.note);
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn codex_direct_check_ignores_plugin_hashes_and_commented_user_trust() {
+        let (user, codex, _bundle, p) = isolated_direct("direct-trust-ignore");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:47194/mcp\"\n",
+        )
+        .unwrap();
+        assert!(codex_direct_install("codex", None, &p).installed);
+        let command = installed_aside_command(&codex);
+        let start = command_hook_hash("session_start", Some(MATCHER), &command, HOOK_TIMEOUT);
+        let prompt = command_hook_hash("user_prompt_submit", None, &command, HOOK_TIMEOUT);
+        let hooks = codex.join("hooks.json");
+        let mut text = fs::read_to_string(codex.join("config.toml")).unwrap();
+        text.push_str(&format!(
+            "\n[hooks.state.\"spellcast@personal:hooks/hooks.json:session_start:0:0\"]\ntrusted_hash = \"{start}\"\n\n[hooks.state.\"spellcast@personal:hooks/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"{prompt}\"\n\n# [hooks.state.'{}:session_start:0:0']\n# trusted_hash = \"{start}\"\n",
+            hooks.display()
+        ));
+        fs::write(codex.join("config.toml"), text).unwrap();
+        let before = collect_files(&user);
+        let checked = codex_direct_status("codex", None, &p);
+        assert_eq!(checked.kind, SetupKind::InstalledPendingTrust, "{:?}", checked);
+        assert_eq!(checked.hook_trust, Some(HookTrust::Untrusted));
+        assert_ne!(checked.kind, SetupKind::Verified);
+        assert_eq!(collect_files(&user), before);
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn codex_direct_check_disabled_and_second_group_index() {
+        let (user, codex, _bundle, p) = isolated_direct("direct-trust-index");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "[mcp_servers.spellcast]\nenabled = true\nurl = \"http://127.0.0.1:47194/mcp\"\n",
+        )
+        .unwrap();
+        fs::write(
+            codex.join("hooks.json"),
+            r#"{
+  "hooks": {
+    "SessionStart": [{ "matcher": "startup", "hooks": [{ "type": "command", "command": "echo keep-start" }] }]
+  }
+}
+"#,
+        )
+        .unwrap();
+        assert!(codex_direct_install("codex", None, &p).installed);
+        let command = installed_aside_command(&codex);
+        let start = command_hook_hash("session_start", Some(MATCHER), &command, HOOK_TIMEOUT);
+        let prompt = command_hook_hash("user_prompt_submit", None, &command, HOOK_TIMEOUT);
+        write_user_hook_trust(&codex, 1, 0, &start, &prompt);
+        let checked = codex_direct_status("codex", None, &p);
+        assert_eq!(checked.kind, SetupKind::Verified, "{:?}", checked);
+        assert_eq!(checked.hook_trust, Some(HookTrust::Trusted));
+
+        let hooks = codex.join("hooks.json");
+        let mut doc = fs::read_to_string(codex.join("config.toml"))
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        let start_key = format!("{}:session_start:1:0", hooks.display());
+        let entry = doc["hooks"]["state"]
+            .as_table_mut()
+            .unwrap()
+            .get_mut(start_key.as_str())
+            .unwrap();
+        entry["enabled"] = value(false);
+        fs::write(codex.join("config.toml"), doc.to_string()).unwrap();
+        let disabled = codex_direct_status("codex", None, &p);
+        assert_eq!(disabled.kind, SetupKind::InstalledUnverified, "{:?}", disabled);
+        assert_eq!(disabled.hook_trust, Some(HookTrust::Disabled));
         let _ = fs::remove_dir_all(user);
     }
 

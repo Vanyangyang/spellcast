@@ -53,7 +53,7 @@
 
 ## 体验版现在到哪了
 
-- **已发布的构建：** [0.4.4](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.4)，含 Windows x64 安装包。**只有 Windows 经过测试。** 发布流程也可能附上未签名的 macOS `.dmg`，不保证可用。详见 [0.4.4 说明](docs/releases/0.4.4.md) 与 [0.4.0 工作台说明](docs/releases/0.4.0.md)。
+- **已发布的构建：** [0.4.5](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.5)，含 Windows x64 安装包。**只有 Windows 经过测试。** 发布流程也可能附上未签名的 macOS `.dmg`，不保证可用。详见 [0.4.5 说明](docs/releases/0.4.5.md) 与 [0.4.0 工作台说明](docs/releases/0.4.0.md)。
 - **当前源码和已在本机测试的 Windows 运行版：** 可编辑画布组件、带名称的 Idea 组合、按工作区和任务整理、直接回发原 Codex Desktop 任务、Codex 一键接入（MCP + Hooks + Skill）、按发送请求展示的回复面板。**Grok Build 接入将在未来版本加入**（设置里按钮仍显示，但不可安装）。详见[运行验收](docs/reviews/2026-09-14-workbench-runtime-acceptance.md)和[回复面板](docs/reviews/2026-09-15-replies-inbox.md)。[仅 Codex 接入](docs/reviews/2026-09-15-codex-only-entry.md)与当前安装界面一致。
 - **已知缺口：** 组件粒度尚未完全统一，一个组件不能同时属于多个 Idea，来源不完整的历史请求还存在分类遗漏；回复与历史界面仍需收敛。详见[下一步改善提示词](docs/next-improvement-prompt.md)。
 - **会有毛边。** 版式、文案和 Agent Skill 在各个体验版之间还会变，欢迎反馈和提 issue。
@@ -103,7 +103,7 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 使用期间需要保持 Spellcast 运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。**接入界面当前支持 Codex。** Grok Build、Cursor、Claude Code、Windsurf 和“其他”保留显示，但置灰且不可选。
 
-发布流程也会产出 Apple Silicon 和 Intel macOS 构建，以及 Linux AppImage 与 `.deb`，但[只有 Windows 经过测试](docs/releases/0.4.4.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。Linux 包只是 CI 打包产物，尚未做过运行时验证。
+发布流程也会产出 Apple Silicon 和 Intel macOS 构建，以及 Linux AppImage 与 `.deb`，但[只有 Windows 经过测试](docs/releases/0.4.5.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。Linux 包只是 CI 打包产物，尚未做过运行时验证。
 
 ## 本地开发
 
