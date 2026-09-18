@@ -2,6 +2,8 @@
 
 ![Spellcast: a wand casting desktop aside bubbles](docs/media/spellcast-hero-wand.gif)
 
+![Spellcast: idea spark to inspiration bulb to fireworks](docs/media/spellcast-idea-fireworks.gif)
+
 **A stage of its own.** Desktop asides, a Canvas for ideas you can develop, and completion notices for Codex and Grok Build. Sending a request back to the original task still uses Codex Desktop.
 
 > **Spellcast is in early development.** Early demo · Experimental preview.
