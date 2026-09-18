@@ -425,8 +425,8 @@ const shell = createShell({
 
 type ConfigClient = "cursor" | "claude-code" | "codex" | "grok" | "windsurf" | "generic";
 
-function isCompleteClient(client: string | undefined): client is "codex" | "grok" {
-  return client === "codex" || client === "grok";
+function isCompleteClient(client: string | undefined): client is "codex" {
+  return client === "codex";
 }
 
 function setupButtons() {

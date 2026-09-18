@@ -343,31 +343,14 @@ try {
     claudeDisabled: document.querySelector('[data-client="claude-code"]')?.disabled ?? false,
     genericDisabled: document.querySelector('[data-client="generic"]')?.disabled ?? false,
   }));
-  assert.equal(grokHome.grokDisabled, false, "Grok Build client is available");
+  assert.equal(grokHome.grokDisabled, true, "Grok Build install is deferred");
   assert.equal(grokHome.windsurfDisabled, true, "Windsurf stays unavailable");
   assert.equal(grokHome.claudeDisabled, true, "Claude Code stays unavailable");
   assert.equal(grokHome.genericDisabled, true, "generic stays unavailable");
-
-  await page.click('[data-client="grok"]');
-  await page.waitForFunction(() => {
-    const title = [...document.querySelectorAll("[data-setup-title]")].map((el) => el.textContent ?? "").join(" ");
-    const button = document.querySelector("#agent-complete-setup")?.textContent ?? "";
-    return title.includes("Grok Build") && /MCP \+ Skill/.test(button);
-  });
-  const grokPreview = await page.evaluate(() => ({
-    title: [...document.querySelectorAll("[data-setup-title]")].map((el) => el.textContent ?? "").join(" "),
-    status: document.querySelector("#agent-setup-status")?.textContent ?? "",
-    hint: document.querySelector("#agent-setup-hint")?.textContent ?? "",
-    button: document.querySelector("#agent-complete-setup")?.textContent ?? "",
-    disabled: document.querySelector("#agent-complete-setup")?.disabled ?? true,
-  }));
-  assert.match(grokPreview.title, /Grok Build/);
-  assert.match(grokPreview.status, /未安装/);
-  assert.match(grokPreview.hint, /桌面应用/);
-  assert.match(grokPreview.button, /MCP \+ Skill/);
-  assert.equal(grokPreview.disabled, false, "Grok Build install is available in preview");
-  await page.click('[data-client="codex"]');
-  await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("桌面"));
+  const grokLabel = await page.evaluate(() => document.querySelector('[data-client="grok"]')?.textContent ?? "");
+  assert.match(grokLabel, /即将推出|coming later/i);
+  const grokTitle = await page.evaluate(() => document.querySelector('[data-client="grok"]')?.getAttribute("title") ?? "");
+  assert.match(grokTitle, /未来版本|future version/i);
 
   const localeOptions = await page.locator("#locale option").evaluateAll((nodes) =>
     nodes.map((node) => ({ value: node.value, text: node.textContent ?? "" })),
@@ -458,9 +441,9 @@ try {
     installDisabled: document.querySelector("#settings-complete-setup")?.disabled ?? true,
   }));
   assert.match(cursorSettings.title, /Codex/);
-  assert.match(cursorSettings.hint, /Codex.*Grok Build|Grok Build.*Codex/);
+  assert.match(cursorSettings.hint, /未来版本|future version/);
   assert.equal(cursorSettings.cursorDisabled, true, "settings Cursor button stays unavailable");
-  assert.equal(cursorSettings.grokDisabled, false, "settings Grok Build button is available");
+  assert.equal(cursorSettings.grokDisabled, true, "settings Grok Build button is deferred");
   await page.locator(".settings-observer").scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(out, "settings-observer-dark-1280.png") });
   await page.evaluate(() => {

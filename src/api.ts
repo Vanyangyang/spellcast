@@ -221,7 +221,7 @@ export async function installClientSkill(client: string): Promise<SkillInstall> 
 
 export async function completeSetupStatus(client: string, url: string): Promise<SetupReport> {
   if (!inTauri()) {
-    const desktop = client === "codex" || client === "grok";
+    const desktop = client === "codex";
     return {
       client,
       kind: desktop ? "not_installed" : "unsupported",

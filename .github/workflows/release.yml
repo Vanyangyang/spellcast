@@ -62,5 +62,5 @@ jobs:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: Spellcast ${{ inputs.tag || github.ref_name }}
           generateReleaseNotes: true
-          releaseDraft: true
+          releaseDraft: false
           args: ${{ matrix.target == 'macos-arm64' && '--target aarch64-apple-darwin --bundles dmg' || matrix.target == 'macos-x64' && '--target x86_64-apple-darwin --bundles dmg' || matrix.target == 'linux' && '--bundles appimage,deb' || '--bundles nsis' }}

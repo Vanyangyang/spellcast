@@ -105,7 +105,7 @@ export function statusReadFailedReport(client: string, message: string): SetupRe
   return {
     client,
     kind: "failed",
-    complete_supported: client === "codex" || client === "grok",
+    complete_supported: client === "codex",
     installed: false,
     note: "",
     done: [],

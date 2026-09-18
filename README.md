@@ -51,8 +51,8 @@ This is an early preview, not a finished product. The path that is **supported a
 
 ## Where the preview stands
 
-- **Published build:** [0.4.2](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.2) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. **Windows is the only tested platform.** The macOS builds are unsigned CI packaging output that nobody has run; they are not guaranteed to work. See [0.4.2 notes](docs/releases/0.4.2.md) and the [0.4.0 workbench notes](docs/releases/0.4.0.md).
-- **Current source and locally tested Windows runtime:** editable Canvas components and named Idea compositions; workspace/task organization; direct feedback to the original Codex Desktop task; one-step Codex integration (MCP + Hooks + Skill); Grok Build MCP + Skill setup; a request-based replies panel. These capabilities are in the 0.4.2 preview. See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Grok Build setup](docs/reviews/2026-09-18-grok-build-entry.md). [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md) is a dated snapshot, not the current UI.
+- **Published build:** [0.4.4](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.4) — Windows x64 installer. **Windows is the only tested platform.** The release workflow can also attach unsigned macOS `.dmg` files; they are not guaranteed to work. See [0.4.4 notes](docs/releases/0.4.4.md) and the [0.4.0 workbench notes](docs/releases/0.4.0.md).
+- **Current source and locally tested Windows runtime:** editable Canvas components and named Idea compositions; workspace/task organization; direct feedback to the original Codex Desktop task; one-step **Codex** integration (MCP + Hooks + Skill); a request-based replies panel. **Grok Build setup will be added in a future version** (the Settings button is visible but disabled). See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md) and [replies](docs/reviews/2026-09-15-replies-inbox.md). [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md) matches this preview’s install UI.
 - **Known gaps:** component granularity is not uniform, a component cannot belong to multiple Idea compositions, and historical requests with incomplete provenance need clearer classification. The replies/history interface still needs simplification. See [the next improvement brief](docs/next-improvement-prompt.md).
 - **Expect rough edges.** Layout, copy, and the agent Skill are still changing between previews. Feedback and issues are welcome.
 
@@ -80,7 +80,7 @@ Switch to another application and desktop bubbles resume while the Canvas keeps 
 
 Spellcast is a local desktop app, connected through MCP. It does not run a model or require a model API key. Your agent continues to use its existing host and model.
 
-An explicit Canvas submission goes directly to the corresponding task through the running **Codex Desktop** app, including an idle task. The result can update the original Canvas content. A closed app, deleted task, unavailable tools, or failed delivery is not reported as successful execution. Codex integration includes MCP, Hooks, and behavior guidance; receiving a request and completing it are tracked separately. Grok Build gets the local MCP, the Skill, and a completion notice through its lifecycle `Stop` hook; Canvas send-back into a Grok session is not provided.
+An explicit Canvas submission goes directly to the corresponding task through the running **Codex Desktop** app, including an idle task. The result can update the original Canvas content. A closed app, deleted task, unavailable tools, or failed delivery is not reported as successful execution. Codex integration includes MCP, Hooks, and behavior guidance; receiving a request and completing it are tracked separately. Grok Build setup is not in this preview.
 
 **Completion notices** appear as a small always-on-top card on the display you are using, with an optional spoken alert ("A Codex task is ready." / "Codex 有任务完成了。" following the UI language). A Codex card double-clicks back into the originating task in Codex Desktop; a Grok Build card is dismissed by double-click. The UI is available in English and Simplified Chinese; the card, the spoken phrase, and the setup page follow the same setting.
 
@@ -90,18 +90,18 @@ Kept ideas and replies survive restart. Durable memory is separate: save only wh
 
 ## Get started
 
-![Spellcast desktop settings: asides switch, MCP address, and one-step setup for Codex or Grok Build](docs/media/spellcast-desktop-settings.png)
+![Spellcast desktop settings: asides switch, MCP address, and one-step Codex setup](docs/media/spellcast-desktop-settings.png)
 
 1. Build the current source (below) for the workflow described here, or install the [published Windows preview](https://github.com/Vanyangyang/spellcast/releases/latest).
 2. For **Codex**, open **Settings**, keep Codex selected, and install or update the Spellcast integration. This writes MCP, Hooks, and the behavior Skill together, with backups and conflict checks. Reload Codex and follow any Hooks trust instructions shown by the integration status.
-3. For **Grok Build**, choose Grok Build on the same Settings page and install. That writes MCP + Skill into `~/.grok` (`config.toml` `[mcp_servers.spellcast]` and `skills/spellcast/`) and a completion notice hook at `~/.grok/hooks/spellcast.json` (a lifecycle `Stop` hook that runs the Spellcast helper). Reload Grok Build afterward. This path does not install a Codex plugin, and it does not send Canvas requests back into a Grok session.
+3. **Grok Build will be added in a future version.** The Settings button remains visible but cannot install.
 4. Enable independent asides using the Spellcast switch when desired (Codex Hooks are what can start them).
 
 Integration details: [docs/codex-observer-hooks.md](docs/codex-observer-hooks.md) and the packaged [hooks/INSTALL.md](hooks/INSTALL.md).
 
-The Spellcast app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. **The setup UI currently supports Codex and Grok Build.** Cursor, Claude Code, Windsurf, and Other remain visible but disabled.
+The Spellcast app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. **The setup UI currently supports Codex.** Grok Build, Cursor, Claude Code, Windsurf, and Other remain visible but disabled.
 
-The release workflow also produces Apple Silicon and Intel macOS builds plus Linux AppImage and `.deb` packages, but [only Windows has been tested](docs/releases/0.4.2.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures. The Linux packages are CI packaging output and have not been runtime-tested.
+The release workflow also produces Apple Silicon and Intel macOS builds plus Linux AppImage and `.deb` packages, but [only Windows has been tested](docs/releases/0.4.4.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures. The Linux packages are CI packaging output and have not been runtime-tested.
 
 ## Develop locally
 
