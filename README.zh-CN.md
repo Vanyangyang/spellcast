@@ -71,7 +71,7 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 使用期间需要保持 Spellcast 运行。本地 MCP 地址为 `http://127.0.0.1:47194/mcp`。**接入界面当前支持 Codex 与 Grok Build**，Cursor、Claude Code、Windsurf 和“其他”保留显示，但置灰且不可选。
 
-发布流程也会产出 Apple Silicon 和 Intel macOS 构建，但[只有 Windows 经过测试](docs/releases/0.4.2.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。
+发布流程也会产出 Apple Silicon 和 Intel macOS 构建，以及 Linux AppImage 与 `.deb`，但[只有 Windows 经过测试](docs/releases/0.4.2.md)。macOS 的 `.dmg` 未签名、未验证，可能遇到 Gatekeeper 警告或运行失败。Linux 包只是 CI 打包产物，尚未做过运行时验证。
 
 ## 本地开发
 
@@ -83,7 +83,7 @@ npm run prepare:codex-plugin
 npm run desktop
 ```
 
-需要 Node.js 22+、仓库配置的 Rust 工具链及 Tauri 平台构建环境。Windows 需要 Visual Studio C++ 构建工具、Windows SDK 和 WebView2。
+需要 Node.js 22+、仓库配置的 Rust 工具链及 Tauri 平台构建环境。Windows 需要 Visual Studio C++ 构建工具、Windows SDK 和 WebView2。Linux 需要 WebKitGTK 4.1 以及 [Tauri 2 Linux 依赖](https://v2.tauri.app/start/prerequisites/#linux) 中的其余软件包。
 
 `npm start` 打开画布的浏览器预览；真实桌面气泡需要运行 `npm run desktop` 或已安装的应用。`npm run desktop` / `tauri dev` 依赖本机 Vite `http://127.0.0.1:47193` 热重载；没有 Vite 时双击该 debug 进程会看到 `ERR_CONNECTION_REFUSED`。可双击的本机运行版用 `npx tauri build --debug --no-bundle` 构建，产物是 `src-tauri/target/debug/spellcast.exe`（本机桌面快捷方式已指向它）。`scripts/` 中部分浏览器验收脚本依赖 Codex 内置的 Playwright 环境；隔离测试结果不代表真实 Codex 模型回合已通过。
 
@@ -92,6 +92,7 @@ npm run build
 cargo test --workspace
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 npm run tauri -- build --bundles nsis
+# Linux: npm run tauri -- build --bundles appimage,deb
 ```
 
 ## Astra 如何参与

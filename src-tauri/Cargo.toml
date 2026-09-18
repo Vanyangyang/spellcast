@@ -5,7 +5,7 @@ name = "spellcast"
 version = "0.4.3"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-description = "Spellcast desktop shell — Windows and macOS"
+description = "Spellcast desktop shell — Windows, macOS, and Linux"
 rust-version = "1.88"
 
 [lib]
