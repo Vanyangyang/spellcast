@@ -131,4 +131,8 @@ npm run tauri -- build --bundles nsis
 
 Spellcast was built with GPT-6 Astra. Astra challenged the product assumptions, wrote the Rust core and the Tauri shell, integrated the bubble → Canvas → feedback loop, and used computer use to test the desktop interactions end-to-end and produce the demos. The graph canvas uses [AntV X6](https://github.com/antvis/X6); the desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
 
+## Friends
+
+- [LINUX DO](https://linux.do) — A new kind of ideal community.
+
 [Agent behavior](skills/spellcast/SKILL.md) · [Release notes and verification](docs/releases/) · [AGPL-3.0 license](LICENSE)

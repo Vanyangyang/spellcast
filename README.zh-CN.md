@@ -131,4 +131,8 @@ npm run tauri -- build --bundles nsis
 
 Spellcast 由 GPT-6 Astra 参与构建。Astra 检查产品理解，编写 Rust 核心与 Tauri 外壳，整合气泡 → 画布 → 反馈更新的流程，并用 computer use 端到端验证桌面交互、制作演示。关系图使用 [AntV X6](https://github.com/antvis/X6)，桌面外壳使用 [Tauri](https://github.com/tauri-apps/tauri)。
 
+## 友情链接
+
+- [LINUX DO](https://linux.do) — 新的理想型社区
+
 [Agent 行为说明](skills/spellcast/SKILL.md) · [版本说明与验证记录](docs/releases/) · [AGPL-3.0 许可证](LICENSE)
