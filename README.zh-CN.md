@@ -1,6 +1,6 @@
 # Spellcast
 
-![Spellcast：法杖把旁念气泡发射出去](docs/media/spellcast-hero-wand.gif)
+![Spellcast：法杖发射旁念 → 点子 → 灵感（电灯泡）→ 烟花](docs/media/spellcast-hero-story.gif)
 
 **对话之外的舞台。** 桌面旁念、用来发展想法的画布，以及 Codex 与 Grok Build 的完成提醒。把请求直接回发到原任务仍走 Codex Desktop。
 
