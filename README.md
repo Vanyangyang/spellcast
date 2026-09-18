@@ -17,8 +17,8 @@ In this earlier demo I am building a calendar app with Codex CLI. Spellcast pops
 
 ## Where the preview stands
 
-- **Published build:** [0.4.1](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.1) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. **Windows is the only tested platform.** The macOS builds are unsigned CI packaging output that nobody has run; they are not guaranteed to work. See [0.4.1 notes](docs/releases/0.4.1.md) and the [0.4.0 workbench notes](docs/releases/0.4.0.md).
-- **Current source and locally tested Windows runtime:** editable Canvas components and named Idea compositions; workspace/task organization; direct feedback to the original Codex Desktop task; one-step Codex integration (MCP + Hooks + Skill); Grok Build MCP + Skill setup; a request-based replies panel. These capabilities are in the 0.4.1 preview. See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Grok Build setup](docs/reviews/2026-09-18-grok-build-entry.md). [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md) is a dated snapshot, not the current UI.
+- **Published build:** [0.4.2](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.2) — Windows x64 installer plus Apple Silicon and Intel `.dmg`. **Windows is the only tested platform.** The macOS builds are unsigned CI packaging output that nobody has run; they are not guaranteed to work. See [0.4.2 notes](docs/releases/0.4.2.md) and the [0.4.0 workbench notes](docs/releases/0.4.0.md).
+- **Current source and locally tested Windows runtime:** editable Canvas components and named Idea compositions; workspace/task organization; direct feedback to the original Codex Desktop task; one-step Codex integration (MCP + Hooks + Skill); Grok Build MCP + Skill setup; a request-based replies panel. These capabilities are in the 0.4.2 preview. See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Grok Build setup](docs/reviews/2026-09-18-grok-build-entry.md). [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md) is a dated snapshot, not the current UI.
 - **Known gaps:** component granularity is not uniform, a component cannot belong to multiple Idea compositions, and historical requests with incomplete provenance need clearer classification. The replies/history interface still needs simplification. See [the next improvement brief](docs/next-improvement-prompt.md).
 - **Expect rough edges.** Layout, copy, and the agent Skill are still changing between previews. Feedback and issues are welcome.
 
@@ -63,7 +63,7 @@ Integration details: [docs/codex-observer-hooks.md](docs/codex-observer-hooks.md
 
 The Spellcast app must be running. Its local MCP endpoint is `http://127.0.0.1:47194/mcp`. **The setup UI currently supports Codex and Grok Build.** Cursor, Claude Code, Windsurf, and Other remain visible but disabled.
 
-The release workflow also produces Apple Silicon and Intel macOS builds, but [only Windows has been tested](docs/releases/0.4.1.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures.
+The release workflow also produces Apple Silicon and Intel macOS builds, but [only Windows has been tested](docs/releases/0.4.2.md). The macOS `.dmg` files are unsigned and unverified; expect Gatekeeper warnings and possible runtime failures.
 
 ## Develop locally
 

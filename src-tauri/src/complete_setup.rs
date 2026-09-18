@@ -328,9 +328,30 @@ fn is_reparse(path: &Path) -> bool {
     }
 }
 
+fn is_system_symlink_prefix(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        path == Path::new("/")
+            || path == Path::new("/var")
+            || path == Path::new("/tmp")
+            || path == Path::new("/private")
+            || path == Path::new("/etc")
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 fn reject_reparse_chain(path: &Path) -> Result<(), String> {
     let mut cur = Some(path);
     while let Some(p) = cur {
+        // macOS /var -> /private/var and /tmp -> /private/tmp. Walking those
+        // ancestors would reject every TempDir path as MissingResources.
+        if is_system_symlink_prefix(p) {
+            break;
+        }
         if p.exists() && is_reparse(p) {
             return Err(format!("拒绝符号链接或重解析点：{}", p.display()));
         }
@@ -3028,6 +3049,13 @@ mod tests {
                 }
             },
         }
+    }
+
+    #[test]
+    fn temp_profile_is_not_rejected_for_system_var_symlink() {
+        let dir = temp_dir("reparse-var");
+        reject_reparse_chain(&dir).unwrap();
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
