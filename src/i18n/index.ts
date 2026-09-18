@@ -8,13 +8,20 @@ const STORAGE = "spellcast.locale";
 function detect(): Locale {
   try {
     const saved = localStorage.getItem(STORAGE);
-    if (saved === "zh-CN" || saved === "en" || saved === "ja") return saved;
+    if (saved === "zh-CN" || saved === "en") return saved;
+    if (saved === "ja") {
+      try {
+        localStorage.setItem(STORAGE, "en");
+      } catch {
+        /* ignore */
+      }
+      return "en";
+    }
   } catch {
     /* ignore */
   }
   const raw = (navigator.language || "en").toLowerCase();
   if (raw.startsWith("zh")) return "zh-CN";
-  if (raw.startsWith("ja")) return "ja";
   return "en";
 }
 
@@ -44,6 +51,20 @@ export function setLocale(next: Locale) {
   }
   applyDom();
   listeners.forEach((fn) => fn());
+}
+
+try {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORAGE) return;
+    const next = event.newValue;
+    if (next !== "zh-CN" && next !== "en") return;
+    if (next === locale) return;
+    locale = next;
+    applyDom();
+    listeners.forEach((fn) => fn());
+  });
+} catch {
+  /* ignore */
 }
 
 export function onLocale(fn: () => void) {

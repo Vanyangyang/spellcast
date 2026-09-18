@@ -8,9 +8,7 @@ import "./artifacts.css";
 
 const words = {
   "zh-CN": { run: "运行", stop: "停止", reload: "重新运行", export: "导出作品", source: "源码与版本", restore: "恢复这个版本", save: "保存源码", loading: "正在打开作品…", ready: "运行中", stopped: "已停止", saving: "正在保存参数…", saved: "参数已保存", selection: "当前选择", none: "未选择对象", retry: "重试保存", recover: "查看未保存的参数", conflict: "有未保存的参数，保留在本机。请核对最新状态后再重试。", file: "资源文件", current: "当前版本", version: "历史版本", edit: "可直接修改 HTML、CSS、JavaScript 和数据。构建源文件需在宿主重建后重新发布。", pending: "源文件草稿已保留", download: "下载此文件", operations: "作品操作", compact: "紧凑显示", full: "完整显示", snapshot: "保存当前状态画面", capturing: "正在捕获当前状态画面…", noSnapshot: "作品没有提供画面捕获；仍可引用已保存的参数。", snapshotStopped: "画面捕获在作品停止前未完成。", snapshotChanged: "参数在画面捕获期间变化，未保存旧画面。", snapshotInvalid: "画面格式或大小不符合保存要求。", snapshotMissing: "保存后的作品已不包含此作品块。" },
-  en: { run: "Run", stop: "Stop", reload: "Restart", export: "Export work", source: "Source and versions", restore: "Restore this version", save: "Save source", loading: "Opening work…", ready: "Running", stopped: "Stopped", saving: "Saving parameters…", saved: "Parameters saved", selection: "Selection", none: "No object selected", retry: "Retry save", recover: "Inspect unsaved parameters", conflict: "Unsaved parameters are kept locally. Compare the latest state before retrying.", file: "Asset file", current: "Current version", version: "Past version", edit: "Edit HTML, CSS, JavaScript and data directly. Rebuild original build sources in the host and publish again.", pending: "Source draft preserved", download: "Download file", operations: "Work actions", compact: "Compact display", full: "Full display", snapshot: "Save current state image", capturing: "Capturing the current state image…", noSnapshot: "This work has no image capture handler. Its saved parameters can still be referenced.", snapshotStopped: "The image capture did not finish before the work stopped.", snapshotChanged: "Parameters changed while the image was captured, so the old image was not saved.", snapshotInvalid: "The captured image format or size cannot be saved.", snapshotMissing: "The saved work no longer contains this artifact." },
-  ja: { run: "実行", stop: "停止", reload: "再実行", export: "作品を出力", source: "ソースと履歴", restore: "この版を復元", save: "ソースを保存", loading: "作品を開いています…", ready: "実行中", stopped: "停止中", saving: "パラメータを保存中…", saved: "パラメータを保存済み", selection: "選択", none: "未選択", retry: "保存を再試行", recover: "未保存のパラメータ", conflict: "未保存のパラメータを端末に保持しています。最新状態と比較してから再試行してください。", file: "素材ファイル", current: "現在の版", version: "以前の版", edit: "HTML、CSS、JavaScript、データを編集できます。ビルド元はホストで再ビルドして公開してください。", pending: "ソース下書きを保持", download: "ファイルを保存", operations: "作品の操作", compact: "コンパクト表示", full: "完全表示", snapshot: "現在の状態画像を保存", capturing: "現在の状態画像を取得しています…", noSnapshot: "この作品には画像取得ハンドラーがありません。保存済みの値は参照できます。", snapshotStopped: "作品を停止する前に画像取得が完了しませんでした。", snapshotChanged: "画像取得中に値が変わったため、古い画像は保存しませんでした。", snapshotInvalid: "取得した画像の形式またはサイズは保存できません。", snapshotMissing: "保存後の作品にこの作品ブロックはありません。" },
-};
+  en: { run: "Run", stop: "Stop", reload: "Restart", export: "Export work", source: "Source and versions", restore: "Restore this version", save: "Save source", loading: "Opening work…", ready: "Running", stopped: "Stopped", saving: "Saving parameters…", saved: "Parameters saved", selection: "Selection", none: "No object selected", retry: "Retry save", recover: "Inspect unsaved parameters", conflict: "Unsaved parameters are kept locally. Compare the latest state before retrying.", file: "Asset file", current: "Current version", version: "Past version", edit: "Edit HTML, CSS, JavaScript and data directly. Rebuild original build sources in the host and publish again.", pending: "Source draft preserved", download: "Download file", operations: "Work actions", compact: "Compact display", full: "Full display", snapshot: "Save current state image", capturing: "Capturing the current state image…", noSnapshot: "This work has no image capture handler. Its saved parameters can still be referenced.", snapshotStopped: "The image capture did not finish before the work stopped.", snapshotChanged: "Parameters changed while the image was captured, so the old image was not saved.", snapshotInvalid: "The captured image format or size cannot be saved.", snapshotMissing: "The saved work no longer contains this artifact." },};
 type Word = keyof typeof words.en;
 let framePolicy: Promise<void> | null = null;
 function constrainFrames() {
@@ -196,8 +194,8 @@ export class ArtifactFrame {
         if (!this.sourceDirty) void this.showSources().catch(e => this.fail(e));
         else if (!this.sourceBody.querySelector(".artifact-source-stale")) {
           const notice = el("div", "artifact-source-stale");
-          notice.append(el("p", "", currentLocale() === "zh-CN" ? "作品已更新，正在保留旧版源码草稿。" : currentLocale() === "ja" ? "作品が更新されました。以前のソース下書きを保持しています。" : "The work changed. Your previous source draft is preserved."),
-            button(currentLocale() === "zh-CN" ? "查看最新源码" : currentLocale() === "ja" ? "最新のソースを開く" : "Open latest source", () => { this.sourceDirty = false; void this.showSources().catch(e => this.fail(e)); }));
+          notice.append(el("p", "", currentLocale() === "zh-CN" ? "作品已更新，正在保留旧版源码草稿。" : "The work changed. Your previous source draft is preserved."),
+            button(currentLocale() === "zh-CN" ? "查看最新源码" : "Open latest source", () => { this.sourceDirty = false; void this.showSources().catch(e => this.fail(e)); }));
           this.sourceBody.prepend(notice);
           this.sourceBody.querySelector<HTMLButtonElement>("[data-source-save]")?.setAttribute("disabled", "");
           this.sourceBody.querySelectorAll<HTMLOptionElement>("option[data-version-label]").forEach(option => { option.textContent = option.dataset.versionLabel ?? option.textContent; });
@@ -552,8 +550,8 @@ export class ArtifactFrame {
       } catch (e) { this.fail(e); }
     };
     const current = el("details"), currentText = el("pre", "artifact-state-json", JSON.stringify(block.state, null, 2));
-    current.append(el("summary", "", currentLocale() === "zh-CN" ? "查看当前保存的参数" : currentLocale() === "ja" ? "保存済みの値を確認" : "Compare saved parameters"), currentText);
-    const apply = button(currentLocale() === "zh-CN" ? "保存合并后的参数" : currentLocale() === "ja" ? "編集した値を保存" : "Save merged parameters", () => {
+    current.append(el("summary", "", currentLocale() === "zh-CN" ? "查看当前保存的参数" : "Compare saved parameters"), currentText);
+    const apply = button(currentLocale() === "zh-CN" ? "保存合并后的参数" : "Save merged parameters", () => {
       if (this.legacyStorageKey !== this.storageKey && localStorage.getItem(this.legacyStorageKey)) { this.fail("Copy or merge the separate legacy draft, then discard that legacy draft before saving."); return; }
       let state: unknown; try { state = JSON.parse(text.value); if (!stateObject(state)) throw new Error("Parameters must be a JSON object under 64 KB."); } catch (e) { this.fail(e); return; }
       apply.disabled = true;
@@ -571,10 +569,10 @@ export class ArtifactFrame {
     if (legacyRaw) {
       apply.disabled = true;
       const legacy = el("details");
-      legacy.append(el("summary", "", currentLocale() === "zh-CN" ? "另有一份旧版参数草稿（已保留）" : currentLocale() === "ja" ? "以前の値の下書きも保持されています" : "A separate legacy parameter draft is preserved"),
-        el("p", "", currentLocale() === "zh-CN" ? "先复制或合并这份内容，再放弃旧草稿，即可保存合并结果。" : currentLocale() === "ja" ? "内容をコピーまたは統合してから旧下書きを破棄すると、統合結果を保存できます。" : "Copy or merge this content, then discard the legacy draft to save the merged result."), el("pre", "artifact-state-json", legacyRaw),
+      legacy.append(el("summary", "", currentLocale() === "zh-CN" ? "另有一份旧版参数草稿（已保留）" : "A separate legacy parameter draft is preserved"),
+        el("p", "", currentLocale() === "zh-CN" ? "先复制或合并这份内容，再放弃旧草稿，即可保存合并结果。" : "Copy or merge this content, then discard the legacy draft to save the merged result."), el("pre", "artifact-state-json", legacyRaw),
         button(t("download"), () => download(legacyRaw, "legacy-parameters.json", "application/json")),
-        button(currentLocale() === "zh-CN" ? "放弃这份旧草稿" : currentLocale() === "ja" ? "この旧下書きを破棄" : "Discard this legacy draft", () => {
+        button(currentLocale() === "zh-CN" ? "放弃这份旧草稿" : "Discard this legacy draft", () => {
           if (localStorage.getItem(this.legacyStorageKey) !== legacyRaw) { this.fail("Another window changed this draft. Reopen recovery before discarding it."); return; }
           localStorage.removeItem(this.legacyStorageKey); legacy.remove(); apply.disabled = false;
         }));

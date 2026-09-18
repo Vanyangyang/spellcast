@@ -1,6 +1,6 @@
 # Spellcast
 
-**A stage of its own.** Desktop asides and a Canvas for ideas you can develop with Codex. Grok Build can connect over MCP; sending a request back to the original task still uses Codex Desktop.
+**A stage of its own.** Desktop asides, a Canvas for ideas you can develop, and completion notices for Codex and Grok Build. Sending a request back to the original task still uses Codex Desktop.
 
 > **Spellcast is in early development.** Early demo · Experimental preview.
 > What you see here is a preview build for trying the idea, not a finished product. Stay tuned for the full release.
@@ -14,6 +14,10 @@ Your agent keeps working on your task. Its asides appear as bubbles on the displ
 https://github.com/user-attachments/assets/ab418e8c-b98c-4e39-a224-8a5227fef105
 
 In this earlier demo I am building a calendar app with Codex CLI. Spellcast pops up ideas I had not thought of as desktop bubbles; I star one, drag it, and take it to the Canvas to brainstorm and develop it. Real Windows desktop, real mouse input, waits trimmed, nothing synthesized. Direct feedback to the original task still uses Codex Desktop.
+
+**Grok Build demo (September 2026):** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt launch](https://www.producthunt.com/products/spellcast). Grok Build adds a best-time record to a small platformer while Spellcast shows the three things it does: a bubble with Grok's side thought (starred, then opened on the Canvas), Grok's result written onto the Canvas, and a completion card with a spoken alert when the turn ends. Recorded on a real Windows desktop; clicks were scripted, waits trimmed. It was recorded with Grok Build because the Codex quota ran out on launch day; the Codex flow (deep-linking a card back into its task, Canvas send-back) is described below.
+
+![Grok Build, the platformer, the Canvas and a completion card on one screen](docs/media/spellcast-grok-demo-overview.png)
 
 ## Where the preview stands
 
@@ -46,7 +50,9 @@ Switch to another application and desktop bubbles resume while the Canvas keeps 
 
 Spellcast is a local desktop app, connected through MCP. It does not run a model or require a model API key. Your agent continues to use its existing host and model.
 
-An explicit Canvas submission goes directly to the corresponding task through the running **Codex Desktop** app, including an idle task. The result can update the original Canvas content. A closed app, deleted task, unavailable tools, or failed delivery is not reported as successful execution. Codex integration includes MCP, Hooks, and behavior guidance; receiving a request and completing it are tracked separately. Grok Build can use the local MCP and Skill; it has no Codex plugin or hooks, and Canvas send-back into a Grok session is not provided.
+An explicit Canvas submission goes directly to the corresponding task through the running **Codex Desktop** app, including an idle task. The result can update the original Canvas content. A closed app, deleted task, unavailable tools, or failed delivery is not reported as successful execution. Codex integration includes MCP, Hooks, and behavior guidance; receiving a request and completing it are tracked separately. Grok Build gets the local MCP, the Skill, and a completion notice through its lifecycle `Stop` hook; Canvas send-back into a Grok session is not provided.
+
+**Completion notices** appear as a small always-on-top card on the display you are using, with an optional spoken alert ("A Codex task is ready." / "Codex 有任务完成了。" following the UI language). A Codex card double-clicks back into the originating task in Codex Desktop; a Grok Build card is dismissed by double-click. The UI is available in English and Simplified Chinese; the card, the spoken phrase, and the setup page follow the same setting.
 
 **Independent asides** follow the switch in Spellcast. With asides enabled, the host supplies brief context when substantive new project information appears. A fresh isolated observer decides whether there is anything useful to add; silence is valid. This needs host support for isolated subagents and native MCP tools. Hooks do not guarantee an aside on every turn, and no separate model service is installed. See [Codex hooks and verification boundaries](docs/codex-observer-hooks.md).
 
@@ -56,7 +62,7 @@ Kept ideas and replies survive restart. Durable memory is separate: save only wh
 
 1. Build the current source (below) for the workflow described here, or install the [published Windows preview](https://github.com/Vanyangyang/spellcast/releases/latest).
 2. For **Codex**, open **Settings**, keep Codex selected, and install or update the Spellcast integration. This writes MCP, Hooks, and the behavior Skill together, with backups and conflict checks. Reload Codex and follow any Hooks trust instructions shown by the integration status.
-3. For **Grok Build**, choose Grok Build on the same Settings page and install. That only writes MCP + Skill into `~/.grok` (`config.toml` `[mcp_servers.spellcast]` and `skills/spellcast/`). Reload Grok Build afterward. This path does not install a Codex plugin or hooks, and it does not send Canvas requests back into a Grok session.
+3. For **Grok Build**, choose Grok Build on the same Settings page and install. That writes MCP + Skill into `~/.grok` (`config.toml` `[mcp_servers.spellcast]` and `skills/spellcast/`) and a completion notice hook at `~/.grok/hooks/spellcast.json` (a lifecycle `Stop` hook that runs the Spellcast helper). Reload Grok Build afterward. This path does not install a Codex plugin, and it does not send Canvas requests back into a Grok session.
 4. Enable independent asides using the Spellcast switch when desired (Codex Hooks are what can start them).
 
 Integration details: [docs/codex-observer-hooks.md](docs/codex-observer-hooks.md) and the packaged [hooks/INSTALL.md](hooks/INSTALL.md).
@@ -88,6 +94,6 @@ npm run tauri -- build --bundles nsis
 
 ## Built with Astra
 
-Astra helped challenge the product assumptions, build and integrate the bubble → Canvas → feedback loop, test the interactions, and produce this demo. The graph canvas uses [AntV X6](https://github.com/antvis/X6); the desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
+Spellcast was built with GPT-6 Astra. Astra challenged the product assumptions, wrote the Rust core and the Tauri shell, integrated the bubble → Canvas → feedback loop, and used computer use to test the desktop interactions end-to-end and produce the demos. The graph canvas uses [AntV X6](https://github.com/antvis/X6); the desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
 
 [Agent behavior](skills/spellcast/SKILL.md) · [Release notes and verification](docs/releases/) · [AGPL-3.0 license](LICENSE)

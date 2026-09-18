@@ -1,6 +1,6 @@
 # Spellcast
 
-**对话之外的舞台。** 用桌面旁念和画布，与 Codex 一起发展想法。Grok Build 可以通过 MCP 连接；把请求直接回发到原任务仍走 Codex Desktop。
+**对话之外的舞台。** 桌面旁念、用来发展想法的画布，以及 Codex 与 Grok Build 的完成提醒。把请求直接回发到原任务仍走 Codex Desktop。
 
 > **Spellcast 仍在孵化中。** 这是初期演示 demo，目前提供的是体验测试版本，不是成品；成品敬请期待。
 > Early demo · Experimental preview · Stay tuned for the full release.
@@ -14,6 +14,10 @@
 https://github.com/user-attachments/assets/208efd3b-cd68-44b8-b45e-8468dcbcdf4b
 
 这段早期演示里，我正在用 Codex CLI 开发一个日历应用。Spellcast 把一些我没想到的点子以桌面气泡弹出来；我给其中一个点星、拖动，再带到画布上头脑风暴、继续发展。真实 Windows 桌面、真实鼠标操作，只剪掉了等待，没有任何合成。直接回发原任务仍使用 Codex Desktop。
+
+**Grok Build 演示（2026 年 9 月）：** [spellcast-grok-demo.mp4](docs/media/spellcast-grok-demo.mp4) · [Product Hunt 发布页](https://www.producthunt.com/products/spellcast)。Grok Build 给一个小平台跳跃游戏加“最佳用时”记录，Spellcast 同时展示三件事：Grok 的旁念以气泡浮出（点星保留、双击带上画布）、Grok 把结果写到画布上、回合结束时弹出完成卡片并语音提醒。真实 Windows 桌面录制，点击由脚本驱动，剪掉了等待。发布当天 Codex 额度用尽，所以这条用 Grok Build 录制；Codex 侧的流程（卡片回跳原任务、画布回发）见下文说明。
+
+![Grok Build、平台游戏、画布和完成卡片同屏](docs/media/spellcast-grok-demo-overview.png)
 
 ## 体验版现在到哪了
 
@@ -46,7 +50,9 @@ https://github.com/user-attachments/assets/208efd3b-cd68-44b8-b45e-8468dcbcdf4b
 
 Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不需要填写模型 API Key。Agent 继续使用原来的宿主和模型。
 
-明确发送后，Spellcast 通过运行中的 **Codex Desktop** 直接把请求交给对应任务，包括当前空闲的任务；结果可以回写原画布内容。应用关闭、任务删除、工具不可用或投递失败时，不会把请求显示为已成功执行。Codex 完整接入包含 MCP、Hooks 和行为说明，收到请求与实际完成分别记录。Grok Build 可以使用本机 MCP 和 Skill；没有 Codex 插件或 hooks，也不能把画布请求回发到 Grok 会话。
+明确发送后，Spellcast 通过运行中的 **Codex Desktop** 直接把请求交给对应任务，包括当前空闲的任务；结果可以回写原画布内容。应用关闭、任务删除、工具不可用或投递失败时，不会把请求显示为已成功执行。Codex 完整接入包含 MCP、Hooks 和行为说明，收到请求与实际完成分别记录。Grok Build 获得本机 MCP、Skill，以及通过其生命周期 `Stop` hook 触发的完成提醒；不能把画布请求回发到 Grok 会话。
+
+**完成提醒**会在你正在使用的显示器上以一张置顶小卡片出现，可选语音播报（“Codex 有任务完成了。” / “A Codex task is ready.”，跟随界面语言）。Codex 的卡片双击回跳到 Codex Desktop 里的原任务；Grok Build 的卡片双击关闭。界面提供简体中文和英文；卡片、语音短句和接入页跟随同一个设置。
 
 **独立旁念**以 Spellcast 的开关为准。开启后，宿主在出现实质项目新信息时提供简短上下文，由隔离的观察者判断是否有值得补充的想法；保持安静也是正常结果。这需要宿主支持隔离子代理及原生 MCP 工具。Hooks 不保证每一轮都会出现旁念，也不会另外安装模型服务。详见[Codex Hooks 与验证边界](docs/codex-observer-hooks.md)。
 
@@ -56,7 +62,7 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 1. 按下文从当前源码运行，或安装[公开的 Windows 体验版](https://github.com/Vanyangyang/spellcast/releases/latest)。
 2. **Codex：** 打开**设置**，保持选中 Codex，安装或更新 Spellcast 接入。一次写入 MCP、Hooks 和行为 Skill，并完成备份及冲突检查。然后重载 Codex，按接入状态中的提示信任 Hooks。
-3. **Grok Build：** 在同一设置页选择 Grok Build 并安装。这只会把 MCP + Skill 写入 `~/.grok`（`config.toml` 的 `[mcp_servers.spellcast]` 与 `skills/spellcast/`）。然后重载 Grok Build。这条路径不安装 Codex 插件或 hooks，也不会把画布请求回发到 Grok 会话。
+3. **Grok Build：** 在同一设置页选择 Grok Build 并安装。这会把 MCP + Skill 写入 `~/.grok`（`config.toml` 的 `[mcp_servers.spellcast]` 与 `skills/spellcast/`），并在 `~/.grok/hooks/spellcast.json` 写入完成提醒 hook（生命周期 `Stop` hook，调用 Spellcast 的助手程序）。然后重载 Grok Build。这条路径不安装 Codex 插件，也不会把画布请求回发到 Grok 会话。
 4. 需要独立旁念时，在 Spellcast 中打开旁念开关（能自动拉起旁念的是 Codex Hooks）。
 
 接入详情：[docs/codex-observer-hooks.md](docs/codex-observer-hooks.md) 与包内 [hooks/INSTALL.md](hooks/INSTALL.md)。
@@ -88,6 +94,6 @@ npm run tauri -- build --bundles nsis
 
 ## Astra 如何参与
 
-Astra 帮助检查产品理解，构建并整合气泡 → 画布 → 反馈更新的流程，验证交互，并制作这段演示。关系图使用 [AntV X6](https://github.com/antvis/X6)，桌面外壳使用 [Tauri](https://github.com/tauri-apps/tauri)。
+Spellcast 由 GPT-6 Astra 参与构建。Astra 检查产品理解，编写 Rust 核心与 Tauri 外壳，整合气泡 → 画布 → 反馈更新的流程，并用 computer use 端到端验证桌面交互、制作演示。关系图使用 [AntV X6](https://github.com/antvis/X6)，桌面外壳使用 [Tauri](https://github.com/tauri-apps/tauri)。
 
 [Agent 行为说明](skills/spellcast/SKILL.md) · [版本说明与验证记录](docs/releases/) · [AGPL-3.0 许可证](LICENSE)

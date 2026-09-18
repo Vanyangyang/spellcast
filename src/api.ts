@@ -1,4 +1,4 @@
-import { t } from "./i18n";
+import { currentLocale, t } from "./i18n";
 import { contentKey } from "./reply-drafts";
 import type {
   AgentEvent,
@@ -239,6 +239,11 @@ export async function completeSetupStatus(client: string, url: string): Promise<
 export async function completeSetupInstall(client: string, url: string): Promise<SetupReport> {
   if (!inTauri()) throw new Error(t("settings.desktopOnly"));
   return invoke("complete_setup_install", { client, url });
+}
+
+export async function syncUiLocale(locale = currentLocale()): Promise<void> {
+  if (!inTauri()) return;
+  await invoke("set_ui_locale", { locale });
 }
 
 export async function deleteCanvasItem(item_id: string, expected_revision: number): Promise<BoardSnapshot> {

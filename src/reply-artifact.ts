@@ -9,9 +9,7 @@ import { openArtifactSnapshot } from "./artifact-snapshot";
 
 const words = {
   "zh-CN": { label: "作品状态", none: "不附作品状态", empty: "将作品与这个组件放入同一个想法，便可引用它已保存的状态。", saved: "已固定作品状态", changed: "原作品已更新 · 保留此状态", detached: "原作品已离开此想法 · 保留此状态", missing: "原作品不可用 · 保留此状态", refresh: "引用当前已保存状态", open: "查看这个状态", noPreview: "已保存参数 · 未提供画面预览", failed: "状态画面无法读取", work: "作品" },
-  en: { label: "Work state", none: "No work state", empty: "Add a work and this component to the same Idea to reference its saved state.", saved: "Pinned work state", changed: "Original updated · keeping this state", detached: "Original left this Idea · keeping this state", missing: "Original unavailable · keeping this state", refresh: "Use current saved state", open: "View this state", noPreview: "Saved parameters · no image preview", failed: "State preview unavailable", work: "Work" },
-  ja: { label: "作品の状態", none: "作品の状態なし", empty: "作品とこの部品を同じアイデアに入れると、保存済み状態を参照できます。", saved: "固定された作品の状態", changed: "元の作品は更新済み · この状態を保持", detached: "元の作品はアイデアの外 · この状態を保持", missing: "元の作品は利用不可 · この状態を保持", refresh: "現在の保存済み状態を参照", open: "この状態を見る", noPreview: "保存済みパラメータ · 画像プレビューなし", failed: "状態の画像を読み込めません", work: "作品" },
-};
+  en: { label: "Work state", none: "No work state", empty: "Add a work and this component to the same Idea to reference its saved state.", saved: "Pinned work state", changed: "Original updated · keeping this state", detached: "Original left this Idea · keeping this state", missing: "Original unavailable · keeping this state", refresh: "Use current saved state", open: "View this state", noPreview: "Saved parameters · no image preview", failed: "State preview unavailable", work: "Work" },};
 export const artifactText = (key: keyof typeof words.en) => words[currentLocale()][key];
 export type ArtifactChoice = { object: CanvasObject; reply: BoardReply; block: ReplyArtifactBlock };
 export function artifactChoices(board: BoardSnapshot | undefined, ownerId: string): ArtifactChoice[] {

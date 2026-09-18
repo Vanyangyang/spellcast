@@ -29,6 +29,23 @@ pub fn handle_completion_command() -> bool {
             match result { Ok(note) => println!("{note}"), Err(err) => { eprintln!("{err}"); std::process::exit(1); } }
             true
         }
+        Some("--grok-notify") => {
+            if let Some(root) = args.get(2) {
+                completion_hook::grok_notify(std::path::Path::new(root));
+            }
+            true
+        }
+        Some("--install-grok-completion-hook") => {
+            let result = (|| completion_hook::install_grok(&completion_hook::grok_home()?, &completion_hook::root()?,
+                &std::env::current_exe().map_err(|e| e.to_string())?))();
+            match result { Ok(note) => println!("{note}"), Err(err) => { eprintln!("{err}"); std::process::exit(1); } }
+            true
+        }
+        Some("--uninstall-grok-completion-hook") => {
+            let result = (|| completion_hook::uninstall_grok(&completion_hook::grok_home()?))();
+            match result { Ok(note) => println!("{note}"), Err(err) => { eprintln!("{err}"); std::process::exit(1); } }
+            true
+        }
         _ => false,
     }
 }
@@ -491,6 +508,7 @@ pub fn run() {
             completions::dismiss_completion,
             completions::get_completion_voice,
             completions::set_completion_voice,
+            completions::set_ui_locale,
             close_bubbles
         ])
         .run(tauri::generate_context!())

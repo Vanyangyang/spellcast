@@ -78,25 +78,23 @@ const payloads = await page.evaluate(() => {
     text: run({ kind: "text", title: " 标题 ", text: " 正文 " }, "zh-CN"),
     textNoBody: run({ kind: "text", title: "t" }, "zh-CN"),
     textNoBodyEn: run({ kind: "text", title: "t" }, "en"),
-    textNoBodyJa: run({ kind: "text", title: "t" }, "ja"),
+    textNoBodyUnknown: run({ kind: "text", title: "t" }, "ja"),
     imageHttp: run({ kind: "image", src: "https://example.com/a.png", alt: "说明" }, "zh-CN"),
     imageLocal: run({ kind: "image", src: "/artifacts/bundle-1/img/cover.webp" }, "zh-CN"),
     imageData: run({ kind: "image", src: "data:image/png;base64,iVBORw0KGgo=" }, "zh-CN"),
     imageMissing: run({ kind: "image" }, "zh-CN"),
     imageBad: run({ kind: "image", src: "ftp://x/y.png" }, "en"),
-    imageSpace: run({ kind: "image", src: "https://example.com/a b.png" }, "ja"),
+    imageSpace: run({ kind: "image", src: "https://example.com/a b.png" }, "en"),
     rect: run({ kind: "rect", title: "框", text: "内文", fill: "#abc" }, "zh-CN"),
     ellipse: run({ kind: "ellipse", fill: "#AABBCC" }, "zh-CN"),
     badFill: run({ kind: "rect", fill: "red" }, "zh-CN"),
     comparisonZh: run({ kind: "comparison", title: "比较" }, "zh-CN"),
     comparisonEn: run({ kind: "comparison", title: "Compare" }, "en"),
-    comparisonJa: run({ kind: "comparison", title: "比較" }, "ja"),
     comparisonNoTitle: run({ kind: "comparison" }, "zh-CN"),
     graph: run({ kind: "graph", title: "关系", text: "起点说明" }, "zh-CN"),
     graphNoTitle: run({ kind: "graph" }, "en"),
     sequenceZh: run({ kind: "sequence", title: "步骤" }, "zh-CN"),
     sequenceEn: run({ kind: "sequence", title: "Steps", text: "Do this first" }, "en"),
-    sequenceJa: run({ kind: "sequence", title: "手順" }, "ja"),
     longTitle: run({ kind: "text", title: "字".repeat(161), text: "x" }, "zh-CN"),
     limitTitle: run({ kind: "text", title: "字".repeat(160), text: "x" }, "zh-CN"),
   };
@@ -106,7 +104,7 @@ const ID = /^[A-Za-z0-9\-_:.]{1,160}$/;
 assert.deepEqual(payloads.text, { content: { type: "text", title: "标题", text: "正文" } });
 assert.equal(payloads.textNoBody.error, "文字组件需要正文。");
 assert.equal(payloads.textNoBodyEn.error, "A text component needs a body.");
-assert.equal(payloads.textNoBodyJa.error, "テキストには本文が必要です。");
+assert.equal(payloads.textNoBodyUnknown.error, "A text component needs a body.", "unknown locale falls back to English");
 assert.deepEqual(payloads.imageHttp, { content: { type: "image", title: "", src: "https://example.com/a.png", alt: "说明" } });
 assert.equal(payloads.imageLocal.content.src, "/artifacts/bundle-1/img/cover.webp");
 assert.equal(payloads.imageData.content.type, "image");
@@ -122,7 +120,7 @@ assert.equal(payloads.longTitle.error, "标题最多 160 字。");
 assert.equal(payloads.limitTitle.content.type, "text");
 
 // Block payloads must satisfy the core's minimal validation (spellcast-core/src/reply.rs).
-for (const [name, expectCriterion, expectPending] of [["comparisonZh", "维度", "待填写"], ["comparisonEn", "Criterion", "To be filled in"], ["comparisonJa", "観点", "未記入"]]) {
+for (const [name, expectCriterion, expectPending] of [["comparisonZh", "维度", "待填写"], ["comparisonEn", "Criterion", "To be filled in"]]) {
   const { block } = payloads[name].content;
   assert.equal(payloads[name].content.type, "block");
   assert.equal(block.type, "comparison");
@@ -149,7 +147,7 @@ for (const [name, expectCriterion, expectPending] of [["comparisonZh", "维度",
   assert.match(block.nodes[0].id, ID);
   assert.equal(block.nodes[0].x, undefined);
 }
-for (const [name, stepTitle, action] of [["sequenceZh", "第一步", "待填写"], ["sequenceEn", "Step 1", "Do this first"], ["sequenceJa", "ステップ 1", "未記入"]]) {
+for (const [name, stepTitle, action] of [["sequenceZh", "第一步", "待填写"], ["sequenceEn", "Step 1", "Do this first"]]) {
   const { block } = payloads[name].content;
   assert.equal(block.type, "sequence");
   assert.equal(block.steps.length, 1);

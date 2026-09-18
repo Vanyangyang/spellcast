@@ -2,8 +2,8 @@ import type { CanvasAnnotation, CanvasLayout, CanvasAnchor } from "./types";
 import type { ReplyTarget } from "./reply-types";
 import { currentLocale } from "./i18n";
 
-export const annotationLabel = (count = 0) => `${currentLocale() === "zh-CN" ? "注释" : currentLocale() === "ja" ? "注釈" : "Annotations"}${count ? ` ${count}` : ""}`;
-export const annotationSelected = () => currentLocale() === "zh-CN" ? "已选中注释" : currentLocale() === "ja" ? "注釈を選択しました" : "Annotation selected";
+export const annotationLabel = (count = 0) => `${currentLocale() === "zh-CN" ? "注释" : "Annotations"}${count ? ` ${count}` : ""}`;
+export const annotationSelected = () => currentLocale() === "zh-CN" ? "已选中注释" : "Annotation selected";
 export type ImageAnnotation = { id: string; text: string; region: NonNullable<CanvasAnchor["region"]> };
 export function imageAnnotations(layout: CanvasLayout | undefined, objectId: string, src: string, blockId?: string, target?: ReplyTarget): ImageAnnotation[] {
   return (layout?.annotations || []).filter(note => !note.removed && note.anchor.object_id === objectId && note.anchor.block_id === blockId

@@ -244,8 +244,8 @@ async function assertSettingsOpen(page, { chrome = false } = {}) {
   if (chrome) {
     assert.equal(state.titleVisible, true, `settings title not in view: ${state.title}`);
     assert.equal(state.closeVisible, true, `settings close not in view: ${state.close}`);
-    assert.match(state.title, /设置|Settings|設定/);
-    assert.match(state.close, /关闭|Close|閉じる/);
+    assert.match(state.title, /设置|Settings/);
+    assert.match(state.close, /关闭|Close/);
   }
 }
 
@@ -316,7 +316,7 @@ try {
   await page.click('[data-client="codex"]');
   await page.waitForFunction(() => {
     const hint = document.querySelector("#agent-setup-hint")?.textContent ?? "";
-    return hint.includes("桌面") || hint.includes("desktop") || hint.includes("デスクトップ");
+    return hint.includes("桌面");
   });
   const home = await page.evaluate(() => ({
     status: document.querySelector("#agent-setup-status")?.textContent ?? "",
@@ -326,11 +326,11 @@ try {
     button: document.querySelector("#agent-complete-setup")?.textContent ?? "",
   }));
   assert.equal(noRawKind(home.status + home.hint), true, `raw kind: ${home.status} ${home.hint}`);
-  assert.match(home.status, /未安装|Not installed|未インストール/);
-  assert.match(home.hint, /桌面应用|desktop app|デスクトップアプリ/);
+  assert.match(home.status, /未安装/);
+  assert.match(home.hint, /桌面应用/);
   assert.equal(home.detailsOpen, false, "install details must start collapsed");
   assert.equal(/插件源|Install cache|Skill|C:\\\\Users/.test(home.status + home.hint), false);
-  assert.match(home.button, /安装 Hooks \+ Skill|Install Hooks \+ Skill|Hooks \+ Skill をインストール/);
+  assert.match(home.button, /安装 Hooks \+ Skill/);
 
   const cursorDisabled = await page.evaluate(() => ({
     button: document.querySelector('[data-client="cursor"]')?.disabled ?? false,
@@ -362,24 +362,52 @@ try {
     disabled: document.querySelector("#agent-complete-setup")?.disabled ?? true,
   }));
   assert.match(grokPreview.title, /Grok Build/);
-  assert.match(grokPreview.status, /未安装|Not installed|未インストール/);
-  assert.match(grokPreview.hint, /桌面应用|desktop app|デスクトップアプリ/);
+  assert.match(grokPreview.status, /未安装/);
+  assert.match(grokPreview.hint, /桌面应用/);
   assert.match(grokPreview.button, /MCP \+ Skill/);
   assert.equal(grokPreview.disabled, false, "Grok Build install is available in preview");
   await page.click('[data-client="codex"]');
   await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("桌面"));
 
+  const localeOptions = await page.locator("#locale option").evaluateAll((nodes) =>
+    nodes.map((node) => ({ value: node.value, text: node.textContent ?? "" })),
+  );
+  assert.deepEqual(
+    localeOptions.map((item) => item.value),
+    ["zh-CN", "en"],
+    `locale picker must be Chinese and English only: ${JSON.stringify(localeOptions)}`,
+  );
+  assert.equal(localeOptions.some((item) => item.value === "ja" || /日本語/.test(item.text)), false);
   await page.selectOption("#locale", "en");
   await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("desktop app"));
   const enHint = await page.locator("#agent-setup-hint").innerText();
   assert.match(enHint, /desktop app/i);
-  await page.selectOption("#locale", "ja");
-  await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("デスクトップ"));
-  const jaHint = await page.locator("#agent-setup-hint").innerText();
-  assert.match(jaHint, /デスクトップアプリ/);
+  assert.match(await page.locator("#agent-setup-status").innerText(), /Not installed/);
+  assert.match(await page.locator("#settings-title").innerText(), /Settings/);
+  assert.match(await page.locator("#settings-close").innerText(), /Close/);
+  await openSettings(page);
+  const enIntro = await page.locator("#settings [data-setup-body]").innerText();
+  assert.match(enIntro, /Choose the app you are using/);
+  assert.equal(/使っているソフト|先选你正在用的软件/.test(enIntro), false);
+  const enComponents = await page.evaluate(() => ({
+    names: [...document.querySelectorAll("#settings .setup-component-name")].map((el) => el.textContent?.replace(/\s+/g, " ").trim() ?? ""),
+    observer: document.querySelector(".settings-observer")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+  }));
+  assert.match(enComponents.names.join(" | "), /Aside trigger.*Hooks/);
+  assert.match(enComponents.names.join(" | "), /Canvas guide.*Skill/);
+  assert.match(enComponents.names.join(" | "), /Local connection.*MCP/);
+  assert.match(enComponents.observer, /Outside the main chat/);
+  assert.match(enComponents.observer, /On:/);
+  assert.match(enComponents.observer, /Off:/);
+  assert.equal(/主对话之外|主会話|オン：|オフ：/.test(enComponents.observer), false);
+  await page.keyboard.press("Escape");
   await page.selectOption("#locale", "zh-CN");
   await page.click('[data-client="codex"]');
   await page.waitForFunction(() => (document.querySelector("#agent-setup-hint")?.textContent ?? "").includes("桌面"));
+  assert.match(await page.locator("#agent-setup-hint").innerText(), /桌面应用/);
+  assert.match(await page.locator("#agent-setup-status").innerText(), /未安装/);
+  assert.match(await page.locator("#settings-title").innerText(), /设置/);
+  assert.match(await page.locator("#settings-close").innerText(), /关闭/);
 
   await page.locator("#agent-complete-setup").scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(out, "home-dark-1280.png") });
@@ -404,7 +432,8 @@ try {
   await assertSettingsOpen(page);
   const intro = await page.locator("#settings [data-setup-body]").innerText();
   assert.equal(/半套|half-installed|途中まで/.test(intro), false, `policy copy leaked: ${intro}`);
-  assert.match(intro, /先选你正在用的软件|Choose the app you are using|使っているソフトを選び/);
+  assert.match(intro, /先选你正在用的软件/);
+  assert.equal(/Choose the app you are using|使っているソフト/.test(intro), false);
   const components = await page.evaluate(() => ({
     names: [...document.querySelectorAll("#settings .setup-component-name")].map((el) => el.textContent?.replace(/\s+/g, " ").trim() ?? ""),
     desc: [...document.querySelectorAll("#settings .setup-components p")].map((el) => el.textContent ?? ""),
@@ -412,13 +441,13 @@ try {
     switchInHead: Boolean(document.querySelector(".setup-observer-head .observer-switch")),
   }));
   assert.equal(components.switchInHead, true, "aside switch must sit next to the 旁念 title");
-  assert.match(components.names.join(" | "), /旁念触发.*Hooks|Aside trigger.*Hooks|傍らの起動.*Hooks/);
-  assert.match(components.names.join(" | "), /画布用法.*Skill|Canvas guide.*Skill|キャンバスの使い方.*Skill/);
-  assert.match(components.names.join(" | "), /本机连接.*MCP|Local connection.*MCP|この端末の接続.*MCP/);
-  assert.match(components.desc.join("\n"), /旁念开了也不会自己出现|will not start them by itself|自分では出ません/);
-  assert.match(components.observer, /主对话之外|Outside the main chat|主会話の外/);
-  assert.match(components.observer, /开：|On:|オン：/);
-  assert.match(components.observer, /关：|Off:|オフ：/);
+  assert.match(components.names.join(" | "), /旁念触发.*Hooks/);
+  assert.match(components.names.join(" | "), /画布用法.*Skill/);
+  assert.match(components.names.join(" | "), /本机连接.*MCP/);
+  assert.match(components.desc.join("\n"), /旁念开了也不会自己出现/);
+  assert.match(components.observer, /主对话之外/);
+  assert.match(components.observer, /开：/);
+  assert.match(components.observer, /关：/);
   assert.equal(/观察者|observer with no chat history|観察者を/.test(components.observer), false, `aside copy still too technical: ${components.observer}`);
   await page.screenshot({ path: path.join(out, "settings-dark-1280.png") });
   const cursorSettings = await page.evaluate(() => ({

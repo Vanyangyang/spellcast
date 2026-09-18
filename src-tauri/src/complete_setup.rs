@@ -145,6 +145,10 @@ pub struct SetupPaths {
     pub lock: Arc<Mutex<()>>,
     pub skip_path_lookup: bool,
     pub fault: Option<FaultInject>,
+    /// Completion inbox shared by Codex notify and the Grok Build notification hook.
+    pub completion_root: PathBuf,
+    /// Executable copied next to the inbox as the stable notification helper.
+    pub notify_helper: PathBuf,
 }
 
 #[derive(Clone)]
@@ -2000,15 +2004,22 @@ fn grok_status(client: &str, url: Option<&str>, paths: &SetupPaths) -> SetupRepo
         GrokMcp::Absent | GrokMcp::Ready | GrokMcp::Incomplete => {}
     }
     let skill_ok = grok_skill_present(&skill);
-    if matches!(mcp_state, GrokMcp::Ready) && skill_ok {
+    let grok_home = paths.user_home.join(".grok");
+    let hook_ok = crate::completion_hook::grok_hook_installed(&grok_home, &paths.completion_root);
+    if matches!(mcp_state, GrokMcp::Ready) && skill_ok && hook_ok {
         let mut r = SetupReport::base(
             client,
             SetupKind::Verified,
-            "Grok Build 的 MCP 与 Skill 已按文件核验。",
+            "Grok Build 的 MCP、Skill 与完成通知已按文件核验。",
         );
         r.done.push(format!("MCP：{}", config.display()));
         r.done
             .push(format!("Skill：{}", skill.join("SKILL.md").display()));
+        r.done.push(format!(
+            "完成通知：{} → {}",
+            crate::completion_hook::grok_hook_path(&grok_home).display(),
+            crate::completion_hook::grok_hook_command(&paths.completion_root)
+        ));
         r.done.push("未写 hook trust。".into());
         r.not_done.push("未改旁念开关。".into());
         return locate_grok(r, &mcp);
@@ -2016,7 +2027,7 @@ fn grok_status(client: &str, url: Option<&str>, paths: &SetupPaths) -> SetupRepo
     let mut r = SetupReport::base(
         client,
         SetupKind::NotInstalled,
-        "尚未安装 Grok Build 接入（MCP + Skill）。",
+        "尚未安装 Grok Build 接入（MCP + Skill + 完成通知）。",
     );
     if matches!(mcp_state, GrokMcp::Ready) {
         r.done.push("MCP 已写入。".into());
@@ -2027,6 +2038,11 @@ fn grok_status(client: &str, url: Option<&str>, paths: &SetupPaths) -> SetupRepo
         r.done.push("Skill 已安装。".into());
     } else {
         r.not_done.push("Skill 未安装。".into());
+    }
+    if hook_ok {
+        r.done.push("完成通知已写入。".into());
+    } else {
+        r.not_done.push("完成通知未写入。".into());
     }
     locate_grok(r, &mcp)
 }
@@ -2074,6 +2090,19 @@ fn grok_install_inner(client: &str, url: Option<&str>, paths: &SetupPaths) -> Se
             return r;
         }
     };
+    // Grok Build's Stop lifecycle hook (~/.grok/hooks/spellcast.json) is the completion signal, like Codex notify.
+    if let Err(err) = crate::completion_hook::install_grok(
+        &paths.user_home.join(".grok"),
+        &paths.completion_root,
+        &paths.notify_helper,
+    ) {
+        let mut r = SetupReport::base(client, SetupKind::Failed, &err);
+        r.partial = true;
+        r.mcp_url = Some(mcp);
+        r.done.push("MCP 与 Skill 已写入，完成通知未完成。".into());
+        r.backup = written.backup.or(skill.backup);
+        return r;
+    }
     let mut r = grok_status(client, Some(&mcp), paths);
     if r.backup.is_none() {
         r.backup = written.backup.or(skill.backup);
@@ -2871,6 +2900,8 @@ fn install_inner(
 
 pub fn default_paths(user_home: PathBuf, resource_root: PathBuf) -> Result<SetupPaths, String> {
     let codex_home = crate::completion_hook::codex_home()?;
+    let completion_root = crate::completion_hook::root()?;
+    let notify_helper = std::env::current_exe().map_err(|err| format!("找不到 Spellcast 程序：{err}"))?;
     Ok(SetupPaths {
         user_home,
         codex_home,
@@ -2880,6 +2911,8 @@ pub fn default_paths(user_home: PathBuf, resource_root: PathBuf) -> Result<Setup
         lock: global_install_lock(),
         skip_path_lookup: false,
         fault: None,
+        completion_root,
+        notify_helper,
     })
 }
 
@@ -2940,6 +2973,8 @@ mod tests {
             lock: Arc::new(Mutex::new(())),
             skip_path_lookup: true,
             fault: None,
+            completion_root: codex.join("spellcast").join("completions"),
+            notify_helper: bundle.join("bin").join(helper_name()),
         }
     }
 
@@ -3142,9 +3177,16 @@ mod tests {
         assert!(text.contains("[mcp_servers.spellcast]"));
         assert!(text.contains("url = \"http://127.0.0.1:47194/mcp\""));
         assert!(text.contains("enabled = true"));
-        assert!(!text.contains("command"));
         assert!(!text.contains("args"));
         assert!(!text.contains("type = "));
+        // The completion signal is a Stop lifecycle hook file, not a config.toml entry.
+        assert!(!text.contains("--grok-notify"), "{text}");
+        let hook_text = fs::read_to_string(grok_dir.join("hooks").join("spellcast.json")).unwrap();
+        assert!(hook_text.contains("\"Stop\"") && hook_text.contains("--grok-notify"), "{hook_text}");
+        assert!(text.contains("theme = \"dark\""));
+        assert!(installed.done.iter().any(|d| d.starts_with("完成通知：")), "{:?}", installed.done);
+        let notify_helper = if cfg!(windows) { "spellcast-notify.exe" } else { "spellcast-notify" };
+        assert!(codex.join("spellcast").join("completions").join(notify_helper).is_file());
         assert_eq!(
             fs::read_to_string(codex.join("config.toml")).unwrap(),
             "model = \"keep-codex\"\n"

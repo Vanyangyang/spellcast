@@ -2,7 +2,7 @@
   "name": "spellcast",
   "private": true,
   "license": "AGPL-3.0-or-later",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "type": "module",
   "scripts": {
     "start": "node scripts/start.mjs",
@@ -11,6 +11,7 @@
     "prepare:codex-plugin": "node scripts/prepare-codex-plugin-resource.mjs",
     "check:complete-setup-ui": "node scripts/check-complete-setup-ui.mjs",
     "check:complete-setup-preview": "node scripts/check-complete-setup-preview.mjs",
+    "check:i18n": "node scripts/check-i18n.mjs",
     "check:content-organization": "node scripts/check-content-organization.mjs",
     "check:content-organization-preview": "node scripts/check-content-organization-preview.mjs",
     "dev": "vite --host 127.0.0.1 --port 47193",

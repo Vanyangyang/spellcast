@@ -135,7 +135,7 @@ const ja: Record<Key, string> = {
 };
 
 export function ct(key: Key, vars: Record<string, string | number> = {}): string {
-  let text = (currentLocale() === "zh-CN" ? zh : currentLocale() === "ja" ? ja : en)[key];
+  let text = (currentLocale() === "zh-CN" ? zh : en)[key];
   for (const [name, value] of Object.entries(vars)) text = text.replaceAll(`{${name}}`, () => String(value));
   return text;
 }

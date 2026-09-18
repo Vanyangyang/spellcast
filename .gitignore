@@ -20,3 +20,4 @@ data/session.json
 /.playwright-mcp
 .vscode
 .idea
+/src-tauri/target-test

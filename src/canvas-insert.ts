@@ -44,19 +44,6 @@ const STRINGS: Record<Locale, Strings> = {
     criterion: "Criterion", optionA: "Option A", optionB: "Option B", pending: "To be filled in", firstStep: "Step 1",
     submitHint: "Enter adds, Esc cancels; in multi-line fields use Ctrl+Enter.",
   },
-  ja: {
-    heading: "コンポーネントを追加", help: "種類を選び、初期内容を入力してキャンバスに追加します。比較・関係図・手順は編集可能なプレースホルダーから始まります。",
-    kindLegend: "コンポーネントの種類",
-    kind: { text: "テキスト", image: "画像", rect: "長方形", ellipse: "楕円", comparison: "比較", graph: "関係図", sequence: "手順" },
-    title: "タイトル", titleOptional: "タイトル（任意）", text: "本文", shapeText: "図形内のテキスト（任意）", graphDetail: "最初のノードの説明（任意）", stepAction: "最初のステップの内容（任意）",
-    src: "画像のアドレス", srcHint: "http(s) リンク、または /artifacts/… のローカルリソースパス。", alt: "画像の説明（任意）", fill: "塗り色",
-    cancel: "キャンセル", add: "追加", adding: "追加中…",
-    needTitle: "タイトルを入力してください。", needText: "テキストには本文が必要です。", needSrc: "画像のアドレスを入力してください。",
-    badSrc: "画像のアドレスは http(s) リンク、/artifacts/… のローカルパス、または PNG/JPEG/WebP の base64 data URL のみ使えます。",
-    badFill: "塗り色は #RGB または #RRGGBB のみ使えます。", longTitle: "タイトルは 160 文字までです。",
-    criterion: "観点", optionA: "案 A", optionB: "案 B", pending: "未記入", firstStep: "ステップ 1",
-    submitHint: "Enter で追加、Esc でキャンセル。複数行入力では Ctrl+Enter。",
-  },
 };
 
 function strings(): Strings { return STRINGS[currentLocale()] ?? STRINGS.en; }

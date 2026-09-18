@@ -115,7 +115,7 @@ const ja: Record<Key, string> = {
 
 export function bt(key: Key, vars: Record<string, string | number> = {}): string {
   const locale = currentLocale();
-  let text = (locale === "zh-CN" ? zh : locale === "ja" ? ja : en)[key];
+  let text = (locale === "zh-CN" ? zh : en)[key];
   for (const [name, value] of Object.entries(vars)) text = text.replaceAll("{" + name + "}", String(value));
   return text;
 }

@@ -109,7 +109,7 @@ try {
   await until(async () => (await page.locator('#completion-voice').getAttribute('aria-pressed')) === 'false', 'Voice mute did not persist');
   report.voiceToggle = true;
   await page.locator('.task').click();
-  assert.equal(await page.locator('.hint').innerText(), '双击回到 Codex ↗');
+  assert.match(await page.locator('.hint').innerText(), /双击回到 Codex ↗|Double-click to return to Codex ↗/);
   await sleep(17000); assert.equal(await page.locator('.completion-bubble').count(), 1);
   report.survivesOrdinaryBubbleLifetime = true;
   await page.locator('.task').dblclick();

@@ -9,11 +9,7 @@ const words = {
   },
   en: {
     close: "Close", reproduce: "Reproduce saved state", loading: "Loading the saved parameters…", ready: "This is a read-only replay of the saved parameters.", noPreview: "No image was saved for this state.", saved: "Saved state", note: "This reproduces saved parameters; animation is not frozen pixel by pixel.", failed: "The saved state could not be reproduced.",
-  },
-  ja: {
-    close: "閉じる", reproduce: "保存した状態を再現", loading: "保存した値を読み込んでいます…", ready: "保存した値の読み取り専用の再現です。", noPreview: "この状態には保存済みの画像がありません。", saved: "保存した状態", note: "保存した値を再現しています。アニメーションはピクセル単位で固定されません。", failed: "保存した状態を再現できませんでした。",
-  },
-};
+  },};
 type Word = keyof typeof words.en;
 function t(key: Word) { return words[currentLocale()][key]; }
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = "") {

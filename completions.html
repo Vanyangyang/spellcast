@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Spellcast · 任务完成</title>
+    <title>Spellcast</title>
   </head>
   <body>
-    <header class="completion-toolbar"><span>已完成</span><button id="completion-voice" type="button" aria-pressed="false" disabled>轻声提醒</button></header>
-    <main id="completions" aria-label="已完成的 Codex 任务"></main>
+    <header class="completion-toolbar"><span data-i18n="completion.heading">已完成</span><button id="completion-voice" type="button" data-i18n="completion.voice" aria-pressed="false" disabled>轻声提醒</button></header>
+    <main id="completions" data-i18n-aria="completion.listAria" aria-label="已完成的任务"></main>
     <script type="module" src="/src/completions.ts"></script>
   </body>
 </html>

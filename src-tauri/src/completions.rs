@@ -14,12 +14,31 @@ pub fn get_completions(state: tauri::State<'_, Arc<CompletionState>>) -> Result<
 
 #[tauri::command]
 pub fn open_completed_task(app: AppHandle, thread_id: String, turn_id: String) -> Result<(), String> {
+    let root = completion_hook::root()?;
     let state = app.state::<Arc<CompletionState>>();
-    if !state.0.lock().map_err(|e| e.to_string())?.iter().any(|item| item.thread_id == thread_id && item.turn_id == turn_id) {
-        return Err("这条完成通知已不可用。".into());
+    let item = state.0.lock().map_err(|e| e.to_string())?.iter()
+        .find(|item| item.thread_id == thread_id && item.turn_id == turn_id).cloned();
+    let Some(item) = item else {
+        return Err(completion_speech::copy(&root, "这条完成通知已不可用。", "That completion notice is no longer available."));
+    };
+    if item.client != completion_hook::CLIENT_CODEX {
+        // Grok Build has no deep link back into the terminal; opening just clears the card.
+        return completion_hook::dismiss(&root, &thread_id, &turn_id);
     }
-    completion_hook::activate(&completion_hook::root()?, &thread_id, &turn_id,
-        |url| app.opener().open_url(url, None::<&str>).map_err(|_| "暂时无法打开 Codex，请确认 App 已安装后重试。".to_string()))
+    completion_hook::activate(&root, &thread_id, &turn_id,
+        |url| app.opener().open_url(url, None::<&str>).map_err(|_| completion_speech::copy(&root,
+            "暂时无法打开 Codex，请确认 App 已安装后重试。",
+            "Couldn't open Codex. Make sure the app is installed, then try again.")))
+}
+
+#[tauri::command]
+pub fn set_ui_locale(app: AppHandle, locale: String) -> Result<String, String> {
+    let root = completion_hook::root()?;
+    let locale = completion_speech::set_ui_locale(&root, &locale)?;
+    if let Some(win) = app.get_webview_window(LABEL) {
+        let _ = win.set_title(completion_speech::window_title(locale));
+    }
+    Ok(locale.to_string())
 }
 
 #[tauri::command]
@@ -39,31 +58,42 @@ pub fn dismiss_completion(thread_id: String, turn_id: String) -> Result<(), Stri
     completion_hook::dismiss(&completion_hook::root()?, &thread_id, &turn_id)
 }
 
+/// The card window is built once, hidden, and then only shown, moved and hidden. Building a
+/// transparent always-on-top WebView2 window in the middle of a completion has hung the main
+/// thread on Windows; a window that already exists only needs cheap show/hide calls.
+fn ensure_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    if let Some(win) = app.get_webview_window(LABEL) { return Ok(win); }
+    let root = completion_hook::root()?;
+    WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("completions.html".into()))
+        .title(completion_speech::window_title(completion_speech::ui_locale(&root)?))
+        .inner_size(340.0, 160.0).decorations(false).shadow(false).transparent(true)
+        .always_on_top(true).skip_taskbar(true).focused(false).resizable(false)
+        .maximizable(false).minimizable(false).visible(false).build().map_err(|e| e.to_string())
+}
+
 fn present(app: &AppHandle, items: &[Completion]) -> Result<(), String> {
     if items.is_empty() {
-        if let Some(win) = app.get_webview_window(LABEL) { win.close().map_err(|e| e.to_string())?; }
+        if let Some(win) = app.get_webview_window(LABEL) {
+            let _ = win.emit("spellcast-completions", items);
+            win.hide().map_err(|e| e.to_string())?;
+        }
         return Ok(());
     }
-    let win = if let Some(win) = app.get_webview_window(LABEL) { win } else {
-        let screens = desktop::list_screens(app)?;
-        let screen = screens.iter().find(|s| s.is_active).or_else(|| screens.first()).ok_or("没有显示器。")?;
-        let width = 340.0_f64.min(screen.work_w - 32.0).max(180.0);
-        let win = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("completions.html".into()))
-            .title("Spellcast · 已完成的 Codex 任务")
-            .inner_size(width, 160.0).decorations(false).shadow(false).transparent(true)
-            .always_on_top(true).skip_taskbar(true).focused(false).resizable(false)
-            .maximizable(false).minimizable(false).visible(false).build().map_err(|e| e.to_string())?;
-        win.set_position(PhysicalPosition::new(
-            ((screen.work_x + screen.work_w - width - 16.0) * screen.scale).round() as i32,
-            ((screen.work_y + 16.0) * screen.scale).round() as i32,
-        )).map_err(|e| e.to_string())?;
-        win
-    };
-    let monitor = win.current_monitor().map_err(|e| e.to_string())?;
-    let max_height = monitor.map(|m| f64::from(m.work_area().size.height) / m.scale_factor() - 32.0).unwrap_or(600.0);
-    let width = f64::from(win.inner_size().map_err(|e| e.to_string())?.width) / win.scale_factor().map_err(|e| e.to_string())?;
-    win.set_size(LogicalSize::new(width, (items.len() as f64 * 140.0 + 68.0).min(max_height).max(120.0)))
-        .map_err(|e| e.to_string())?;
+    let root = completion_hook::root()?;
+    // The screen holding the foreground window is where the user is looking. A completion is
+    // re-anchored there every time the list changes, so a card never lands on a screen chosen
+    // hours earlier when the window was first created.
+    let screens = desktop::list_screens(app)?;
+    let screen = screens.iter().find(|s| s.is_active).or_else(|| screens.first())
+        .ok_or_else(|| completion_speech::copy(&root, "没有显示器。", "No display found."))?;
+    let width = 340.0_f64.min(screen.work_w - 32.0).max(180.0);
+    let win = ensure_window(app)?;
+    let height = (items.len() as f64 * 140.0 + 68.0).min(screen.work_h - 32.0).max(120.0);
+    win.set_size(LogicalSize::new(width, height)).map_err(|e| e.to_string())?;
+    win.set_position(PhysicalPosition::new(
+        ((screen.work_x + screen.work_w - width - 16.0) * screen.scale).round() as i32,
+        ((screen.work_y + 16.0) * screen.scale).round() as i32,
+    )).map_err(|e| e.to_string())?;
     win.emit("spellcast-completions", items).map_err(|e| e.to_string())?;
     // Set visibility in the native lifecycle, like ordinary bubbles; the page
     // fetches its initial snapshot independently of window creation.
@@ -75,6 +105,10 @@ pub fn start(app: AppHandle) {
     let mut speech = completion_speech::SpeechPolicy::new(completion_speech::now_ms());
     let state = Arc::new(CompletionState::default());
     app.manage(state.clone());
+    let warm = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(err) = ensure_window(&warm) { eprintln!("Completion window: {err}"); }
+    });
     std::thread::spawn(move || {
         let Ok(root) = completion_hook::root() else { return; };
         let Ok(home) = completion_hook::codex_home() else { return; };

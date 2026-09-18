@@ -87,23 +87,7 @@ const WORDS: Record<Locale, Words> = {
     saveFailed: "Save failed", draftUnsafe: "The local draft could not be written; the current text remains in this panel.",
     draftRestored: "An unsaved draft was restored.", artifact: "Artifact state snapshot", artifactPreview: "Artifact preview", artifactState: "Preserved state note",
     footer: "Saving does not start a task. Only the final Canvas Send action passes it to the original task.", untitled: "Untitled content", noContent: "No displayable original text was saved.",
-  },
-  ja: {
-    heading: "注釈", help: "注釈には選択中コンテンツのスナップショットが残ります。保存はキャンバスだけを更新し、タスクは開始しません。",
-    current: "現在の内容", workspace: "ワークスペース全体", showRemoved: "削除済みの注釈を表示", hideRemoved: "削除済みの注釈を隠す",
-    add: "注釈を追加", close: "閉じる", empty: "ここにはまだ注釈がありません。", removedEmpty: "削除済みの注釈はありません。",
-    authorYou: "あなた", authorAgent: "Agent", updated: "元の内容が更新済み", removed: "元の内容が削除済み", unavailable: "元の内容を利用できません",
-    original: "元の内容", annotation: "注釈", noteRemoved: "注釈は削除済み", edit: "編集", view: "対象を表示", discuss: "この注釈を話題にする",
-    remove: "削除", restore: "復元", editorNew: "注釈を追加", editorEdit: "注釈を編集", source: "対象",
-    characters: "文字", cancelEdit: "閉じる", save: "キャンバスに保存", saving: "保存中…", selectTarget: "対象を選び直す",
-    targetRequired: "最初にキャンバス上で 1 つの項目を選択してください。", textRequired: "注釈の本文を入力してください。", textTooLong: "注釈は 8,000 文字までです。",
-    sourceConflict: "元の内容の版が変わりました。対象を明示的に選び直してから保存してください。下書きは保持されています。",
-    annotationConflict: "この注釈は更新されました。下書きは保持されています。最新内容を確認してから続け方を決めてください。",
-    saveFailed: "保存に失敗しました", draftUnsafe: "ローカル下書きを書き込めませんでした。現在のテキストはこのパネルに残っています。",
-    draftRestored: "未保存の下書きを復元しました。", artifact: "作品状態のスナップショット", artifactPreview: "作品プレビュー", artifactState: "保持された状態メモ",
-    footer: "保存してもタスクは開始しません。最後に Canvas の送信を押したときだけ、元のタスクへ渡されます。", untitled: "無題の内容", noContent: "表示できる元のテキストは保存されていません。",
-  },
-};
+  },};
 
 type SourceState = "available" | "updated" | "removed" | "unavailable";
 type Scope = "current" | "workspace";

@@ -14,14 +14,7 @@ const words = {
     save: "Save only", apply: "Save and arrange", preview: "Arrangement preview", unavailable: "Nested groups or removed items are included. Only the viewing intent can be saved.",
     hint: "Save only keeps positions. Save and arrange repositions members in reading order, preserving their sizes and adding no connections.",
     freeHelp: "Keep every component in place.", side_by_sideHelp: "Align across a row for easy comparison.", figure_captionHelp: "The first member is the subject; explanations follow closely below.", sequenceHelp: "Unfold from top to bottom in reading order.",
-  },
-  ja: {
-    label: "一緒にどう見るか", free: "自由配置", side_by_side: "並べて比較", figure_caption: "図と説明", sequence: "順に展開",
-    save: "保存のみ", apply: "保存して配置", preview: "配置イメージ", unavailable: "グループまたは非表示の内容を含むため、見る順序のみ保存できます。",
-    hint: "保存のみでは位置を保持します。保存して配置すると、サイズを変えずに順序に沿って並べます。関係線は作りません。",
-    freeHelp: "各部品の位置を保持します。", side_by_sideHelp: "上端を揃えて横に並べ、比較しやすくします。", figure_captionHelp: "最初の部品を主題にし、説明をその下に置きます。", sequenceHelp: "上から下へ、読む順序で展開します。",
-  },
-};
+  },};
 export function arrangementText(key: keyof typeof words.en): string { return words[currentLocale()][key]; }
 export function isArrangement(value: unknown): value is CanvasArrangement { return arrangements.includes(value as CanvasArrangement); }
 

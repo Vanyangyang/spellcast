@@ -31,6 +31,7 @@ import {
   patchCanvas,
   applyCanvasBatch,
   resolveCanvasProposal,
+  syncUiLocale,
 } from "./api";
 import { mountCanvas, type CanvasSelection } from "./canvas";
 import { CanvasRecipient, originalTask } from "./canvas-recipient";
@@ -669,6 +670,7 @@ async function boot() {
   void setSurface(mode).catch(() => undefined);
   fillLocaleSelect();
   applyDom();
+  void syncUiLocale().catch(() => undefined);
   fillKindWeight();
   paintForms();
   paint();
@@ -696,6 +698,7 @@ async function boot() {
     paintObserver();
     const lastSetup = setupController.lastReport();
     if (lastSetup) setupController.paint(lastSetup);
+    void syncUiLocale().catch(() => undefined);
   });
   if (!isDesktopShell()) {
     // Browser preview: no Tauri events, so poll the bridge instead.

@@ -16,12 +16,89 @@ pub struct VoiceSettings {
     pub quiet_hours: &'static str,
 }
 
+pub const SPEECH_PHRASE_ZH: &str = "有任务完成了。";
+pub const SPEECH_PHRASE_EN: &str = "A task is ready.";
+
+const SCRIPT_ZH: &str = r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Speech
+$completionVoice = New-Object System.Speech.Synthesis.SpeechSynthesizer
+try {
+    $completionVoice.Volume = 25
+    $completionVoice.Rate = -1
+    $match = $completionVoice.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'zh-*' } | Select-Object -First 1
+    if ($match) { $completionVoice.SelectVoice($match.VoiceInfo.Name) }
+    $completionVoice.Speak('有任务完成了。')
+} finally { $completionVoice.Dispose() }
+"#;
+
+const SCRIPT_EN: &str = r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Speech
+$completionVoice = New-Object System.Speech.Synthesis.SpeechSynthesizer
+try {
+    $completionVoice.Volume = 25
+    $completionVoice.Rate = -1
+    $match = $completionVoice.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'en-*' } | Select-Object -First 1
+    if ($match) { $completionVoice.SelectVoice($match.VoiceInfo.Name) }
+    $completionVoice.Speak('A task is ready.')
+} finally { $completionVoice.Dispose() }
+"#;
+
+pub fn normalize_locale(raw: &str) -> &'static str {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower == "zh-cn" || lower == "zh" || lower.starts_with("zh-") {
+        "zh-CN"
+    } else {
+        "en"
+    }
+}
+
+pub fn speech_phrase(locale: &str) -> &'static str {
+    if normalize_locale(locale) == "zh-CN" { SPEECH_PHRASE_ZH } else { SPEECH_PHRASE_EN }
+}
+
+pub fn powershell_script(locale: &str) -> &'static str {
+    if normalize_locale(locale) == "zh-CN" { SCRIPT_ZH } else { SCRIPT_EN }
+}
+
+pub fn window_title(locale: &str) -> &'static str {
+    if normalize_locale(locale) == "zh-CN" {
+        "Spellcast · 已完成的任务"
+    } else {
+        "Spellcast · Completed tasks"
+    }
+}
+
 fn preferences(root: &Path) -> Result<rusqlite::Connection, String> {
     let db = completion_hook::inbox(root)?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS completion_preferences (
-        key TEXT PRIMARY KEY, value INTEGER NOT NULL);")
+        key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS completion_text (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL);")
         .map_err(|e| e.to_string())?;
     Ok(db)
+}
+
+pub fn ui_locale(root: &Path) -> Result<&'static str, String> {
+    let stored: Option<String> = preferences(root)?.query_row(
+        "SELECT value FROM completion_text WHERE key='ui_locale'", [], |row| row.get(0)
+    ).optional().map_err(|e| e.to_string())?;
+    Ok(normalize_locale(stored.as_deref().unwrap_or("zh-CN")))
+}
+
+pub fn set_ui_locale(root: &Path, locale: &str) -> Result<&'static str, String> {
+    let locale = normalize_locale(locale);
+    preferences(root)?.execute(
+        "INSERT INTO completion_text(key,value) VALUES ('ui_locale',?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [locale],
+    ).map_err(|e| e.to_string())?;
+    Ok(locale)
+}
+
+pub fn copy(root: &Path, zh: &str, en: &str) -> String {
+    if ui_locale(root).ok() == Some("en") { en.to_string() } else { zh.to_string() }
 }
 
 pub fn settings(root: &Path) -> Result<VoiceSettings, String> {
@@ -112,38 +189,27 @@ impl SpeechPolicy {
 #[cfg(windows)]
 pub fn speak(root: &Path) -> Result<(), String> {
     use std::{os::windows::process::CommandExt, process::{Command, Stdio}, time::{Duration, Instant}};
-    // All command text is fixed. Task content is never interpolated into a shell or read aloud.
-    const SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Speech
-$completionVoice = New-Object System.Speech.Synthesis.SpeechSynthesizer
-try {
-    $completionVoice.Volume = 25
-    $completionVoice.Rate = -1
-    $chineseVoice = $completionVoice.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -like 'zh-*' } | Select-Object -First 1
-    if ($chineseVoice) {
-        $completionVoice.SelectVoice($chineseVoice.VoiceInfo.Name)
-        $completionVoice.Speak('Codex 有任务完成了。')
-    } else {
-        $completionVoice.Speak('A Codex task is ready.')
-    }
-} finally { $completionVoice.Dispose() }
-"#;
+    // Scripts are fixed per UI locale. Task content is never interpolated into a shell or read aloud.
     if !settings(root)?.enabled || !(8..22).contains(&local_hour()) { return Ok(()); }
+    let script = powershell_script(ui_locale(root)?);
     let executable = std::env::var_os("SystemRoot").map(std::path::PathBuf::from)
-        .ok_or("找不到 Windows 系统目录。")?.join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let mut child = Command::new(executable).args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .ok_or_else(|| copy(root, "找不到 Windows 系统目录。", "Windows system directory was not found."))?
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let mut child = Command::new(executable).args(["-NoProfile", "-NonInteractive", "-Command", script])
         .creation_flags(0x0800_0000).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn().map_err(|e| e.to_string())?;
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return if status.success() { Ok(()) } else { Err("系统语音不可用；气泡仍然保留。".into()) },
+            Ok(Some(status)) => return if status.success() { Ok(()) } else {
+                Err(copy(root, "系统语音不可用；气泡仍然保留。", "System speech is unavailable; the bubble stays."))
+            },
             Ok(None) => {},
             Err(err) => { let _ = child.kill(); let _ = child.wait(); return Err(err.to_string()); }
         }
         if Instant::now() >= deadline {
-            let _ = child.kill(); let _ = child.wait(); return Err("系统语音未及时结束，已停止播报。".into());
+            let _ = child.kill(); let _ = child.wait();
+            return Err(copy(root, "系统语音未及时结束，已停止播报。", "System speech did not finish in time and was stopped."));
         }
         if !settings(root).map(|s| s.enabled).unwrap_or(false) {
             let _ = child.kill(); let _ = child.wait(); return Ok(());
@@ -159,7 +225,7 @@ fn speak(_root: &Path) -> Result<(), String> { Ok(()) }
 mod tests {
     use super::*;
     fn item(turn: &str, at: u64) -> Completion { Completion { thread_id: "thread".into(), turn_id: turn.into(),
-        title: String::new(), summary: String::new(), project: String::new(), completed_at_ms: at } }
+        title: String::new(), summary: String::new(), project: String::new(), completed_at_ms: at, client: "codex".into() } }
     #[test]
     fn completion_speech_merges_and_does_not_replay_restored_or_dismissed_items() {
         let mut policy=SpeechPolicy::new(100);
@@ -189,6 +255,25 @@ mod tests {
         set_enabled(&p,false).unwrap(); assert!(!settings(&p).unwrap().enabled);
         assert!(claim_slot(&p,100000).unwrap()); assert!(!claim_slot(&p,110000).unwrap());
         assert!(!claim_slot(&p,90000).unwrap()); assert!(claim_slot(&p,190000).unwrap());
+        std::fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn completion_speech_follows_ui_locale() {
+        assert_eq!(normalize_locale("ja"), "en");
+        assert_eq!(normalize_locale("zh-TW"), "zh-CN");
+        assert_eq!(speech_phrase("zh-CN"), SPEECH_PHRASE_ZH);
+        assert_eq!(speech_phrase("en"), SPEECH_PHRASE_EN);
+        assert!(powershell_script("zh-CN").contains(SPEECH_PHRASE_ZH));
+        assert!(!powershell_script("zh-CN").contains(SPEECH_PHRASE_EN));
+        assert!(powershell_script("en").contains(SPEECH_PHRASE_EN));
+        assert!(!powershell_script("en").contains(SPEECH_PHRASE_ZH));
+        let p=std::env::temp_dir().join(format!("spellcast-voice-locale-{}",uuid::Uuid::new_v4()));
+        assert_eq!(ui_locale(&p).unwrap(), "zh-CN");
+        assert_eq!(set_ui_locale(&p, "en").unwrap(), "en");
+        assert_eq!(ui_locale(&p).unwrap(), "en");
+        assert_eq!(window_title(ui_locale(&p).unwrap()), "Spellcast · Completed tasks");
+        assert_eq!(set_ui_locale(&p, "zh-CN").unwrap(), "zh-CN");
+        assert_eq!(window_title(ui_locale(&p).unwrap()), "Spellcast · 已完成的任务");
         std::fs::remove_dir_all(p).unwrap();
     }
     #[cfg(windows)]
