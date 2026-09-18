@@ -31,6 +31,8 @@ This is an early preview, not a finished product. The path that is **supported a
 
 3. **Claim, note, and tell the agent**
 
+   ![Canvas Claim and Note card with the Tell the agent bar](docs/media/03-canvas-claim-note.png)
+
    A **Claim** or **Note** on the Canvas, plus **Tell the agent**. That bar sends a follow-up into the session. It does not create bubbles.
 
 ## Where the preview stands
