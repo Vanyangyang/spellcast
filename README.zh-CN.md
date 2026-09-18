@@ -60,6 +60,8 @@ Spellcast 是通过 MCP 连接的本地桌面应用，不运行模型，也不�
 
 ## 开始使用
 
+![Spellcast 桌面设置：旁念开关、MCP 地址，以及 Codex / Grok Build 一步接入](docs/media/spellcast-desktop-settings.png)
+
 1. 按下文从当前源码运行，或安装[公开的 Windows 体验版](https://github.com/Vanyangyang/spellcast/releases/latest)。
 2. **Codex：** 打开**设置**，保持选中 Codex，安装或更新 Spellcast 接入。一次写入 MCP、Hooks 和行为 Skill，并完成备份及冲突检查。然后重载 Codex，按接入状态中的提示信任 Hooks。
 3. **Grok Build：** 在同一设置页选择 Grok Build 并安装。这会把 MCP + Skill 写入 `~/.grok`（`config.toml` 的 `[mcp_servers.spellcast]` 与 `skills/spellcast/`），并在 `~/.grok/hooks/spellcast.json` 写入完成提醒 hook（生命周期 `Stop` hook，调用 Spellcast 的助手程序）。然后重载 Grok Build。这条路径不安装 Codex 插件，也不会把画布请求回发到 Grok 会话。

@@ -60,6 +60,8 @@ Kept ideas and replies survive restart. Durable memory is separate: save only wh
 
 ## Get started
 
+![Spellcast desktop settings: asides switch, MCP address, and one-step setup for Codex or Grok Build](docs/media/spellcast-desktop-settings.png)
+
 1. Build the current source (below) for the workflow described here, or install the [published Windows preview](https://github.com/Vanyangyang/spellcast/releases/latest).
 2. For **Codex**, open **Settings**, keep Codex selected, and install or update the Spellcast integration. This writes MCP, Hooks, and the behavior Skill together, with backups and conflict checks. Reload Codex and follow any Hooks trust instructions shown by the integration status.
 3. For **Grok Build**, choose Grok Build on the same Settings page and install. That writes MCP + Skill into `~/.grok` (`config.toml` `[mcp_servers.spellcast]` and `skills/spellcast/`) and a completion notice hook at `~/.grok/hooks/spellcast.json` (a lifecycle `Stop` hook that runs the Spellcast helper). Reload Grok Build afterward. This path does not install a Codex plugin, and it does not send Canvas requests back into a Grok session.
