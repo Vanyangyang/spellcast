@@ -163,13 +163,13 @@ function makeCard(node: BoardNode, selected: boolean): THREE.Group {
   group.userData.nodeId = node.id;
   const scale = weightScale(node.weight) * (selected ? 1.12 : 1);
   const texture = cardTexture(node, selected);
-  const mat = new THREE.MeshStandardMaterial({
+  // Card text is UI, so scene lighting must not wash out its contrast.
+  const mat = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
-    roughness: 0.45,
-    metalness: 0.08,
-    emissive: new THREE.Color(KIND_TONE[node.kind]),
-    emissiveIntensity: selected ? 0.22 : 0.08,
+    alphaTest: 0.02,
+    side: THREE.DoubleSide,
+    toneMapped: false,
   });
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3.4 * scale, 1.95 * scale), mat);
   mesh.userData.nodeId = node.id;
@@ -190,7 +190,7 @@ function makeCard(node: BoardNode, selected: boolean): THREE.Group {
 }
 
 function cardTexture(node: BoardNode, selected: boolean): THREE.CanvasTexture {
-  const key = `${currentLocale()}:${node.id}:${node.title}:${selected}`;
+  const key = `${currentLocale()}:${node.id}:${node.revision}:${node.title}:${node.body}:${node.kind}:${node.weight}:${selected}`;
   const hit = textures.get(key);
   if (hit) return hit;
 
@@ -201,7 +201,7 @@ function cardTexture(node: BoardNode, selected: boolean): THREE.CanvasTexture {
   const tone = KIND_TONE[node.kind];
 
   round(ctx, 18, 18, 476, 252, 28);
-  ctx.fillStyle = selected ? "rgba(22, 28, 38, 0.96)" : "rgba(14, 17, 24, 0.92)";
+  ctx.fillStyle = selected ? "#161c26" : "#0e1118";
   ctx.fill();
   ctx.strokeStyle = tone;
   ctx.globalAlpha = 0.85;
@@ -215,15 +215,15 @@ function cardTexture(node: BoardNode, selected: boolean): THREE.CanvasTexture {
   ctx.font = "600 18px 'IBM Plex Sans', 'Noto Sans SC', sans-serif";
   ctx.fillStyle = tone;
   ctx.fillText(kindLabel(node.kind), 40, 58);
-  ctx.fillStyle = "rgba(230,236,242,0.45)";
+  ctx.fillStyle = "#c0cbd9";
   ctx.fillText(weightLabel(node.weight), 400, 58);
 
   ctx.font = "600 32px 'IBM Plex Sans', 'Noto Sans SC', sans-serif";
-  ctx.fillStyle = "#f4f1ea";
+  ctx.fillStyle = "#fffaf2";
   wrap(ctx, node.title, 40, 108, 430, 36, 1);
 
   ctx.font = "400 20px 'IBM Plex Sans', 'Noto Sans SC', sans-serif";
-  ctx.fillStyle = "rgba(230,236,242,0.72)";
+  ctx.fillStyle = "#d8e0e9";
   wrap(ctx, node.body, 40, 168, 430, 28, 3);
 
   const texture = new THREE.CanvasTexture(canvas);

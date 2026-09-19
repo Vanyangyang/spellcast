@@ -53,7 +53,7 @@ Your agent keeps working on your task. Its asides appear as bubbles on the displ
 
 ## Where the preview stands
 
-- **Published build:** [0.4.7](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.7) — Windows x64 installer. See [0.4.7 notes](docs/releases/0.4.7.md).
+- **Published build:** [0.4.8](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.8) — Windows x64 installer. See [0.4.8 notes](docs/releases/0.4.8.md).
 - **This preview:** editable Canvas ideas, workspace/task organization, send-back to the original Codex Desktop task, one-step **Codex** setup (MCP + Hooks + Skill). **Grok Build setup comes later** (the Settings button is visible but disabled). See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md).
 - **Still rough.** Layout, copy, and the Skill are changing. Feedback and issues are welcome. See [the next improvement brief](docs/next-improvement-prompt.md).
 

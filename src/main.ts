@@ -1121,7 +1121,9 @@ function paintInspector() {
   insBody.value = node.body;
   insKind.value = node.kind;
   insWeight.value = node.weight;
-  document.querySelector("#ask-btn")!.textContent = bt("expand");
+  const expandButton = document.querySelector<HTMLButtonElement>("#ask-btn")!;
+  expandButton.textContent = bt("expand");
+  expandButton.title = bt("expandHint");
 }
 
 function paintStage() {

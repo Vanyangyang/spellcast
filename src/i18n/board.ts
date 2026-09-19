@@ -33,7 +33,7 @@ const en = {
   memoryName: "Short title", memoryText: "What should stay remembered?", save: "Remember this",
   forget: "Forget", noMemories: "No matching memories.", memorySaved: "Remembered on this computer.",
   memoryForgotten: "This memory has been removed.", openIdea: "Open idea", openReply: "Open reply",
-  expand: "Develop this idea", expandText: "Develop this adopted idea on the canvas. Use the expression that fits and preserve its context.",
+  expand: "Ask Agent to develop", expandHint: "Ask the original task to create linked Canvas content from this idea. This does not edit project files.", expandText: "Develop this adopted idea on the canvas. Use the expression that fits and preserve its context.",
   boardEmpty: "Keep a thought, then give it room.", boardEmptyBody: "Adopt a desktop bubble or add an idea. Select it and ask your agent to develop it on this canvas.",
   received: "New reply", error: "Could not complete this action.", saving: "Saving…",
 };
@@ -71,7 +71,7 @@ const zh: Record<Key, string> = {
   memoryName: "简短标题", memoryText: "什么内容应该留在记忆里？", save: "记住这件事",
   forget: "忘记", noMemories: "没有匹配的记忆。", memorySaved: "已在本机记住。",
   memoryForgotten: "这条记忆已移除。", openIdea: "回到想法", openReply: "回到回复",
-  expand: "展开这个想法", expandText: "请在画布上展开这个采纳的想法。选择适合它的表达形式，并保留上下文。",
+  expand: "请 Agent 展开", expandHint: "把这条想法发给原任务，让 Agent 生成关联的画布内容；不会修改项目文件。", expandText: "请在画布上展开这个采纳的想法。选择适合它的表达形式，并保留上下文。",
   boardEmpty: "留下一个念头，再给它一点空间。", boardEmptyBody: "采纳桌面气泡，或自己放下一个想法。选中它，请 Agent 在这块画布上继续展开。",
   received: "有新回复", error: "这次操作没有完成。", saving: "正在保存…",
 };
@@ -108,7 +108,7 @@ const ja: Record<Key, string> = {
   memoryName: "短いタイトル", memoryText: "何を記憶に残しますか？", save: "これを記憶する",
   forget: "忘れる", noMemories: "一致する記憶はありません。", memorySaved: "このコンピューターに記憶しました。",
   memoryForgotten: "この記憶を削除しました。", openIdea: "アイデアを開く", openReply: "返信を開く",
-  expand: "このアイデアを展開", expandText: "採用したアイデアをキャンバスで展開してください。適切な表現を選び、文脈を保ってください。",
+  expand: "Agentに展開を依頼", expandHint: "元のタスクにこのアイデアを送り、関連するキャンバスの内容を作成します。プロジェクトのファイルは変更しません。", expandText: "採用したアイデアをキャンバスで展開してください。適切な表現を選び、文脈を保ってください。",
   boardEmpty: "ひとつの思いつきに、広がる場所を。", boardEmptyBody: "バブルを採用するか、アイデアを追加します。選択して Agent に展開を依頼できます。",
   received: "新しい返信", error: "操作を完了できませんでした。", saving: "保存中…",
 };
