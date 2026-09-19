@@ -113,27 +113,6 @@
         <span id="agent-seen" data-i18n="agent.none"></span>
       </div>
 
-      <div class="agent-observer">
-        <label class="observer-switch" for="agent-observer-enabled">
-          <span class="observer-switch-title" data-i18n="observer.enable"></span>
-          <span class="observer-switch-side">
-            <input id="agent-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
-            <span class="observer-switch-track" aria-hidden="true"></span>
-            <span class="observer-switch-state">
-              <span class="observer-state-on" data-i18n="observer.on"></span>
-              <span class="observer-state-off" data-i18n="observer.off"></span>
-            </span>
-          </span>
-        </label>
-        <p class="agent-observer-hint" data-i18n="observer.lead"></p>
-        <ul class="observer-points">
-          <li data-i18n="observer.onMeans"></li>
-          <li data-i18n="observer.offMeans"></li>
-        </ul>
-        <p class="agent-observer-hint" data-i18n="observer.body"></p>
-        <p id="agent-observer-error" class="hint has-warning" role="alert" hidden></p>
-      </div>
-
       <div class="agent-url">
         <label for="agent-mcp-url" data-i18n="agent.url"></label>
         <div class="config-line">
@@ -155,6 +134,15 @@
         <p class="hint" data-i18n="settings.body" data-setup-body></p>
         <p id="agent-setup-status" class="setup-status"></p>
         <p id="agent-setup-hint" class="hint"></p>
+        <div class="agent-setup-checks">
+          <p class="agent-setup-checks-title" data-i18n="setup.checks"></p>
+          <ul class="setup-components setup-components-home">
+            <li><span data-i18n="setup.mcpName"></span><span data-setup-component="mcp" class="setup-component-status">—</span></li>
+            <li><span data-i18n="setup.skillName"></span><span data-setup-component="skill" class="setup-component-status">—</span></li>
+            <li><span data-i18n="setup.hooksName"></span><span data-setup-component="hooks" class="setup-component-status">—</span></li>
+          </ul>
+          <p class="agent-setup-checks-note" data-i18n="setup.checksScope"></p>
+        </div>
         <div class="config-actions">
           <button type="button" id="agent-complete-setup" class="primary" data-i18n="setup.install"></button>
           <button type="button" data-setup-refresh class="ghost" data-i18n="setup.check"></button>
@@ -163,6 +151,27 @@
           <summary data-i18n="setup.details"></summary>
           <pre id="agent-setup-details-body" class="setup-details-body"></pre>
         </details>
+      </div>
+
+      <div class="agent-observer">
+        <label class="observer-switch" for="agent-observer-enabled">
+          <span class="observer-switch-title" data-i18n="observer.enable"></span>
+          <span class="observer-switch-side">
+            <input id="agent-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
+            <span class="observer-switch-track" aria-hidden="true"></span>
+            <span class="observer-switch-state">
+              <span class="observer-state-on" data-i18n="observer.on"></span>
+              <span class="observer-state-off" data-i18n="observer.off"></span>
+            </span>
+          </span>
+        </label>
+        <p class="agent-observer-hint" data-i18n="observer.lead"></p>
+        <ul class="observer-points">
+          <li data-i18n="observer.onMeans"></li>
+          <li data-i18n="observer.offMeans"></li>
+        </ul>
+        <p class="agent-observer-hint" data-i18n="observer.body"></p>
+        <p id="agent-observer-error" class="hint has-warning" role="alert" hidden></p>
       </div>
 
       <div class="agent-activity">
@@ -178,6 +187,15 @@
           <h2 id="settings-title" data-i18n="settings.title"></h2>
           <button type="button" id="settings-close" class="ghost" data-i18n="settings.close"></button>
         </header>
+
+        <label class="theme-setting" for="theme-preference">
+          <span data-i18n="theme.label"></span>
+          <select id="theme-preference" data-theme-select>
+            <option value="dark" data-i18n="theme.dark"></option>
+            <option value="light" data-i18n="theme.light"></option>
+            <option value="system" data-i18n="theme.system"></option>
+          </select>
+        </label>
 
         <section class="setup-card" aria-labelledby="settings-connection-title">
           <div class="setup-card-heading">

@@ -84,6 +84,13 @@ pub enum SetupKind {
 pub enum HookTrust { Trusted, Untrusted, Modified, Disabled, Unknown }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SetupComponents {
+    pub mcp: bool,
+    pub skill: bool,
+    pub hooks: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SetupReport {
     pub client: String,
     pub kind: SetupKind,
@@ -100,6 +107,8 @@ pub struct SetupReport {
     pub conflicts: Vec<String>,
     pub partial: bool,
     pub hook_trust: Option<HookTrust>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub components: Option<SetupComponents>,
 }
 
 impl SetupReport {
@@ -123,6 +132,7 @@ impl SetupReport {
             conflicts: Vec::new(),
             partial: false,
             hook_trust: None,
+            components: None,
         }
     }
 }
@@ -2724,14 +2734,22 @@ pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) 
             Err(err) => return protected_codex_direct(client, err, paths, &mcp),
         },
     };
-    if matches!(mcp_state, GrokMcp::Ready) && features_ok && skill_ok && helper_ok && hooks_ok {
-        let trust = match (config_doc.as_ref(), hooks_doc.as_ref()) {
-            (Some(cfg), Some(hooks)) => {
-                inspect_user_aside_trust(cfg, &hooks_path, hooks, &helper, &status)
-            }
+    let components = SetupComponents {
+        mcp: matches!(mcp_state, GrokMcp::Ready),
+        skill: skill_ok,
+        hooks: features_ok && helper_ok && hooks_ok,
+    };
+    let trust = if components.hooks {
+        match (config_doc.as_ref(), hooks_doc.as_ref()) {
+            (Some(cfg), Some(hooks)) => inspect_user_aside_trust(cfg, &hooks_path, hooks, &helper, &status),
             _ => HookTrust::Unknown,
-        };
+        }
+    } else {
+        HookTrust::Unknown
+    };
+    if components.mcp && components.skill && components.hooks {
         let mut r = user_aside_files_report(client, trust);
+        r.components = Some(components);
         r.done.push(format!("MCP：{}", config_path.display()));
         r.done.push(format!("Skill：{}", codex_skill_md(&paths.codex_home).display()));
         r.done.push(format!("Hooks：{}", hooks_path.display()));
@@ -2744,6 +2762,8 @@ pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) 
         SetupKind::NotInstalled,
         "尚未安装完整 Spellcast 接入。",
     );
+    if components.hooks { r.hook_trust = Some(trust); }
+    r.components = Some(components);
     if matches!(mcp_state, GrokMcp::Ready) {
         r.done.push("MCP 已写入。".into());
     } else {
@@ -4393,6 +4413,8 @@ enabled = ["cursor-bridge"]
         assert_ne!(r.kind, SetupKind::MissingCli);
         assert!(r.complete_supported);
         assert!(!r.installed);
+        let components = r.components.as_ref().unwrap();
+        assert!(!components.mcp && !components.skill && !components.hooks);
         assert_eq!(r.mcp_url.as_deref(), Some("http://127.0.0.1:47194/mcp"));
         assert!(r.source_path.is_some(), "{:?}", r.source_path);
         assert_eq!(collect_files(&user), before);
@@ -4442,6 +4464,8 @@ enabled = ["cursor-bridge"]
         let installed = codex_direct_install("codex", Some("http://127.0.0.1:47194/mcp"), &p);
         assert_eq!(installed.kind, SetupKind::InstalledPendingTrust, "{:?}", installed);
         assert!(installed.installed);
+        let components = installed.components.as_ref().unwrap();
+        assert!(components.mcp && components.skill && components.hooks);
         assert_eq!(installed.hook_trust, Some(HookTrust::Untrusted));
         assert_ne!(installed.kind, SetupKind::MissingCli);
         assert_ne!(installed.kind, SetupKind::Verified);
@@ -4480,6 +4504,11 @@ enabled = ["cursor-bridge"]
         assert_eq!(again.kind, SetupKind::InstalledPendingTrust, "{:?}", again);
         assert!(again.note.contains("未重复写入"), "{:?}", again.note);
         assert_eq!(collect_files(&user), after_install);
+        fs::remove_file(codex.join("skills").join("spellcast").join("SKILL.md")).unwrap();
+        let partial = codex_direct_status("codex", Some("http://127.0.0.1:47194/mcp"), &p);
+        let components = partial.components.as_ref().unwrap();
+        assert!(components.mcp && !components.skill && components.hooks, "{:?}", partial);
+        assert_eq!(partial.hook_trust, Some(HookTrust::Untrusted));
         let _ = fs::remove_dir_all(user);
     }
 

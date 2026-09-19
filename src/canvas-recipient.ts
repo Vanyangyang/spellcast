@@ -5,6 +5,8 @@ import { workspaceIdentity } from "./content-origin";
 
 type Source = { id: string; label: string };
 type RecipientView = { root: HTMLElement; summary: HTMLElement; toggle: HTMLButtonElement; picker: HTMLElement };
+type Reconnect = (target: TaskTarget & { thread_id: string }) => Promise<CodexBinding>;
+const CODEX_SOURCE = /^codex:([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/i;
 function objectTarget(object: CanvasObject, board: BoardSnapshot, bindings: CodexBinding[], sources: Source[]): TaskTarget | undefined {
   const content = object.content;
   const note = content.type === "node" ? board.nodes.find(n => n.id === content.id) : undefined;
@@ -55,7 +57,15 @@ export class CanvasRecipient {
   private origin?: TaskTarget;
   private confirmation?: { source: string; signature: string; cancel: () => void };
   private cache = new Map<string, { value?: TaskTargetStatus; pending?: Promise<TaskTargetStatus>; at: number }>();
-  constructor(private select: HTMLSelectElement, private workspace: HTMLSelectElement, private notice: HTMLElement, private lookup: (target: TaskTarget) => Promise<TaskTargetStatus>, private onState: (blocked: boolean) => void, private view: RecipientView) {
+  private reconnectButton = document.createElement("button");
+  private reconnecting = false;
+  private reconnectError: string | null = null;
+  constructor(private select: HTMLSelectElement, private workspace: HTMLSelectElement, private notice: HTMLElement, private lookup: (target: TaskTarget) => Promise<TaskTargetStatus>, private onState: (blocked: boolean) => void, private view: RecipientView, private reconnect?: Reconnect) {
+    this.reconnectButton.type = "button";
+    this.reconnectButton.className = "ghost recipient-reconnect";
+    this.reconnectButton.hidden = true;
+    notice.after(this.reconnectButton);
+    this.reconnectButton.addEventListener("click", () => void this.reconnectOriginal());
     view.toggle.addEventListener("click", () => {
       if (!this.selection || this.confirmation) return;
       this.editing = !this.editing; this.workspaceChoice = null; this.paint();
@@ -80,6 +90,7 @@ export class CanvasRecipient {
   }
   resetChoice(value?: string) { this.confirmation?.cancel(); this.manual = value ?? null; this.workspaceChoice = null; this.editing = false; }
   update(board: BoardSnapshot, selection: CanvasSelection | null, bindings: CodexBinding[], sources: Source[]) {
+    if (this.selection?.object_id !== selection?.object_id) this.reconnectError = null;
     this.board = board; this.selection = selection; this.bindings = bindings; this.sources = sources;
     if (!selection) { this.editing = false; this.workspaceChoice = null; }
     this.origin = originalTask(board, selection, bindings, sources); this.paint();
@@ -107,7 +118,11 @@ export class CanvasRecipient {
   }
   private sourceTarget(source?: string): TaskTarget | undefined {
     if (!source) return;
-    if (source === this.origin?.source_id) return this.origin;
+    if (source === this.origin?.source_id) {
+      const original = this.origin;
+      const inferred = CODEX_SOURCE.exec(source)?.[1];
+      return original && !original.thread_id && inferred ? { ...original, thread_id: inferred } : original;
+    }
     const binding = this.bindings.find(b => b.source_id === source);
     return { source_id: source, thread_id: binding?.thread_id, cwd: binding?.cwd, label: binding?.label || this.sources.find(s => s.id === source)?.label || source };
   }
@@ -179,11 +194,40 @@ export class CanvasRecipient {
     });
     return entry.pending;
   }
+  private reconnectThread(target?: TaskTarget): string | undefined {
+    if (!target) return;
+    const thread = CODEX_SOURCE.exec(target.source_id)?.[1];
+    return thread && (!target.thread_id || target.thread_id.toLowerCase() === thread.toLowerCase()) ? thread.toLowerCase() : undefined;
+  }
+  private async reconnectOriginal() {
+    const target = this.target(), thread_id = this.reconnectThread(target);
+    if (!target || !thread_id || !this.reconnect || this.reconnecting || this.canReturn(target)) return;
+    const key = this.key(target);
+    this.reconnecting = true; this.reconnectError = null; this.paint();
+    try {
+      const checked = await this.check({ ...target, thread_id }, true);
+      if (!this.target() || this.key(this.target()!) !== key) return;
+      if (checked.status !== "unlinked" && checked.status !== "available") {
+        this.reconnectError = ct(`taskTarget.${checked.status}`);
+        return;
+      }
+      const binding = await this.reconnect({ ...target, thread_id });
+      this.bindings = [...this.bindings.filter(item => item.source_id !== binding.source_id), binding];
+      if (this.board) this.origin = originalTask(this.board, this.selection, this.bindings, this.sources);
+      this.cache.clear();
+      const current = this.target();
+      if (current?.source_id === binding.source_id) void this.check(current, true);
+    } catch (error) {
+      this.reconnectError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.reconnecting = false; this.paint();
+    }
+  }
   async verify(): Promise<TaskTargetStatus> {
     if (this.switching) throw new Error(ct("recipientSwitchPending"));
     if (!this.selection) throw new Error(ct("noTarget"));
     const target = this.target(); if (!target) throw new Error(ct("noTask"));
-    if (!this.canReturn(target)) throw new Error(ct("taskTarget.noReturn"));
+    if (!this.canReturn(target)) throw new Error(ct(this.reconnectThread(target) ? "taskTarget.unlinked" : "taskTarget.noReturn"));
     const key = this.key(target), status = await this.check(target, true);
     if (this.switching) throw new Error(ct("recipientSwitchPending"));
     if (!this.target() || this.key(this.target()!) !== key) throw new Error(ct("sendCancelled"));
@@ -217,6 +261,10 @@ export class CanvasRecipient {
     this.workspace.value = workspaces.has(chosen) ? chosen : "";
     this.workspace.title = workspaces.get(chosen) || "";
     const target = this.target(), status = this.status(target);
+    const reconnectable = Boolean(this.selection && target && !returnable && this.reconnect && this.reconnectThread(target) && status?.status !== "deleted" && status?.status !== "changed");
+    this.reconnectButton.hidden = !reconnectable;
+    this.reconnectButton.disabled = this.reconnecting;
+    this.reconnectButton.textContent = ct(this.reconnecting ? "taskTarget.reconnecting" : "taskTarget.reconnect");
     const scoped = this.workspace.value ? options.filter(option => this.workspaceKey(option) === this.workspace.value) : [];
     this.select.replaceChildren();
     const blank = document.createElement("option"); blank.value = ""; blank.textContent = ct(!this.workspace.value ? "recipientWorkspaceFirst" : scoped.length ? "recipientChooseTask" : "recipientNoTasks"); this.select.append(blank);
@@ -231,10 +279,11 @@ export class CanvasRecipient {
     this.select.value = target?.source_id || "";
     this.select.disabled = !this.selection || !this.workspace.value || !scoped.length || Boolean(this.confirmation);
     this.workspace.disabled = !this.selection || Boolean(this.confirmation);
-    if (this.selection && target && !this.canReturn(target)) { this.notice.textContent = ct("taskTarget.noReturn"); this.notice.hidden = false; }
+    if (this.selection && target && this.reconnectError) { this.notice.textContent = this.reconnectError; this.notice.hidden = false; }
+    else if (this.selection && target && !this.canReturn(target)) { this.notice.textContent = ct(this.reconnectThread(target) ? "taskTarget.unlinked" : "taskTarget.noReturn"); this.notice.hidden = false; }
     else if (this.selection && status && status.status !== "available") { this.notice.textContent = ct(`taskTarget.${status.status}`); this.notice.hidden = false; }
     this.onState(!this.selection || !target || this.switching || !this.canReturn(target) || status?.status !== "available");
-    if (this.selection && target && this.canReturn(target)) { const entry = this.cache.get(this.key(target)); if (!entry?.pending && (!entry?.value || Date.now() - entry.at > 30000)) void this.check(target); }
+    if (this.selection && target && (this.canReturn(target) || this.reconnectThread(target))) { const entry = this.cache.get(this.key(target)); if (!entry?.pending && (!entry?.value || Date.now() - entry.at > 30000)) void this.check(target); }
   }
   private canReturn(target?: TaskTarget) { return canReturnCanvas(target?.source_id, this.bindings); }
 }

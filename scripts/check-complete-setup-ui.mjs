@@ -109,7 +109,9 @@ await page.setContent(`<!doctype html>
 <html lang="zh-CN"><body>
   <button id="agent-complete-setup"></button><button id="settings-complete-setup"></button>
   <h3 data-setup-title></h3>
-  <button data-setup-refresh></button><span data-setup-component="hooks"></span><span data-setup-component="skill"></span>
+  <button data-setup-refresh></button>
+  <div id="home-checks"><span data-setup-component="mcp"></span><span data-setup-component="skill"></span><span data-setup-component="hooks"></span></div>
+  <div id="settings-checks"><span data-setup-component="mcp"></span><span data-setup-component="skill"></span><span data-setup-component="hooks"></span></div>
   <p id="agent-setup-status"></p>
   <p id="agent-setup-hint"></p>
   <details class="setup-details" hidden><summary>安装详情</summary><pre id="agent-setup-details-body"></pre></details>
@@ -146,6 +148,8 @@ const result = await page.evaluate(async () => {
     "setup.hooks.modified": "需重新信任",
     "setup.hooks.disabled": "已停用",
     "setup.component.installed": "已安装",
+    "setup.component.missing": "未安装",
+    "setup.component.unknown": "未核验",
     "setup.update": "更新 Hooks + Skill",
     "setup.install": "安装 Hooks + Skill（必需）",
     "setup.title": "Codex 接入",
@@ -220,7 +224,17 @@ const result = await page.evaluate(async () => {
   check(snap.status === "已安装 · Hooks 已信任", `native verified result is shown, got ${snap.status}`);
   check(snap.hint === "Codex 已确认当前两项 Hook 已启用并信任。", `main hint localized, got ${snap.hint}`);
   check(document.querySelector('[data-setup-component="hooks"]').textContent === "已信任", "trusted component");
+  check([...document.querySelectorAll('[data-setup-component="mcp"]')].every((el) => el.textContent === "已安装"), "home and settings show MCP installation");
   check(document.querySelector('#settings-complete-setup').textContent === "更新 Hooks + Skill", "installed action names Hooks and Skill");
+
+  paintSetupView(base({
+    kind: "not_installed",
+    components: { mcp: true, skill: false, hooks: true },
+    hook_trust: "untrusted",
+  }), t);
+  check([...document.querySelectorAll('[data-setup-component="mcp"]')].every((el) => el.textContent === "已安装"), "partial MCP is reported accurately in both views");
+  check([...document.querySelectorAll('[data-setup-component="skill"]')].every((el) => el.textContent === "未安装"), "partial Skill is reported accurately in both views");
+  check([...document.querySelectorAll('[data-setup-component="hooks"]')].every((el) => el.textContent === "待信任"), "partial Hooks trust is reported accurately in both views");
 
   paintSetupView(base({
     client: "grok",

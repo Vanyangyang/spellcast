@@ -1,0 +1,156 @@
+/* The desktop palette is the default; the saved choice applies to every view. */
+body[data-theme="light"] {
+  --ink: #f7f6f2;
+  --paper: #1c1a16;
+  --mute: #5c574e;
+  --line: rgba(28, 26, 22, 0.14);
+  --line-strong: rgba(28, 26, 22, 0.24);
+  --glass: rgba(255, 252, 247, 0.9);
+  --surface: #fffcf7;
+  --surface-2: #f1f1eb;
+  --mint: #2a8a78;
+  --lilac: #8461aa;
+  --warn: #9a6b12;
+  --studio-canvas: #f7f6f2;
+  --studio-canvas-2: #f1f1eb;
+  --studio-paper: #fffcf7;
+  --studio-ink: #1c1a16;
+  --studio-soft: #5c574e;
+  --studio-mute: #8a8478;
+  --studio-line: rgba(28, 26, 22, 0.12);
+  --studio-line-strong: rgba(28, 26, 22, 0.18);
+  --studio-mint: #2a8a78;
+  --studio-mint-soft: #d8ebe4;
+  --studio-lilac: #8461aa;
+  --studio-lilac-soft: rgba(158, 124, 192, 0.22);
+  --studio-shadow: 0 1px 1px rgba(28, 26, 22, 0.04), 0 8px 28px rgba(28, 26, 22, 0.07);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+body[data-theme="light"].mode-ambient {
+  background: radial-gradient(1100px 700px at 18% 120%, rgba(42, 138, 120, 0.09), transparent 55%),
+    radial-gradient(900px 640px at 92% 8%, rgba(158, 124, 192, 0.11), transparent 50%), #f7f6f2;
+}
+body[data-theme="light"] .top {
+  background: linear-gradient(#f7f6f2f2, #f7f6f2e0 70%, #f7f6f200);
+}
+body[data-theme="light"] .agent,
+body[data-theme="light"] .settings-sheet {
+  box-shadow: var(--studio-shadow);
+}
+body[data-theme="light"] .observer-switch { background: rgba(28, 26, 22, 0.035); }
+body[data-theme="light"] .observer-switch:hover { background: rgba(28, 26, 22, 0.07); }
+body[data-theme="light"] .observer-switch:has(input:checked) { background: var(--studio-lilac-soft); }
+body[data-theme="light"] .agent-chip.live { color: #0f4f46; background: #d8ebe4; }
+body[data-theme="light"] .agent-chip.stale { color: #6b4a0c; background: #f3e6c4; }
+body[data-theme="light"] .board-dialog,
+body[data-theme="light"] .recipient-confirm {
+  background: var(--studio-paper);
+  color: var(--studio-ink);
+  border-color: var(--studio-line);
+}
+body[data-theme="light"] .board-dialog input,
+body[data-theme="light"] .board-dialog textarea,
+body[data-theme="light"] .board-dialog select,
+body[data-theme="light"] .board-dialog button:not(.primary),
+body[data-theme="light"] .recipient-confirm button:not(.primary) {
+  background: var(--studio-canvas);
+  color: var(--studio-ink);
+  border-color: var(--studio-line);
+}
+body[data-theme="light"] .board-dialog p,
+body[data-theme="light"] .board-dialog label { color: var(--studio-soft); }
+body[data-theme="light"].mode-focus:not(.view-replies) .frag {
+  background: var(--studio-paper);
+  color: var(--studio-ink);
+  box-shadow: var(--studio-shadow);
+}
+body[data-theme="light"].mode-focus:not(.view-replies) .frag.anchor {
+  box-shadow: 0 9px 30px color-mix(in srgb, var(--tone) 15%, transparent);
+}
+body[data-theme="light"].mode-focus:not(.view-replies) .composer {
+  background: var(--studio-paper);
+  border-color: var(--studio-line);
+  box-shadow: var(--studio-shadow);
+}
+body[data-theme="light"].mode-focus:not(.view-replies) .composer #recipient,
+body[data-theme="light"].mode-focus:not(.view-replies) .composer #recipient-workspace,
+body[data-theme="light"].mode-focus:not(.view-replies) .inspector input,
+body[data-theme="light"].mode-focus:not(.view-replies) .inspector textarea,
+body[data-theme="light"].mode-focus:not(.view-replies) .inspector select {
+  background: var(--studio-canvas);
+  color: var(--studio-ink);
+  border-color: var(--studio-line);
+}
+
+/* The Canvas layout stays the same; only its palette changes. */
+body[data-theme="dark"].mode-focus.view-replies {
+  --studio-canvas: #0c0e14;
+  --studio-canvas-2: #191c25;
+  --studio-paper: #12141c;
+  --studio-ink: #f4f1ea;
+  --studio-soft: #aaa9b2;
+  --studio-mute: #858996;
+  --studio-line: rgba(244, 241, 234, 0.14);
+  --studio-line-strong: rgba(244, 241, 234, 0.25);
+  --studio-mint: #7ee0c8;
+  --studio-mint-soft: rgba(126, 224, 200, 0.13);
+  --studio-lilac: #d4b3ff;
+  --studio-lilac-soft: rgba(212, 179, 255, 0.16);
+  --studio-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+}
+body[data-theme="dark"].mode-focus.view-replies .top {
+  background: linear-gradient(#07080cf2, #07080ce0 70%, #07080c00);
+}
+body[data-theme="dark"].mode-focus.view-replies .board-views {
+  background: var(--studio-canvas-2);
+  border-color: var(--studio-line);
+}
+body[data-theme="dark"].mode-focus.view-replies .board-views button { color: var(--studio-soft); }
+body[data-theme="dark"].mode-focus.view-replies .board-views [aria-pressed="true"] {
+  background: #343849;
+  color: var(--studio-ink);
+  border-color: var(--studio-line-strong);
+}
+body[data-theme="dark"].mode-focus.view-replies .agent-chip.live {
+  color: var(--studio-mint);
+  background: var(--studio-mint-soft);
+}
+body[data-theme="dark"].mode-focus.view-replies .agent-chip.stale {
+  color: #f0c36a;
+  background: rgba(240, 195, 106, 0.12);
+}
+body[data-theme="dark"].mode-focus.view-replies .rb-cmp-card.is-selected,
+body[data-theme="dark"].mode-focus.view-replies .rb-root button.rb-focus-block[aria-pressed="true"],
+body[data-theme="dark"].mode-focus.view-replies .rb-block-kind > .rb-block-selected-tag {
+  background: var(--studio-lilac-soft);
+  color: var(--studio-ink);
+}
+body[data-theme="dark"].mode-focus.view-replies .rb-graph-canvas {
+  background: radial-gradient(circle at 1px 1px, #454a58 1px, transparent 1.5px) 0 0 / 22px 22px, var(--studio-canvas);
+}
+body[data-theme="dark"].mode-focus.view-replies .canvas-scope select {
+  background: var(--studio-paper);
+  color: var(--studio-ink);
+  border-color: var(--studio-line-strong);
+}
+body[data-theme="dark"].mode-focus.view-replies .canvas-origin { color: var(--studio-mute); }
+body[data-theme="dark"].mode-focus.view-replies .composer-recipient-status,
+body[data-theme="dark"].mode-focus.view-replies .composer-delivery-status[data-phase="failed"],
+body[data-theme="dark"].mode-focus.view-replies .composer-delivery-status[data-phase="unknown"],
+body[data-theme="dark"].mode-focus.view-replies .composer-delivery-status[data-phase="unanswered"] { color: #f0c36a; }
+body[data-theme="dark"].mode-focus.view-replies .composer-delivery-status { color: var(--studio-mint); }
+body[data-theme="dark"].mode-focus.view-replies .recipient-confirm {
+  background: var(--studio-paper);
+  color: var(--studio-ink);
+  border-color: var(--studio-line);
+}
+body[data-theme="dark"].mode-focus.view-replies .recipient-confirm-route section,
+body[data-theme="dark"].mode-focus.view-replies .recipient-confirm button:not(.primary) {
+  background: var(--studio-canvas-2);
+  color: var(--studio-ink);
+  border-color: var(--studio-line);
+}
+body[data-theme="dark"].mode-focus.view-replies .recipient-confirm-route small,
+body[data-theme="dark"].mode-focus.view-replies .recipient-confirm #recipient-confirm-help { color: var(--studio-soft); }

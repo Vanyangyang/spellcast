@@ -4,6 +4,7 @@ import "./setup.css";
 import {
   createNode,
   actOnCanvasBlock,
+  bindCodexTask,
   checkTaskTarget,
 
   deleteNode,
@@ -39,6 +40,8 @@ import type { DeliveryReceipt } from "./types";
 import { createCanvasNav } from "./canvas-nav";
 import { resolveNavObjectId, textLabel, type ContentNavTarget } from "./content-organization";
 import "./canvas-studio.css";
+import "./theme.css";
+import { mountTheme } from "./theme";
 import { ct } from "./i18n/canvas";
 import { replyDrafts, draftKey, contentKey, type DraftRecord } from "./reply-drafts";
 import { mountBoardTools } from "./board-tools";
@@ -66,6 +69,8 @@ import type {
 } from "./types";
 import { FORMS, formLabel, formReason, kindLabel, KINDS, weightLabel, WEIGHTS } from "./types";
 import { createSetupController } from "./complete-setup-ui";
+
+mountTheme();
 
 const plane = document.querySelector<HTMLElement>("#plane")!;
 const spatial = document.querySelector<HTMLCanvasElement>("#spatial")!;
@@ -99,6 +104,10 @@ let recipientBlocked = true;
 const recipientControl = new CanvasRecipient(recipient, recipientWorkspace, recipientNotice, checkTaskTarget, blocked => { recipientBlocked = blocked; document.querySelector<HTMLButtonElement>("#send")!.disabled = blocked || sending || (boardView !== "replies" && !input.value.trim()); }, {
   root: document.querySelector<HTMLElement>("#recipient-route")!, summary: document.querySelector<HTMLElement>("#recipient-summary")!,
   toggle: document.querySelector<HTMLButtonElement>("#recipient-change")!, picker: document.querySelector<HTMLElement>("#recipient-picker")!,
+}, async target => {
+  const binding = await bindCodexTask(target.source_id, target.thread_id, target.cwd ?? undefined);
+  void boardTools.refreshFeedback();
+  return binding;
 });
 let codexBindings: CodexBinding[] = [];
 let deliveries: DeliveryReceipt[] = [];

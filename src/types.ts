@@ -238,6 +238,7 @@ export type SetupReport = {
   complete_supported: boolean;
   installed: boolean;
   hook_trust?: "trusted" | "untrusted" | "modified" | "disabled" | "unknown" | null;
+  components?: { mcp: boolean; skill: boolean; hooks: boolean } | null;
   note: string;
   done: string[];
   not_done: string[];

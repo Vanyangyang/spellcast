@@ -43,13 +43,19 @@ try {
       { id: 'free', content: { type: 'text', title: '本地点子' } },
     ], compositions: [{ id: 'idea', source_id: 'a' }] } };
     const selection = { object_id: 'legacy', object_ids: ['legacy'], anchors: [{ object_id: 'legacy' }] };
-    const state = { board, selection, bindings, statuses: { a: 'available', b: 'available' }, calls: [], hold: false, resolve: null, commits: [], drafts: [] };
+    const state = { board, selection, bindings, statuses: { a: 'available', b: 'available' }, calls: [], hold: false, resolve: null, commits: [], drafts: [], reconnectCalls: [] };
     const control = new CanvasRecipient(document.querySelector('#recipient'), document.querySelector('#recipient-workspace'), document.querySelector('#status'), async target => {
       state.calls.push(target.source_id);
       const value = { ...target, label: '', status: state.statuses[target.source_id] || 'unlinked', checked_at_ms: Date.now(), message: '' };
       if (state.hold && target.source_id === 'a') return new Promise(resolve => state.resolve = () => resolve(value));
       return value;
-    }, blocked => document.querySelector('#send').disabled = blocked, {root:document.querySelector('#recipient-route'),summary:document.querySelector('#recipient-summary'),toggle:document.querySelector('#recipient-change'),picker:document.querySelector('#recipient-picker')});
+    }, blocked => document.querySelector('#send').disabled = blocked, {root:document.querySelector('#recipient-route'),summary:document.querySelector('#recipient-summary'),toggle:document.querySelector('#recipient-change'),picker:document.querySelector('#recipient-picker')}, async target => {
+      state.reconnectCalls.push(target);
+      state.statuses[target.source_id] = 'available';
+      const binding = { source_id: target.source_id, thread_id: target.thread_id, cwd: target.cwd, label: '恢复的原任务' };
+      state.bindings.push(binding);
+      return binding;
+    });
     document.querySelector('#recipient').addEventListener('recipient-change', () => {
       state.commits.push(control.target()?.source_id); state.drafts.push({ target_source_id: control.target()?.source_id, text: document.querySelector('#draft').value });
     });
@@ -162,8 +168,24 @@ try {
   assert.match(await page.locator('#status').textContent(), /还不能接收画布回发/);
   assert.match(await page.evaluate(async () => control.verify().then(() => 'ok', error => error.message)), /还不能接收画布回发/);
   check('Hosts without a bound send-back path stay visible, dimmed, and cannot be sent to');
+  const thread = '11111111-1111-4111-8111-111111111111';
+  await page.evaluate(thread => {
+    state.board.nodes[0].source_id = `codex:${thread}`;
+    state.board.nodes[0].captured_context = { thread_id: thread, cwd: 'G:/A', goal: '原始设计' };
+    state.statuses[`codex:${thread}`] = 'unlinked';
+    control.resetChoice(); window.render();
+  }, thread);
+  assert.match(await page.locator('#status').textContent(), /尚未连接/);
+  assert.equal(await page.locator('#send').isDisabled(), true);
+  assert.equal(await page.locator('.recipient-reconnect').isVisible(), true);
+  assert.deepEqual(await page.evaluate(() => state.reconnectCalls), [], 'missing binding never reconnects automatically');
+  await page.locator('.recipient-reconnect').click();
+  await page.waitForFunction(() => state.reconnectCalls.length === 1 && !document.querySelector('#send').disabled);
+  assert.equal(await page.evaluate(() => state.reconnectCalls[0].thread_id), thread);
+  check('A missing Codex binding is identified as unlinked; an explicit click verifies and restores that exact task before Send enables');
   await page.evaluate(() => {
     state.board.nodes[0].source_id = 'a';
+    state.board.nodes[0].captured_context = { thread_id: 'thread-a', cwd: 'G:/A', goal: '原始设计' };
     control.resetChoice();
     window.render();
   });

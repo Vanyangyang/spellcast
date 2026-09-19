@@ -131,14 +131,25 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   ] });
   let hand = false, space = false, middle = false;
   const panning = () => hand || space || middle;
+  const graphPalette = () => document.body.dataset.theme === "light"
+    ? { background: "#f7f6f2", grid: "#c9c4b8" }
+    : { background: "#0c0e14", grid: "#454a58" };
+  const initialPalette = graphPalette();
   const graph = new Graph({ container: graphHost, autoResize: true,
-    grid: { visible: true, type: "dot", size: 24, args: { color: "#c9c4b8", thickness: 1.15 } }, background: { color: "#f7f6f2" },
+    grid: { visible: true, type: "dot", size: 24, args: { color: initialPalette.grid, thickness: 1.15 } }, background: { color: initialPalette.background },
     panning: { enabled: true, eventTypes: ["leftMouseDown", "rightMouseDown", "mouseWheelDown"] },
     scaling: { min: 0.01, max: 1.5 },
     mousewheel: { enabled: false },
     connecting: { allowBlank: false, allowNode: false, allowEdge: false },
     interacting: () => ({ nodeMovable: !panning(), edgeMovable: false, edgeLabelMovable: false }), preventDefaultContextMenu: false,
   });
+  const themeController = new AbortController();
+  const applyGraphTheme = () => {
+    const palette = graphPalette();
+    graph.drawBackground({ color: palette.background });
+    graph.drawGrid({ type: "dot", args: { color: palette.grid, thickness: 1.15 } });
+  };
+  document.addEventListener("spellcast-theme-change", applyGraphTheme, { signal: themeController.signal });
   Object.defineProperty(graphHost, "__spellcastEdgeModelIds", { configurable: true, get: () => graph.getEdges().map(edge => edge.id) });
   let wheelFrame = 0;
   let wheelIntent: { x: number; y: number; deltaY: number } | null = null;
@@ -1742,6 +1753,6 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       locateIntent = { kind: "object", id: object.id };
       reveal(object);
     },
-    destroy() { persistView(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistView); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); unsubscribeLocale(); unsubscribeDrafts(); unsubscribeData(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
+    destroy() { persistView(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistView); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); unsubscribeLocale(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
   };
 }

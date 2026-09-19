@@ -194,12 +194,15 @@ export function paintSetupView(report: SetupReport, t: Translate) {
     button.disabled = report.kind === "installing"; button.textContent = t("setup.check");
   });
   document.querySelectorAll<HTMLElement>("[data-setup-component]").forEach(element => {
-    let key: MessageKey = report.installed ? "setup.component.installed" : report.kind === "not_installed" ? "setup.component.missing" : "setup.component.unknown";
-    let tone = report.installed ? "done" : "quiet";
-    if (element.dataset.setupComponent === "hooks" && grok) {
+    const component = element.dataset.setupComponent as "mcp" | "skill" | "hooks";
+    const checked = report.components?.[component];
+    const installed = checked ?? report.installed;
+    let key: MessageKey = installed ? "setup.component.installed" : checked === false || report.kind === "not_installed" ? "setup.component.missing" : "setup.component.unknown";
+    let tone = installed ? "done" : "quiet";
+    if (component === "hooks" && grok) {
       key = "setup.component.unknown";
       tone = "quiet";
-    } else if (element.dataset.setupComponent === "hooks" && report.installed) {
+    } else if (component === "hooks" && installed) {
       const trust = report.hook_trust || "unknown";
       key = `setup.hooks.${trust}` as MessageKey;
       tone = trust === "trusted" ? "done" : trust === "unknown" ? "quiet" : "attention";

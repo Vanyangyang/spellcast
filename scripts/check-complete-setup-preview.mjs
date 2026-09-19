@@ -310,6 +310,7 @@ try {
   const page = await context.newPage();
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#agent-complete-setup");
+  assert.equal(await page.locator("body").getAttribute("data-theme"), "dark", "the home theme defaults to dark");
   const snippet = await page.$("#agent-snippet, #settings-snippet, #settings-path, #settings-skill-path, #agent-note, #settings-note");
   assert.equal(snippet, null, "manual snippet / skill path / old notes must be gone");
 
@@ -331,6 +332,7 @@ try {
   assert.equal(home.detailsOpen, false, "install details must start collapsed");
   assert.equal(/插件源|Install cache|Skill|C:\\\\Users/.test(home.status + home.hint), false);
   assert.match(home.button, /安装 Hooks \+ Skill/);
+  assert.equal(await page.locator("#agent-result [data-setup-component]").count(), 3, "home shows MCP, Skill and Hooks checks");
 
   const cursorDisabled = await page.evaluate(() => ({
     button: document.querySelector('[data-client="cursor"]')?.disabled ?? false,
@@ -463,6 +465,9 @@ try {
   await page.keyboard.press("Escape");
 
   await page.setViewportSize({ width: 1280, height: 860 });
+  await openSettings(page);
+  await page.selectOption("#theme-preference", "light");
+  await page.keyboard.press("Escape");
   await page.click("#mode-focus");
   await page.waitForFunction(() => document.body.classList.contains("mode-focus") && document.body.classList.contains("view-replies"));
   await openSettings(page);

@@ -14,6 +14,8 @@
 }
 #settings .settings-sheet { padding: 0 28px 24px; gap: 20px; background: var(--setup-bg); color: var(--setup-text); }
 #settings .settings-head { position: sticky; top: 0; z-index: 2; margin: 0 -4px; padding: 22px 4px 12px; background: var(--setup-bg); }
+#settings .theme-setting { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; margin: 0; color: var(--setup-text); font-size: 13px; font-weight: 600; }
+#settings .theme-setting select { min-width: 160px; min-height: 36px; padding: 6px 10px; border: 1px solid var(--setup-border); border-radius: 9px; background: var(--setup-subtle); color: var(--setup-text); font: inherit; }
 #settings h2, #settings h3, #settings button, #settings label { font-family: inherit; }
 #settings h2 { font-size: 23px; font-weight: 600; }
 #settings h3 { margin: 0; font-size: 17px; font-weight: 600; }
@@ -54,9 +56,19 @@
 #settings .setup-connection-status { padding: 12px 14px; border: 1px solid var(--setup-border); border-radius: 10px; background: var(--setup-subtle); color: var(--setup-text); }
 #settings .setup-connection-status .agent-last { color: var(--setup-muted); }
 #settings button:focus-visible, #settings summary:focus-visible { outline: 2px solid var(--setup-accent); outline-offset: 3px; }
+.agent-setup-checks { display: grid; gap: 6px; }
+.agent-setup-checks-title { margin: 0; color: var(--mute); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.setup-components-home { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
+.setup-components-home li { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 8px 12px; font-size: 12px; }
+.setup-components-home li + li { border-top: 1px solid var(--line); }
+.setup-components-home .setup-component-status { color: var(--mute); text-align: right; }
+.setup-components-home [data-tone="done"] { color: var(--mint); }
+.setup-components-home [data-tone="attention"] { color: var(--warn); }
+.agent-setup-checks-note { margin: 0; color: var(--mute); font-size: 11px; line-height: 1.5; }
 @media (max-width: 560px) {
   #settings .settings-sheet { padding: 0 18px 20px; }
   #settings .settings-head { padding-top: 16px; }
+  #settings .theme-setting { align-items: stretch; flex-direction: column; gap: 6px; }
   #settings .setup-components li { gap: 10px; padding: 11px 12px; }
   #settings .setup-actions button { flex: 1 1 auto; }
 }

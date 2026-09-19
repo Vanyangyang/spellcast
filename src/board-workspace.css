@@ -13,6 +13,7 @@ body.view-replies #forms, body.view-replies #add-btn,
 body.view-replies #clear-btn, body.view-replies .top .topic,
 body.mode-focus #bubbles-pause { display: none !important; }
 .composer { z-index: 5; background: #14141df7; border-color: var(--line-strong); box-shadow: 0 16px 40px #0006; }
+.recipient-reconnect { justify-self: start; width: max-content; margin: 0 0 8px; min-height: 28px !important; }
 .composer .reason { max-height: 2.8em; overflow: hidden; text-overflow: ellipsis; margin-top: 0; font-weight: 500; }
 .composer-task { display: grid; gap: 4px; }
 .composer #recipient-label { color: var(--mute); font-size: 12px; letter-spacing: 0.02em; }
