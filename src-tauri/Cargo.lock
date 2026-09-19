@@ -3557,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "spellcast"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "axum",
  "embed-resource",

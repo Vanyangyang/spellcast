@@ -35,11 +35,14 @@ try {
         const note=(id,title,source,context)=>({id,title,body:'',revision:1,source_id:source,kind:'idea',weight:'note',x:0,y:0,z:0,captured_context:context});
         const object=(id,content,source)=>({id,content,source_id:source,content_revision:1,bindings:[]});
         const place=(id,x,y)=>({item_id:id,x,y,width:360,height:220,z:1,revision:1,removed:false,appearance:'plain',user_modified:false});
-        const board={topic:'scope fixture',form:'spatial',form_reason:'',nodes:[note('na','方案 A：只有标题也要可读','a',ctx('a','G:/Projects/A','ta','设计任务 A')),note('na2','同工作区的另一个任务','a2',ctx('a2','G:/Projects/A','ta2','设计任务 A2')),note('nb','方案 B 的独立想法','b',ctx('b','G:/Projects/B','tb','设计任务 B'))],replies:[],edges:[],messages:[],canvas:{revision:1,objects:[object('a1',{type:'node',id:'na'},'a'),object('a2',{type:'text',title:'组件文字',text:'原始正文'},'a'),object('other-task',{type:'node',id:'na2'},'a2'),object('b',{type:'node',id:'nb'},'b'),object('legacy',{type:'text',title:'历史记录',text:'未知来源'},'old-agent')],items:[place('a1',60,90),place('a2',460,90),place('other-task',60,370),place('b',900,90),place('legacy',900,370)],compositions:[{id:'idea-composition',revision:1,title:'一个组合 idea',members:['a1','a2'],source_id:'a'}],proposals:[]}};
+        const reconnectSource='codex:11111111-1111-4111-8111-111111111111';
+        const board={topic:'scope fixture',form:'spatial',form_reason:'',nodes:[note('na','方案 A：只有标题也要可读','a',ctx('a','G:/Projects/A','ta','设计任务 A')),note('na2','同工作区的另一个任务','a2',ctx('a2','G:/Projects/A','ta2','设计任务 A2')),note('nb','方案 B 的独立想法','b',ctx('b','G:/Projects/B','tb','设计任务 B')),note('nr','重连的原任务',reconnectSource,{source_id:reconnectSource,goal:'原任务',captured_at_ms:1})],replies:[],edges:[],messages:[],canvas:{revision:1,objects:[object('a1',{type:'node',id:'na'},'a'),object('a2',{type:'text',title:'组件文字',text:'原始正文'},'a'),object('other-task',{type:'node',id:'na2'},'a2'),object('b',{type:'node',id:'nb'},'b'),object('legacy',{type:'text',title:'历史记录',text:'未知来源'},'old-agent'),object('reconnect',{type:'node',id:'nr'},reconnectSource)],items:[place('a1',60,90),place('a2',460,90),place('other-task',60,370),place('b',900,90),place('legacy',900,370),place('reconnect',460,370)],compositions:[{id:'idea-composition',revision:1,title:'一个组合 idea',members:['a1','a2'],source_id:'a'}],proposals:[]}};
         window.fixture=board; window.mutations=[];
         const noMutation=async request=>{window.mutations.push(request);throw Error('Unexpected write in scope-only verification')};
         window.canvas=mountCanvas(document.querySelector('#host'),{onSelect(){},onAction:noMutation,onPatch:noMutation,onNodePatch:noMutation,onNodeAsk:noMutation,onCreate:noMutation,onDelete:noMutation,onRestore:noMutation,onLayout:noMutation,onBatch:noMutation,onProposal:noMutation,onReload:async()=>board,onRestoreComposer(){},onError:message=>{window.lastError=message}});
-        window.canvas.update(board); window.canvas.setOverviewMeta({bindings:[{source_id:'a',thread_id:'ta',cwd:'G:/Projects/A',label:'设计任务 A'},{source_id:'a2',thread_id:'ta2',cwd:'G:/Projects/A',label:'设计任务 A2'},{source_id:'b',thread_id:'tb',cwd:'G:/Projects/B',label:'设计任务 B'}]});
+        window.bindings=[{source_id:'a',thread_id:'ta',cwd:'G:/Projects/A',label:'设计任务 A'},{source_id:'a2',thread_id:'ta2',cwd:'G:/Projects/A',label:'设计任务 A2'},{source_id:'b',thread_id:'tb',cwd:'G:/Projects/B',label:'设计任务 B'}];
+        window.reconnectSource=reconnectSource;
+        window.canvas.update(board); window.canvas.setOverviewMeta({bindings:window.bindings});
         </script></body></html>` });
     } else await route.continue();
   });
@@ -63,17 +66,28 @@ try {
   await task.selectOption('thread:ta');
   assert.equal(await frame('other-task').isVisible(), false);
   await frame('a2').locator('.canvas-card-drag').dblclick();
-  const text = frame('a2').locator('.canvas-native-text');
+  await frame('a2').locator('.canvas-native-actions button').click();
+  const text = page.locator('.canvas-native-editor[data-object-id="a2"] .canvas-native-text');
   await text.fill('跨工作区切换时保留这个未提交草稿');
+  await page.keyboard.press('Escape');
   await workspace.selectOption('workspace:g:/projects/b');
   assert.equal(await frame('a1').isVisible(), false);
   assert.equal(await frame('b').isVisible(), true);
   await workspace.selectOption('workspace:g:/projects/a');
   await frame('a2').locator('.canvas-card-drag').dblclick();
+  await frame('a2').locator('.canvas-native-actions button').click();
   assert.equal(await text.inputValue(), '跨工作区切换时保留这个未提交草稿');
+  await page.keyboard.press('Escape');
   await workspace.selectOption('unsorted');
   assert.equal(await frame('legacy').isVisible(), true);
+  assert.equal(await frame('reconnect').isVisible(), true);
   assert.equal(await frame('a1').isVisible(), false);
+  await frame('reconnect').locator('.canvas-card-drag').click();
+  assert.equal(await frame('reconnect').evaluate(node => node.classList.contains('is-selected')), true);
+  await page.evaluate(() => window.canvas.setOverviewMeta({bindings:[...window.bindings,{source_id:window.reconnectSource,thread_id:'11111111-1111-4111-8111-111111111111',cwd:'G:/Projects/A',label:'已重连'}]}));
+  assert.equal(await workspace.inputValue(), 'workspace:g:/projects/a');
+  assert.equal(await frame('reconnect').isVisible(), true);
+  assert.equal(await frame('reconnect').evaluate(node => node.classList.contains('is-selected')), true);
   await page.evaluate(() => window.canvas.selectObject('b'));
   assert.equal(await workspace.inputValue(), 'workspace:g:/projects/b');
   assert.equal(await frame('b').isVisible(), true);
@@ -84,7 +98,9 @@ try {
   assert.equal(await frame('b').isVisible(), true);
   await workspace.selectOption('workspace:g:/projects/a');
   await frame('a2').locator('.canvas-card-drag').dblclick();
+  await frame('a2').locator('.canvas-native-actions button').click();
   assert.equal(await text.inputValue(), '跨工作区切换时保留这个未提交草稿');
+  await page.keyboard.press('Escape');
   for (const width of [1360, 880]) {
     await page.setViewportSize({ width, height: 900 });
     assert.equal(await workspace.evaluate(node => { const r = node.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === node; }), true, `Workspace control covered at ${width}px`);
@@ -94,7 +110,7 @@ try {
   await page.screenshot({ path: path.join(output, 'workspace-canvas.png'), fullPage: true });
   assert.deepEqual(report.errors, []);
   report.pass = true;
-  report.checks = ['same-name projects remain separate', 'tasks within one workspace remain separate', 'captured source is visible', 'unknown legacy records stay unsorted', 'draft survives scope changes and page reload', 'navigation reveals exact target workspace', 'scope and composition data retained without backend writes'];
+  report.checks = ['same-name projects remain separate', 'tasks within one workspace remain separate', 'captured source is visible', 'unknown legacy records stay unsorted', 'reconnected selection follows its new workspace', 'draft survives scope changes and page reload', 'navigation reveals exact target workspace', 'scope and composition data retained without backend writes'];
 } catch (error) {
   report.error = error.stack;
   if (page) {

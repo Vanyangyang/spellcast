@@ -53,7 +53,7 @@
 
 ## 体验版现在到哪了
 
-- **已发布的构建：** [0.4.6](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.6)，含 Windows x64 安装包。详见 [0.4.6 说明](docs/releases/0.4.6.md)。
+- **已发布的构建：** [0.4.7](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.7)，含 Windows x64 安装包。详见 [0.4.7 说明](docs/releases/0.4.7.md)。
 - **本预览：** 可编辑画布 Idea、按工作区和任务整理、回发原 Codex Desktop 任务、Codex 一键接入（MCP + Hooks + Skill）。**Grok Build 接入稍后加入**（设置里按钮仍显示，但不可安装）。详见[运行验收](docs/reviews/2026-09-14-workbench-runtime-acceptance.md)、[回复面板](docs/reviews/2026-09-15-replies-inbox.md)、[仅 Codex 接入](docs/reviews/2026-09-15-codex-only-entry.md)。
 - **会有毛边。** 版式、文案和 Skill 还在变，欢迎反馈和提 issue。详见[下一步改善提示词](docs/next-improvement-prompt.md)。
 

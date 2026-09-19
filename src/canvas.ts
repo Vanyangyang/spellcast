@@ -3,7 +3,7 @@ import { mountReplyBoard, type ReplyBoardHandle, type ReplyBoardHandlers } from 
 import type { BoardReply, ReplyBlock, ReplyPatchRequest, ReplyActionInput } from "./reply-types";
 import type { BoardNode, BoardSnapshot, CanvasAnchor, CanvasAnnotation, CanvasBatchRequest, CanvasComposition, CanvasContent, CanvasContentFields, CanvasLayout, CanvasObject, CanvasPlacement, CanvasProposal, CanvasRead, CodexBinding } from "./types";
 import { filterOverviewItems, overviewItemFromObject, overviewPaintKey, textLabel } from "./content-organization";
-import { originForObject, originMatches, resolveContentOrigin, type ContentOrigin } from "./content-origin";
+import { originForObject, originMatches, resolveContentOrigin, scopeForReclassifiedSelection, type ContentOrigin } from "./content-origin";
 import { blockReply } from "./canvas-blocks";
 import { targetImage } from "./reply-image";
 import { targetArtifact } from "./reply-artifact";
@@ -1062,7 +1062,17 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   overviewTools.append(overviewSearch, overviewProject);
   overview.append(overviewHead, overviewHelp, overviewTools, overviewGrid); document.body.append(overview);
   function setOverviewMeta(meta: { bindings: CodexBinding[] }) {
+    const selectedVisible = selectedObjectIds().filter(id => visibleFrames.has(id));
     overviewMeta = { bindings: meta.bindings ?? [] };
+    if (board) {
+      const origins = selectedVisible.map(id => frames.get(id)).filter((frame): frame is Frame => Boolean(frame))
+        .map(frame => originForObject(frame.object, board!, overviewMeta.bindings));
+      const next = scopeForReclassifiedSelection({ workspace: scopeWorkspace || "all", task: scopeTask }, origins);
+      if (next) {
+        persistView();
+        scopeWorkspace = next.workspace; scopeTask = next.task;
+      }
+    }
     applyScope();
     if (overview.open) paintOverview();
   }

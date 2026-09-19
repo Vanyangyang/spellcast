@@ -60,3 +60,14 @@ export function originForObject(object: CanvasObject, board: BoardSnapshot, bind
 export function originMatches(origin: ContentOrigin, workspace: string, task = "all") {
   return (workspace === "all" || origin.workspaceKey === workspace) && (task === "all" || origin.taskKey === task);
 }
+
+/** Keep a visible selection in view when a new task binding classifies its source. */
+export function scopeForReclassifiedSelection(scope: { workspace: string; task: string }, origins: ContentOrigin[]) {
+  if (!origins.length || origins.every(origin => originMatches(origin, scope.workspace, scope.task))) return null;
+  const workspaces = new Set(origins.map(origin => origin.workspaceKey));
+  const tasks = new Set(origins.map(origin => origin.taskKey));
+  return {
+    workspace: scope.workspace === "all" ? "all" : workspaces.size === 1 ? origins[0].workspaceKey : "all",
+    task: scope.task === "all" ? "all" : tasks.size === 1 ? origins[0].taskKey : "all",
+  };
+}
