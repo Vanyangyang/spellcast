@@ -2,11 +2,11 @@
 
 ![Spellcast: a wand casting desktop aside bubbles](docs/media/spellcast-hero-story.gif)
 
-Spellcast is a local desktop app for coding agents. While the agent works on your task, it can drop a short aside on the display you are using: a roast, a reminder, or an idea you were not expecting. The bubble sits above your work. It does not bring the agent window forward.
+Spellcast is a local desktop app for coding agents. The agent keeps working on your task. If it has something worth saying, a short aside can land on the display you are using. Usually a roast or a reminder. Sometimes an idea you were not expecting. The bubble sits above your work. The agent window stays put.
 
-Keep a thought on the Canvas and keep working it as text, images, comparisons, relationship graphs, steps, or interactive pieces. Codex and Grok Build can also show a completion notice. Sending a request back to the original task still goes through Codex Desktop.
+You can keep a thought on the Canvas and keep editing it: text, images, comparisons, relationship graphs, steps, interactive pieces. Codex and Grok Build can show a completion notice when a task finishes. Sending a request back to the original task still goes through Codex Desktop.
 
-> Spellcast is early. This is a preview you can try, not a finished product.
+> This is an early preview, not a finished product.
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [Download the preview (Windows only tested)](https://github.com/Vanyangyang/spellcast/releases/latest)
 
@@ -14,9 +14,9 @@ Keep a thought on the Canvas and keep working it as text, images, comparisons, r
 
 ## How it looks
 
-**Codex on Windows is the supported, tested path.** macOS is untested.
+The path I have tested, and the one this preview supports, is Codex on Windows. macOS is untested.
 
-**Bubbles and asides are passive.** There is no "spawn bubble" button. With **Show asides** on, asides come only from a host **subagent**, using a small slice of the main task. A desktop bubble appears when something is worth saying. No bubble is a normal result. Hooks do not fire one on every turn.
+Bubbles and asides are passive. There is no "spawn bubble" button. That is on purpose. With **Show asides** on, asides come only from a host **subagent**, using a small slice of the main task. A desktop bubble appears when something is worth saying. No bubble is a normal result. Hooks do not fire one on every turn.
 
 1. **Turn asides on for Codex**
 
@@ -28,7 +28,7 @@ Keep a thought on the Canvas and keep working it as text, images, comparisons, r
 
    ![Canvas with an idea card under Needs sorting](docs/media/01-canvas-idea.png)
 
-   An idea under **Needs sorting**. The agent put it there because the thought was worth keeping. You did not press a spawn button. Canvas is still changing; suggestions are welcome. Ideas already have several forms. A later Canvas focus mode may spend whatever it takes to speed up creative work.
+   An idea under **Needs sorting**. The agent put it there because the thought was worth keeping. There is still no spawn button. Canvas is still changing. Suggestions are welcome. Ideas already have several forms. A later Canvas focus mode may spend whatever it takes to speed up creative work.
 
 3. **Claim, note, and tell the agent**
 
@@ -40,7 +40,7 @@ Keep a thought on the Canvas and keep working it as text, images, comparisons, r
 
    ![A TAKE/aside bubble animating in over a Grok Build TUI session](docs/media/02-desktop-asides-bubble.gif)
 
-   A **Grok Build** TUI session with a **TAKE**/aside bubble coming in. The running session produced it. Star it and it stays at the top. Leave it and it fades. You can drag the bubble.
+   A **Grok Build** TUI session with a **TAKE**/aside bubble coming in. The running session produced it. Star it and it stays at the top; leave it and it fades. You can drag it.
 
 5. **A completion notice**
 
@@ -50,13 +50,13 @@ Keep a thought on the Canvas and keep working it as text, images, comparisons, r
 
 ## Where the preview stands
 
-- **Published build:** [0.4.8](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.8) Windows x64 installer. See [0.4.8 notes](docs/releases/0.4.8.md).
-- **This preview:** editable Canvas ideas, workspace/task organization, send-back to the original Codex Desktop task, one-step **Codex** setup (MCP + Hooks + Skill). **Grok Build setup comes later** (the Settings button is visible but disabled). See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md).
-- **Still rough.** Layout, copy, and the Skill are changing. Feedback and issues are welcome. See [the next improvement brief](docs/next-improvement-prompt.md).
+- Published build: [0.4.8](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.8) Windows x64 installer. See [0.4.8 notes](docs/releases/0.4.8.md).
+- This preview has editable Canvas ideas, workspace/task organization, send-back to the original Codex Desktop task, and one-step **Codex** setup (MCP + Hooks + Skill). **Grok Build setup comes later.** The Settings button is visible but disabled. See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md).
+- Layout, copy, and the Skill are still changing. Feedback and issues are welcome. See [the next improvement brief](docs/next-improvement-prompt.md).
 
 ## From bubble to Canvas
 
-1. **It shows up on the display you are using.** The agent's current task is the context. Your foreground window picks the display. Bubbles stay sparse. One might be an objection, a reminder, or a detour. Ignore it, drag it, or open it.
+1. **It shows up on the display you are using.** The agent's current task is the context. Your foreground window picks the display. Bubbles stay sparse. Most of the time it is an objection or a reminder. Sometimes a detour. Ignore it, drag it, or open it.
 2. **Keep it.** The star saves the words onto the Canvas and attaches the originating task when that is known.
 3. **Work it.** Combine components into an Idea with a title and a purpose. The Canvas is the reply surface. The layout follows the idea.
 4. **Edit, then send.** Pick a direction, edit components, or add a constraint. Those edits stay on the Canvas until you click **Send to Codex**. The request then goes to the original task. Sending it elsewhere needs confirmation.
@@ -74,7 +74,7 @@ Ideas can mix these forms. Switch away and desktop bubbles resume. An explicit p
 
 ## How it connects
 
-Spellcast is a local desktop app, connected through MCP. It does not run a model and does not need a model API key. Your agent keeps using its existing host and model.
+Spellcast is a local desktop app. It talks to your agent through MCP. It does not run a model. You do not paste a model API key. The agent keeps using its existing host and model.
 
 An explicit Canvas send goes to the matching task in running **Codex Desktop**, including an idle task. Failed delivery is not shown as success. Grok Build setup is not in this preview.
 
@@ -82,7 +82,7 @@ An explicit Canvas send goes to the matching task in running **Codex Desktop**, 
 
 **Independent asides** follow the Spellcast switch. They run as a host subagent and use only a small slice of the main task. See [Codex hooks and verification boundaries](docs/codex-observer-hooks.md).
 
-Kept ideas and replies survive restart. Durable memory is separate: save only what you choose, inspect it in **Memory**, search it, and forget individual entries. Starring a bubble does not create a memory on its own.
+Kept ideas and replies survive restart. Durable memory is a separate action: save only what you choose, inspect it in **Memory**, search it, and forget individual entries. Starring a bubble does not create a memory on its own.
 
 ## Get started
 
@@ -95,7 +95,7 @@ Kept ideas and replies survive restart. Durable memory is separate: save only wh
 
 Integration details: [docs/codex-observer-hooks.md](docs/codex-observer-hooks.md) and the packaged [hooks/INSTALL.md](hooks/INSTALL.md).
 
-The Spellcast app has to be running. Local MCP is `http://127.0.0.1:47194/mcp`. **Setup currently supports Codex.** Other hosts in Settings are visible but disabled. macOS and Linux CI packages are untested.
+The Spellcast app has to be running. Local MCP is `http://127.0.0.1:47194/mcp`. Setup currently supports Codex. Other hosts in Settings are visible but disabled. macOS and Linux CI packages are untested.
 
 ## Develop locally
 
@@ -121,7 +121,7 @@ npm run tauri -- build --bundles nsis
 
 ## Built with Astra
 
-Spellcast was built with GPT-6 Astra. Astra pushed back on the product assumptions, wrote the Rust core and the Tauri shell, wired the bubble → Canvas → feedback loop, and used computer use to test the desktop interactions and make the demos. The graph canvas uses [AntV X6](https://github.com/antvis/X6). The desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
+Spellcast was built with GPT-6 Astra. Astra pushed back on the product assumptions. It wrote the Rust core and the Tauri shell, then wired the bubble → Canvas → feedback loop. Computer use was how the desktop interactions got tested and how the demos were made. The graph canvas uses [AntV X6](https://github.com/antvis/X6). The desktop shell uses [Tauri](https://github.com/tauri-apps/tauri).
 
 ## Friends
 

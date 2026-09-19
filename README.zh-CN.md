@@ -2,11 +2,11 @@
 
 ![Spellcast：法杖把旁念气泡发射出去](docs/media/spellcast-hero-story.gif)
 
-Spellcast 是给 coding agent 用的本地桌面应用。Agent 在干活时，可以往你正在用的显示器上扔一条旁念：吐槽、提醒，或者一个忽然冒出来的想法。气泡叠在你当前工作上面，不会把 Agent 窗口拽到前面。
+Spellcast 是给 coding agent 用的本地桌面应用。Agent 继续干活。有值得说的，才会往你正在用的显示器上扔一条旁念。常见是吐槽或提醒，偶尔是个你没想到的想法。气泡叠在你正在做的事上面，Agent 窗口不会被拽到前面。
 
-想留下的念头可以收进画布，用文字、图片、对比、关系图、步骤或交互作品接着改。Codex 和 Grok Build 任务结束时，会有完成提醒。把请求回发到原任务，目前还是走 Codex Desktop。
+想留下的念头可以收进画布，接着用文字、图片、对比、关系图、步骤或交互作品改。Codex 和 Grok Build 任务结束时会出完成提醒。回发到原任务，目前还是走 Codex Desktop。
 
-> 项目还早。这是体验版，不是成品。
+> 项目还早。体验版，不是成品。
 
 [English](README.md) · 简体中文 · [下载体验版（仅 Windows 经过测试）](https://github.com/Vanyangyang/spellcast/releases/latest)
 
@@ -14,9 +14,9 @@ Spellcast 是给 coding agent 用的本地桌面应用。Agent 在干活时，�
 
 ## 现在长什么样
 
-**目前测过、能用的路径是 Codex + Windows。** macOS 没测。
+这份体验版我测过、也只保证 Codex + Windows。macOS 没测。
 
-**旁念和气泡是被动的。** 没有「生成气泡」按钮。打开「显示旁念」之后，只会通过宿主的**子代理**抛旁念，只占主任务一小块。有值得说的才出桌面气泡。不出也正常。Hooks 不保证每一轮都冒泡。
+旁念和气泡是被动的。没有「生成气泡」按钮，这是故意的。打开「显示旁念」之后，只会通过宿主的**子代理**抛旁念，只占主任务一小块。有值得说的才出桌面气泡。不出也正常。Hooks 不保证每一轮都冒泡。
 
 1. **先给 Codex 打开旁念**
 
@@ -28,7 +28,7 @@ Spellcast 是给 coding agent 用的本地桌面应用。Agent 在干活时，�
 
    ![画布上「待整理」里的一条 Idea 卡片](docs/media/01-canvas-idea.png)
 
-   「待整理」里的一条 Idea。Agent 觉得值得留下才放上来的，不是你按按钮生成的。画布还在改，欢迎提建议。现在就能用几种形式把想法摊开。后面可能加一个画布专注模式，不计成本，把创意工作推快一点。
+   「待整理」里的一条 Idea。Agent 觉得值得留下才放上来。还是没有生成按钮。画布还在改，欢迎提建议。现在就能用几种形式把想法摊开。后面可能加一个画布专注模式，不计成本，把创意工作推快一点。
 
 3. **主张、批注，再说给 Agent**
 
@@ -40,7 +40,7 @@ Spellcast 是给 coding agent 用的本地桌面应用。Agent 在干活时，�
 
    ![Grok Build TUI 会话里 TAKE/旁念气泡正在冒出](docs/media/02-desktop-asides-bubble.gif)
 
-   一段 **Grok Build** TUI 会话，TAKE/旁念气泡正在冒出来。还是没有「生成气泡」按钮，气泡是正在跑的会话自己冒出来的。收藏之后会停在顶端；不点收藏，过一会儿自己散掉。这个气泡可以拖。
+   一段 **Grok Build** TUI 会话，TAKE/旁念气泡正在冒出来。气泡是正在跑的会话自己冒出来的。收藏之后会停在顶端，不点收藏过一会儿自己散掉。可以拖。
 
 5. **完成提醒**
 
@@ -50,13 +50,13 @@ Spellcast 是给 coding agent 用的本地桌面应用。Agent 在干活时，�
 
 ## 体验版到哪了
 
-- **已经发出去的包：** [0.4.8](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.8)，Windows x64 安装包。说明在 [0.4.8](docs/releases/0.4.8.md)。
-- **这份预览里有：** 可编辑的画布 Idea、按工作区和任务整理、回发原 Codex Desktop 任务、Codex 一键接入（MCP + Hooks + Skill）。**Grok Build 接入还没做**（设置里按钮还在，但点不了）。背景材料：[运行验收](docs/reviews/2026-09-14-workbench-runtime-acceptance.md)、[回复面板](docs/reviews/2026-09-15-replies-inbox.md)、[仅 Codex 接入](docs/reviews/2026-09-15-codex-only-entry.md)。
-- **毛边还在。** 版式、文案和 Skill 都还在改，欢迎反馈和提 issue。下一步想改什么写在[这份提示词](docs/next-improvement-prompt.md)里。
+- 已经发出去的包：[0.4.8](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.8)，Windows x64 安装包。说明在 [0.4.8](docs/releases/0.4.8.md)。
+- 这份预览里有可编辑的画布 Idea、按工作区和任务整理、回发原 Codex Desktop 任务、Codex 一键接入（MCP + Hooks + Skill）。**Grok Build 接入还没做。** 设置里按钮还在，但点不了。背景材料：[运行验收](docs/reviews/2026-09-14-workbench-runtime-acceptance.md)、[回复面板](docs/reviews/2026-09-15-replies-inbox.md)、[仅 Codex 接入](docs/reviews/2026-09-15-codex-only-entry.md)。
+- 版式、文案和 Skill 都还在改。欢迎反馈和提 issue。下一步想改什么写在[这份提示词](docs/next-improvement-prompt.md)里。
 
 ## 气泡怎么进画布
 
-1. **跟着你当前的屏幕走。** 内容来自 Agent 正在做的任务，显示位置跟前台窗口。气泡本来就少。可能是一句吐槽、一条提醒，或者一条岔路。可以不理、拖走，或者打开。
+1. **跟着你当前的屏幕走。** 内容来自 Agent 正在做的任务，显示位置跟前台窗口。气泡本来就少。多半是吐槽或提醒，偶尔是一条岔路。可以不理、拖走，或者打开。
 2. **收进来。** 点星标，把文字放进画布。知道原任务的话会带上。
 3. **接着做。** 把组件收成一条有标题、有意图的 Idea。画布就是回复面，版式跟着内容走。
 4. **改完再发。** 选方向、改组件、加约束，都先留在画布上。点「发送到 Codex」才回原任务。要改发别的任务，需要确认。
@@ -78,7 +78,7 @@ Spellcast 是本地桌面应用，走 MCP。自己不跑模型，也不要模型
 
 你在画布上明确发送之后，请求交给正在跑的 **Codex Desktop** 里对应任务，空闲的任务也算。投递失败不会显示成成功。这份预览没有 Grok Build 接入。
 
-**完成提醒**是一张置顶小卡片，语音播报可选，语言跟界面走。Codex 卡片双击跳回原任务；Grok Build 卡片双击关掉。
+**完成提醒**是一张置顶小卡片。语音播报可选，语言跟界面走。Codex 卡片双击跳回原任务。Grok Build 卡片双击关掉。
 
 **独立旁念**听 Spellcast 开关。由宿主子代理抛出，只占主任务一小块。细节在 [Codex Hooks 与验证边界](docs/codex-observer-hooks.md)。
 
@@ -95,7 +95,7 @@ Spellcast 是本地桌面应用，走 MCP。自己不跑模型，也不要模型
 
 接入细节：[docs/codex-observer-hooks.md](docs/codex-observer-hooks.md) 和包里的 [hooks/INSTALL.md](hooks/INSTALL.md)。
 
-用的时候要让 Spellcast 一直开着。本地 MCP 是 `http://127.0.0.1:47194/mcp`。**接入界面目前只支持 Codex。** 设置里其他宿主还显示，但装不上。macOS 和 Linux 的 CI 包没测过。
+用的时候要让 Spellcast 一直开着。本地 MCP 是 `http://127.0.0.1:47194/mcp`。接入界面目前只支持 Codex。设置里其他宿主还显示，但装不上。macOS 和 Linux 的 CI 包没测过。
 
 ## 本地开发
 
@@ -121,7 +121,7 @@ npm run tauri -- build --bundles nsis
 
 ## Astra 做了什么
 
-Spellcast 是跟 GPT-6 Astra 一起做的。Astra 会顶产品假设，写了 Rust 核心和 Tauri 外壳，把气泡 → 画布 → 回传这条链路接上，再用 computer use 把桌面交互跑通、做出演示。关系图用 [AntV X6](https://github.com/antvis/X6)，桌面外壳用 [Tauri](https://github.com/tauri-apps/tauri)。
+Spellcast 是跟 GPT-6 Astra 一起做的。Astra 会顶产品假设。Rust 核心和 Tauri 外壳是它写的，气泡到画布再回传这条链路也是它接上的。桌面交互和演示，用 computer use 跑通。关系图用 [AntV X6](https://github.com/antvis/X6)，桌面外壳用 [Tauri](https://github.com/tauri-apps/tauri)。
 
 ## 友情链接
 
