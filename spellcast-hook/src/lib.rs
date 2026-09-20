@@ -228,16 +228,33 @@ mod tests {
             state_dir: Some(dir.clone()),
             timeout: Duration::from_millis(50),
         };
+        let mut logged = 0;
+        let mut run_and_wait = |mut input: &[u8]| {
+            assert_eq!(run(&mut input, &mut Vec::new(), &cfg), 0);
+            logged += 1;
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            loop {
+                let raw = std::fs::read_to_string(dir.join("diag.jsonl")).unwrap_or_default();
+                if raw.lines().count() >= logged {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "diagnostic record was not written"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
         let sub = br#"{"hook_event_name":"SessionStart","session_id":"s","agent_type":"observer"}"#;
-        assert_eq!(run(&mut &sub[..], &mut Vec::new(), &cfg), 0);
+        run_and_wait(sub);
         let missing = br#"{"hook_event_name":"SessionStart","source":"startup"}"#;
-        assert_eq!(run(&mut &missing[..], &mut Vec::new(), &cfg), 0);
+        run_and_wait(missing);
         let native = br#"{"hook_event_name":"UserPromptSubmit","session_id":"s","agent_id":"agt-1","agent_type":"default"}"#;
-        assert_eq!(run(&mut &native[..], &mut Vec::new(), &cfg), 0);
+        run_and_wait(native);
         let terra = br#"{"hook_event_name":"UserPromptSubmit","session_id":"s","agentId":"agt-2","agent_type":"terra_max"}"#;
-        assert_eq!(run(&mut &terra[..], &mut Vec::new(), &cfg), 0);
+        run_and_wait(terra);
         let unsupported = br#"{"hook_event_name":"PreToolUse","session_id":"s","prompt":"secret"}"#;
-        assert_eq!(run(&mut &unsupported[..], &mut Vec::new(), &cfg), 0);
+        run_and_wait(unsupported);
         let raw = std::fs::read_to_string(dir.join("diag.jsonl")).unwrap();
         assert!(raw.contains("\"child_skip\":\"compat_agent_type\""));
         assert!(raw.contains("\"child_skip\":\"native_agent_id\""));
