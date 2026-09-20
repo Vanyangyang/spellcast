@@ -41,6 +41,7 @@ import "./replies.css";
 /* ------------------------------------------------------------------ */
 
 export type ReplySelection = { object_id?: string; reply_id: string; block_id: string; target?: ReplyTarget; region?: CanvasAnchor["region"] };
+export type ReplyEditState = "clean" | "dirty" | "saving" | "error";
 
 export type ReplyBoardHandlers = {
   getBoard?(): BoardSnapshot | undefined;
@@ -52,6 +53,8 @@ export type ReplyBoardHandlers = {
   onAction(request: ReplyActionInput): Promise<BoardReply>;
   onPatch(request: ReplyPatchRequest): Promise<BoardReply>;
   onSelect?(selection: ReplySelection | null): void;
+  onEditStart?(replyId: string, blockId: string): void;
+  onEditStateChange?(replyId: string, blockId: string, state: ReplyEditState): void;
   onFocusNotice?(message: string): void;
   onError?(message: string): void;
 };
@@ -60,6 +63,8 @@ export type ReplyBoardHandle = {
   update(replies: BoardReply[]): void;
   select(replyId: string): void;
   selectBlock(replyId: string, blockId: string, target?: ReplyTarget, region?: CanvasAnchor["region"]): void;
+  editBlock(replyId: string, blockId: string): boolean;
+  getEditState(replyId: string, blockId: string): ReplyEditState;
   getSelection(): ReplySelection | null;
   getArtifactAnchor(): CanvasAnchor["artifact"] | undefined;
   prepareFeedback(): Promise<void>;
@@ -73,6 +78,8 @@ export function mountReplyBoard(host: HTMLElement, handlers: ReplyBoardHandlers)
     update: (replies) => board.update(replies),
     select: (replyId) => board.select(replyId),
     selectBlock: (replyId, blockId, target, region) => board.selectBlock(replyId, blockId, target, region),
+    editBlock: (replyId, blockId) => board.editBlock(replyId, blockId),
+    getEditState: (replyId, blockId) => board.getEditState(replyId, blockId),
     getSelection: () => board.getSelection(),
     getArtifactAnchor: () => board.getArtifactAnchor(),
     prepareFeedback: () => board.prepareFeedback(),
@@ -394,6 +401,7 @@ interface BoardContext {
   selection(): ReplySelection | null;
   isBlockSelected(replyId: string, blockId: string): boolean;
   reportError(message: string): void;
+  publishEditState(replyId: string, blockId: string, state: ReplyEditState, force?: boolean): void;
 }
 
 type EditSession<D> = {
@@ -500,6 +508,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
     // The board only hands a view blocks of the type it was created for.
     this.block = block as B;
     this.root.dataset.blockId = block.id;
+    this.root.dataset.blockType = block.type;
     this.renderHead();
     if (this.edit) {
       this.updateEditFrame();
@@ -510,6 +519,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
     }
     this.updateAskFrame();
     this.refreshSelection();
+    this.notifyEditState();
   }
 
   /** Locale changed: rebuild labels, keep drafts. */
@@ -636,6 +646,23 @@ abstract class BlockView<B extends ReplyBlock, D> {
       this.ask.draftStamp = save({ ...this.draftRef("ask", this.ask.context), reply_title: this.reply.title,
         expected_revision: this.ask.expectedRevision, updated_at: Date.now(), text: this.ask.text });
     } else if (this.ask?.draftStamp !== undefined) { replyDrafts.remove(draftKey(this.draftRef("ask", this.ask.context)), this.ask.draftStamp); }
+    this.notifyEditState(true);
+  }
+
+  private currentEditState(): ReplyEditState {
+    const edit = this.edit;
+    if (edit?.busy) return "saving";
+    if (edit?.error) return "error";
+    if (edit && contentKey(this.draftToBlock(edit.draft)) !== contentKey(edit.baseBlock)) return "dirty";
+    const saved = replyDrafts.get(draftKey(this.draftRef("edit")));
+    return saved?.kind === "edit" && saved.block && saved.base_block && contentKey(saved.block) !== contentKey(saved.base_block)
+      ? "dirty"
+      : "clean";
+  }
+
+  private notifyEditState(force = false): void {
+    if (!this.reply || !this.block || this.destroyed) return;
+    this.ctx.publishEditState(this.reply.id, this.block.id, this.currentEditState(), force);
   }
 
   restoreDraft(record: DraftRecord): boolean {
@@ -884,11 +911,18 @@ abstract class BlockView<B extends ReplyBlock, D> {
       cancelBtn: null,
       statusEl: null,
     };
+    this.ctx.handlers.onEditStart?.(this.reply.id, this.block.id);
     this.body.hidden = !this.keepBodyWhileEditing;
     this.editBtn.setAttribute("aria-expanded", "true");
     this.buildEditFrame();
+    this.notifyEditState(true);
     const first = this.edit.form?.querySelector<HTMLElement>("input, textarea, select");
     first?.focus();
+  }
+
+  openEditor(): void {
+    if (!this.edit) this.beginEdit();
+    else this.edit.form?.querySelector<HTMLElement>("input, textarea, select")?.focus();
   }
 
   protected cancelEdit(discard = true): void {
@@ -902,6 +936,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
     this.editBtn.setAttribute("aria-expanded", "false");
     this.renderView();
     this.editBtn.focus();
+    this.notifyEditState(true);
   }
 
   /** Rebuild only the form part from the current draft (structural edits, locale). */
@@ -920,6 +955,15 @@ abstract class BlockView<B extends ReplyBlock, D> {
     frame.noValidate = true;
     frame.addEventListener("submit", (event) => {
       event.preventDefault();
+      void this.saveEdit();
+    });
+    frame.addEventListener("keydown", (event) => {
+      if (event.isComposing || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") return;
+      const dialog = frame.closest("dialog");
+      if (this.edit !== edit || this.editArea.hidden || frame.closest("[hidden]") ||
+        (dialog instanceof HTMLDialogElement && !dialog.open) || !frame.contains(document.activeElement)) return;
+      event.preventDefault();
+      if (event.repeat || edit.busy) return;
       void this.saveEdit();
     });
 
@@ -989,6 +1033,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
     this.editBtn.setAttribute("aria-expanded", "false");
     this.renderView();
     this.editBtn.focus();
+    this.notifyEditState(true);
   }
 
   private async saveEdit(): Promise<void> {
@@ -1016,6 +1061,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
       this.editArea.replaceChildren();
       this.body.hidden = false;
       this.editBtn.setAttribute("aria-expanded", "false");
+      this.notifyEditState(true);
       this.ctx.mergeReply(updated);
       this.editBtn.focus();
     } catch (err) {
@@ -1026,6 +1072,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
       const { user, detail } = friendlyError(err, translate(conflict ? "edit.conflict" : "edit.failed"));
       edit.error = conflict ? translate("edit.conflict") : user;
       this.updateEditFrame();
+      this.notifyEditState(true);
       this.ctx.reportError(detail);
     }
   }
@@ -2208,6 +2255,7 @@ class ReplyBoard {
   private readonly lastBlockByReply = new Map<string, string>();
   private readonly seenUpdatedAt = new Map<string, number>();
   private readonly badges = new Map<string, "new" | "updated">();
+  private readonly editStates = new Map<string, ReplyEditState>();
   private hasLoaded = false;
   private uidCounter = 0;
   private destroyed = false;
@@ -2238,6 +2286,7 @@ class ReplyBoard {
       isBlockSelected: (replyId, blockId) =>
         this.selection !== null && this.selection.reply_id === replyId && this.selection.block_id === blockId,
       reportError: (message) => this.handlers.onError?.(message),
+      publishEditState: (replyId, blockId, state, force) => this.setEditState(replyId, blockId, state, force),
     };
 
     this.unsubscribeLocale = onLocale(() => {
@@ -2314,7 +2363,10 @@ class ReplyBoard {
     [...this.panels.keys()].forEach((id) => {
       if (!incomingIds.has(id)) {
         const panel = this.panels.get(id)!;
-        panel.views.forEach((v) => v.destroy());
+        panel.views.forEach((v, blockId) => {
+          v.destroy();
+          this.clearEditState(id, blockId);
+        });
         panel.el.remove();
         this.panels.delete(id);
       }
@@ -2336,6 +2388,26 @@ class ReplyBoard {
 
   getSelection(): ReplySelection | null {
     return this.selection ? { ...this.selection, object_id: this.replies.find(reply => reply.id === this.selection!.reply_id)?.object_id } : null;
+  }
+
+  getEditState(replyId: string, blockId: string): ReplyEditState {
+    const state = this.editStates.get(this.editStateKey(replyId, blockId));
+    if (state === "saving" || state === "error" || state === "dirty") return state;
+    const reply = this.replies.find(item => item.id === replyId);
+    const block = reply?.blocks.find(item => item.id === blockId);
+    if (!reply || !block) return "clean";
+    const saved = replyDrafts.get(draftKey({
+      source_id: reply.source_id,
+      object_id: reply.object_id,
+      reply_id: reply.id,
+      block_id: block.id,
+      block_type: block.type,
+      kind: "edit",
+      context: null,
+    }));
+    return saved?.kind === "edit" && saved.block && saved.base_block && contentKey(saved.block) !== contentKey(saved.base_block)
+      ? "dirty"
+      : "clean";
   }
 
   getArtifactAnchor(): CanvasAnchor["artifact"] | undefined {
@@ -2369,6 +2441,23 @@ class ReplyBoard {
   }
 
   /* ---------------- state ---------------- */
+
+  private editStateKey(replyId: string, blockId: string): string {
+    return JSON.stringify([replyId, blockId]);
+  }
+
+  private setEditState(replyId: string, blockId: string, state: ReplyEditState, force = false): void {
+    const key = this.editStateKey(replyId, blockId);
+    if (!force && this.editStates.get(key) === state) return;
+    this.editStates.set(key, state);
+    this.handlers.onEditStateChange?.(replyId, blockId, state);
+  }
+
+  private clearEditState(replyId: string, blockId: string): void {
+    const key = this.editStateKey(replyId, blockId);
+    if (!this.editStates.delete(key)) return;
+    this.handlers.onEditStateChange?.(replyId, blockId, "clean");
+  }
 
   private setActive(replyId: string | null, restoreSelection: boolean): void {
     this.activeId = replyId;
@@ -2412,6 +2501,14 @@ class ReplyBoard {
       this.refreshPanelVisibility();
     }
     this.setSelection({ reply_id: replyId, block_id: blockId, ...(target ? { target } : {}), ...(region ? { region } : {}) });
+  }
+
+  editBlock(replyId: string, blockId: string): boolean {
+    this.selectBlock(replyId, blockId);
+    const view = this.panels.get(replyId)?.views.get(blockId);
+    if (!view) return false;
+    view.openEditor();
+    return true;
   }
 
   private mergeReply(reply: BoardReply): void {
@@ -2498,6 +2595,7 @@ class ReplyBoard {
       let view = panel!.views.get(block.id);
       if (view && view.block.type !== block.type) {
         view.destroy();
+        this.clearEditState(reply.id, block.id);
         view = undefined;
         panel!.views.delete(block.id);
       }
@@ -2512,6 +2610,7 @@ class ReplyBoard {
     [...panel.views.keys()].forEach((id) => {
       if (!seen.has(id)) {
         panel!.views.get(id)!.destroy();
+        this.clearEditState(reply.id, id);
         panel!.views.delete(id);
       }
     });

@@ -611,9 +611,11 @@ body.mode-focus.view-replies .has-warning {
 }
 
 .canvas-tool-selection {
-  top: 12px;
+  top: 58px;
   left: 88px;
   padding: 6px 8px 6px 10px;
+  max-width: calc(100% - 112px);
+  flex-wrap: wrap;
 }
 .canvas-tool-selection > button { flex: none; }
 .canvas-tool-selection-title {
@@ -625,6 +627,11 @@ body.mode-focus.view-replies .has-warning {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.canvas-selection-more { position: relative; flex: none; }
+.canvas-selection-more > summary { list-style: none; display: flex; align-items: center; min-height: 32px; padding: 0 10px; cursor: pointer; }
+.canvas-selection-more > summary::-webkit-details-marker { display: none; }
+.canvas-selection-more[open] > summary { background: var(--studio-lilac-soft, rgba(158, 124, 192, 0.22)); border-color: var(--studio-lilac, #9e7cc0); }
+.canvas-selection-more > .canvas-tool-menu { top: calc(100% + 8px); left: auto; right: 0; }
 
 .canvas-tool-camera {
   right: 16px;

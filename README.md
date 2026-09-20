@@ -50,7 +50,7 @@ Bubbles and asides are passive. There is no "spawn bubble" button; I left it out
 
 ## Where the preview stands
 
-- Published build is [0.4.8](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.8), a Windows x64 installer. See [0.4.8 notes](docs/releases/0.4.8.md).
+- Published build is [0.4.9](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.9), a Windows x64 installer. See [0.4.9 notes](docs/releases/0.4.9.md).
 - This preview has editable Canvas ideas, workspace/task organization, send-back to the original Codex Desktop task, and one-step Codex setup (MCP + Hooks + Skill). Grok Build setup comes later. The Settings button is visible but disabled. See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md).
 - Layout, copy, and the Skill are still moving around. Open an issue if you hit something. See [the next improvement brief](docs/next-improvement-prompt.md).
 

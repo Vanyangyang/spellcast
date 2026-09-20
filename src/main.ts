@@ -253,6 +253,11 @@ const replyBoard = mountCanvas(replyHost, {
     canvasTargetKey = key; canvasRouteKey = routeKey; paintComposerContext();
   },
   onHumanSelect: () => canvasNav.discardIntent(),
+  onDiscussSelection: () => {
+    paintComposerContext();
+    talk.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    input.focus({ preventScroll: true });
+  },
   onFocusNotice: message => flash(message),
   onError: (message) => flash(message),
 });

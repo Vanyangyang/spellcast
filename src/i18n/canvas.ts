@@ -1,6 +1,9 @@
 import { currentLocale } from "./index";
 
 const en = {
+  multiSelect: "Select multiple", selectedItems: "{n} items selected", selectedBlocks: "{n} blocks selected", clearSelection: "Clear selection", removeSelected: "Remove from canvas", alignLeft: "Align left", alignLeftHint: "Align left edges and move cards down as needed to avoid overlap.", arrangeRow: "Arrange in a row", groupHint: "Name and save these items as one idea. You can keep their positions or arrange them.", selectAll: "Select all", selectBlock: "Select {title}", selectionLimit: "Select up to 32 blocks at a time.",
+  readerCompare: "View side by side", readerCopy: "Copy selected text", readerDiscuss: "Discuss selected", readerDiscussReady: "The selected blocks are ready. Write your question in the canvas composer.", readerUnsaved: "Unsaved changes", readerSaving: "Saving…", readerSaveFailed: "Save failed", readerHideOutline: "Hide outline", readerShowOutline: "Show outline", readerOutlineWidth: "Outline width",
+  selectionMore: "More actions", selectionReaderTitle: "Selected content · {n}", selectionDiscussReady: "Selected content is ready. Write your question in the canvas composer.",
   workSettings: "Work settings",
   recipientSummary: "Send to: {task}", recipientChange: "Change", recipientCancelChange: "Cancel change",
   recipientWorkspaceLabel: "Workspace", recipientTaskLabel: "Task", recipientChooseWorkspace: "Choose a workspace", recipientWorkspaceFirst: "Choose a workspace first", recipientChooseTask: "Choose a task", recipientNoTasks: "No connected tasks in this workspace", recipientWorkspaceUnknown: "Workspace not recorded",
@@ -19,6 +22,8 @@ const en = {
   overviewSearch: "Search titles and text", overviewAll: "All", overviewUnsorted: "Needs sorting",
   overviewCaptured: "Captured: {label}", overviewLinked: "Linked task: {label}", overviewEmptyFilter: "No items match this search.",
   openItem: "Expand an item…",
+  readerOutline: "Blocks · {n}", readerAll: "Read all blocks", readerEdit: "Edit this block",
+  readerKindText: "Text", readerKindComparison: "Comparison", readerKindGraph: "Graph", readerKindSequence: "Sequence", readerKindArtifact: "Work",
   activate: "Work inside", done: "Back to canvas", activeHelp: "Working inside the content · Esc or “Back to canvas” returns to selection · Keys pressed inside a web work stay in the work",
   removed: "Removed", removedCount: "Removed · {n}", removedHelp: "Removed items keep their content, position and size. Restore one to put it back where it was.", emptyRemoved: "Nothing has been removed.", restoreItem: "Restore to canvas",
   draftRemoved: "This content was removed from the canvas. Restore it to continue editing; the draft is kept.",
@@ -46,6 +51,9 @@ const en = {
 };
 type Key = keyof typeof en;
 const zh: Record<Key, string> = {
+  multiSelect: "多选", selectedItems: "已选 {n} 项", selectedBlocks: "已选 {n} 个内容块", clearSelection: "清除选择", removeSelected: "从画布移除", alignLeft: "左对齐", alignLeftHint: "统一左边界，并按原有上下顺序向下避让，防止卡片重叠。", arrangeRow: "横向排列", groupHint: "为所选内容命名并保存为一个想法；可以保留位置，也可以选择编排。", selectAll: "全选", selectBlock: "选择「{title}」", selectionLimit: "每次最多选择 32 个内容块。",
+  readerCompare: "并排查看", readerCopy: "复制所选正文", readerDiscuss: "一起讨论", readerDiscussReady: "已选好这些内容块，请在画布输入框中写下问题。", readerUnsaved: "未保存修改", readerSaving: "正在保存…", readerSaveFailed: "保存失败", readerHideOutline: "收起目录", readerShowOutline: "展开目录", readerOutlineWidth: "目录宽度",
+  selectionMore: "更多操作", selectionReaderTitle: "并排查看 · 已选 {n} 项", selectionDiscussReady: "所选内容已加入提问上下文，请在画布输入框中写下问题。",
   workSettings: "作品设置",
   recipientSummary: "发送给：{task}", recipientChange: "更换", recipientCancelChange: "取消更换",
   recipientWorkspaceLabel: "工作区", recipientTaskLabel: "任务", recipientChooseWorkspace: "选择工作区", recipientWorkspaceFirst: "请先选择工作区", recipientChooseTask: "选择任务", recipientNoTasks: "该工作区暂无已接入任务", recipientWorkspaceUnknown: "工作区未记录",
@@ -64,6 +72,8 @@ const zh: Record<Key, string> = {
   overviewSearch: "搜索标题和正文", overviewAll: "全部", overviewUnsorted: "待整理",
   overviewCaptured: "当初背景：{label}", overviewLinked: "关联任务：{label}", overviewEmptyFilter: "没有匹配的内容。",
   openItem: "展开内容…",
+  readerOutline: "内容块 · {n}", readerAll: "阅读全部", readerEdit: "编辑这一块",
+  readerKindText: "文字", readerKindComparison: "方案对照", readerKindGraph: "关系图", readerKindSequence: "步骤", readerKindArtifact: "作品",
   activate: "进入内容", done: "返回画布", activeHelp: "正在操作内容 · Esc 或「返回画布」回到选择态 · 作品内部的按键留在作品里",
   removed: "已移除", removedCount: "已移除 · {n}", removedHelp: "已移除的内容保留原文、位置与尺寸。恢复后回到原来的位置。", emptyRemoved: "没有已移除的内容。", restoreItem: "恢复到画布",
   draftRemoved: "这条内容已从画布移除。恢复后即可继续编辑，草稿会保留。",
@@ -90,6 +100,9 @@ const zh: Record<Key, string> = {
   unbound: "尚未关联原任务", details: "投递详情", receipt: "请求 {n}", timelineSaved: "已保存", timelineQueued: "已排队", timelineRead: "已读取", timelineReply: "回复更新", timelineHandled: "已处理", recentHandled: "最近处理", requestSaved: "请求已保存", source: "来自 {source}", emptyCanvas: "画布上还没有内容", emptyHelp: "左侧 + 可以记下想法。Agent 送到这里的内容也会出现。",
 };
 const ja: Record<Key, string> = {
+  multiSelect: "複数選択", selectedItems: "{n} 件選択中", selectedBlocks: "{n} ブロック選択中", clearSelection: "選択を解除", removeSelected: "キャンバスから除去", alignLeft: "左揃え", alignLeftHint: "左端を揃え、重ならないよう元の上下順に下へずらします。", arrangeRow: "横に並べる", groupHint: "選択内容に名前を付けて一つのアイデアとして保存します。位置を維持するか配置し直すか選べます。", selectAll: "すべて選択", selectBlock: "「{title}」を選択", selectionLimit: "一度に選べるのは 32 ブロックまでです。",
+  readerCompare: "並べて表示", readerCopy: "選択した本文をコピー", readerDiscuss: "選択内容を相談", readerDiscussReady: "選択したブロックについて、キャンバスの入力欄に質問を書いてください。", readerUnsaved: "未保存の変更", readerSaving: "保存中…", readerSaveFailed: "保存に失敗", readerHideOutline: "目次を閉じる", readerShowOutline: "目次を開く", readerOutlineWidth: "目次の幅",
+  selectionMore: "その他の操作", selectionReaderTitle: "選択内容 · {n} 件", selectionDiscussReady: "選択内容を質問の参照に追加しました。キャンバスの入力欄に質問を書いてください。",
   workSettings: "作品の設定",
   recipientSummary: "送信先：{task}", recipientChange: "変更", recipientCancelChange: "変更を取り消す",
   recipientWorkspaceLabel: "ワークスペース", recipientTaskLabel: "タスク", recipientChooseWorkspace: "ワークスペースを選択", recipientWorkspaceFirst: "先にワークスペースを選択", recipientChooseTask: "タスクを選択", recipientNoTasks: "接続済みタスクがありません", recipientWorkspaceUnknown: "ワークスペース未記録",
@@ -108,6 +121,8 @@ const ja: Record<Key, string> = {
   overviewSearch: "タイトルと本文を検索", overviewAll: "すべて", overviewUnsorted: "整理待ち",
   overviewCaptured: "当時の背景：{label}", overviewLinked: "関連タスク：{label}", overviewEmptyFilter: "一致する内容はありません。",
   openItem: "内容を展開…",
+  readerOutline: "ブロック · {n}", readerAll: "すべて読む", readerEdit: "このブロックを編集",
+  readerKindText: "テキスト", readerKindComparison: "比較", readerKindGraph: "関係図", readerKindSequence: "手順", readerKindArtifact: "作品",
   activate: "内容を操作", done: "キャンバスに戻る", activeHelp: "内容を操作中 · Esc または「キャンバスに戻る」で選択状態に戻ります · Web 作品内のキー入力は作品側に渡ります",
   removed: "外した内容", removedCount: "外した内容 · {n}", removedHelp: "外した内容は本文・位置・サイズを保持します。復元すると元の位置に戻ります。", emptyRemoved: "外した内容はありません。", restoreItem: "キャンバスに戻す",
   draftRemoved: "この内容はキャンバスから外されています。復元すると編集を続けられます。下書きは保持されます。",

@@ -31,6 +31,8 @@ type Handlers = Omit<ReplyBoardHandlers, "onSelect"> & {
   onSelect(selection: CanvasSelection | null): void;
   /** Pointer/keyboard canvas choice, not update() or selectNode. */
   onHumanSelect?(): void;
+  /** Focus the existing composer with the current selection; sending remains a separate user action. */
+  onDiscussSelection?(): void;
   onNodePatch(id: string, request: ReplyPatchRequest): Promise<BoardNode>;
   onNodeAsk(id: string, text: string): Promise<void>;
   onBlockAction(id: string, request: ReplyActionInput, expectedRevision: number): Promise<BoardSnapshot>;
@@ -52,7 +54,7 @@ type Entry = { object: CanvasObject; placement: CanvasPlacement; reply?: BoardRe
 type Frame = {
   object: CanvasObject; root: HTMLElement; head: HTMLElement; title: HTMLElement; source: HTMLElement; provenance: HTMLElement; content: HTMLElement;
   activateButton: HTMLButtonElement; openButton: HTMLButtonElement; cell: Node; editor?: ReplyBoardHandle; native?: NativeCanvasContent;
-  reply?: BoardReply; placement: CanvasPlacement; note?: BoardNode;
+  reply?: BoardReply; placement: CanvasPlacement; note?: BoardNode; summary?: HTMLElement;
 };
 const MIN_SIZE = 48, MAX_SIZE = 2400, EDGE_Z = -2_000_000;
 const isLegacyContent = (content: Content): content is LegacyContent => content.type === "node" || content.type === "reply";
@@ -62,7 +64,7 @@ const titleFor = (object: CanvasObject, reply?: BoardReply) => reply?.title || (
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = "") {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
 }
-function button(text: string, action: () => void, title = text) {
+function button(text: string, action: (event: MouseEvent) => void, title = text) {
   const node = element("button", "ghost", text); node.type = "button"; node.title = title;
   node.setAttribute("aria-label", title); node.addEventListener("click", action); return node;
 }
@@ -70,6 +72,18 @@ function noteReply(note: BoardNode, object_id: string): BoardReply {
   return { id: `node:${note.id}`, object_id, source_id: `node:${note.id}`, source_label: "", title: note.title,
     revision: note.revision ?? 0, created_at_ms: 0, updated_at_ms: note.revision ?? 0,
     blocks: [{ id: "text", type: "text", title: note.title, text: note.body }] };
+}
+
+function readableBlock(block: ReplyBlock): string {
+  if (block.type === "text") return block.text;
+  if (block.type === "artifact") return block.description;
+  if (block.type === "graph") return [
+    ...block.nodes.map(node => `• ${node.title}${node.detail ? `: ${node.detail}` : ""}`),
+    ...block.edges.map(edge => `${block.nodes.find(node => node.id === edge.from)?.title ?? edge.from} → ${block.nodes.find(node => node.id === edge.to)?.title ?? edge.to}${edge.label ? `: ${edge.label}` : ""}`),
+  ].join("\n");
+  if (block.type === "sequence") return block.steps.map((step, index) =>
+    `${index + 1}. ${step.title}\n${step.action}${step.note ? `\n${step.note}` : ""}${step.feedback ? `\n${step.feedback}` : ""}`).join("\n\n");
+  return [block.criteria.join(" | "), ...block.options.map(option => `${option.title}: ${option.summary}\n${option.values.join(" | ")}`)].filter(Boolean).join("\n\n");
 }
 
 export function mountCanvas(host: HTMLElement, handlers: Handlers) {
@@ -129,7 +143,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     { tagName: "rect", selector: "body" },
     { tagName: "foreignObject", selector: "fo", children: [{ ns: "http://www.w3.org/1999/xhtml", tagName: "div", selector: "foContent", style: { width: "100%", height: "100%" } }] },
   ] });
-  let hand = false, space = false, middle = false;
+  let hand = false, space = false, middle = false, multiSelect = false;
+  const additiveSelection = (event: Pick<MouseEvent, "shiftKey" | "ctrlKey" | "metaKey">) => multiSelect || event.shiftKey || event.ctrlKey || event.metaKey;
   const panning = () => hand || space || middle;
   const graphPalette = () => document.body.dataset.theme === "light"
     ? { background: "#f7f6f2", grid: "#c9c4b8" }
@@ -186,6 +201,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   let selection: string | null = null;
   let selectedAnnotationId: string | null = null;
   const selectedUnits = new Set<string>();
+  const blockSelections = new Map<string, Set<string>>();
   /** Object whose content currently receives input in place. */
   let active: string | null = null;
   let deleting = false, restoring = false;
@@ -273,28 +289,304 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     frame.root.classList.toggle("is-plain", p.appearance !== "card");
     frame.root.classList.toggle("is-idea-note", frame.object.content.type === "node");
     frame.root.classList.toggle("is-structured-atom", frame.object.content.type === "block");
+    frame.root.classList.toggle("is-multi-reply", Boolean(frame.reply && frame.reply.blocks.length > 1));
     frame.root.classList.toggle("is-work", frame.reply?.blocks.length === 1 && frame.reply.blocks[0].type === "artifact");
     if (frame.cell.getZIndex() !== p.z) frame.cell.setZIndex(p.z, { remote: true });
     if (selectedObjectIds().includes(frame.object.id)) paintSelectionTools();
+  }
+  function paintReplySummary(frame: Frame) {
+    const blocks = frame.reply?.blocks ?? [];
+    if (blocks.length < 2) { frame.summary?.remove(); frame.summary = undefined; return; }
+    const summary = frame.summary ?? element("div", "canvas-reply-summary");
+    const heading = element("div", "canvas-reply-summary-head");
+    heading.append(element("strong", "", frame.reply?.title ?? ct("untitledBlock")),
+      element("small", "", ct("readerOutline", { n: blocks.length })));
+    const list = element("ol", "canvas-reply-summary-list");
+    for (const [index, block] of blocks.entries()) {
+      const row = element("li");
+      const atom = button("", event => {
+        if (event.ctrlKey || event.metaKey) { toggleBlockSelection(frame.object.id, block.id); return; }
+        if (event.shiftKey || multiSelect) { choose(frame.object.id, true, true); return; }
+        openReader(frame.object.id);
+        if (readingKey === frame.object.id) showReaderBlock(block.id);
+      }, block.title?.trim() || ct("untitledBlock"));
+      atom.classList.add("canvas-reply-summary-atom");
+      atom.dataset.blockId = block.id;
+      atom.setAttribute("aria-pressed", String(blockSelections.get(frame.object.id)?.has(block.id) ?? false));
+      for (const name of ["pointerdown", "mousedown", "dblclick", "click"]) atom.addEventListener(name, event => event.stopPropagation());
+      atom.append(element("span", "canvas-reply-summary-index", String(index + 1)));
+      const labels = element("div");
+      labels.append(element("small", "", ct(({ text: "readerKindText", comparison: "readerKindComparison", graph: "readerKindGraph", sequence: "readerKindSequence", artifact: "readerKindArtifact" } as const)[block.type])),
+        element("strong", "", block.title?.trim() || ct("untitledBlock")));
+      const detail = (block.type === "text" ? block.text
+        : block.type === "comparison" ? block.options.map(option => option.title).join(" · ")
+        : block.type === "graph" ? block.nodes.map(node => node.title).join(" · ")
+        : block.type === "sequence" ? block.steps.map(step => step.title).join(" · ")
+        : block.description).replace(/\s+/g, " ").trim();
+      if (detail) labels.append(element("p", "canvas-reply-summary-excerpt", detail));
+      atom.append(labels); row.append(atom); list.append(row);
+    }
+    summary.replaceChildren(heading, list);
+    if (!frame.summary) frame.root.insertBefore(summary, frame.root.querySelector(".canvas-card-drag"));
+    frame.summary = summary;
   }
 
   const reader = element("dialog", "board-dialog canvas-reader");
   const readerHead = element("header"); const readerTitle = element("h2");
   const readerSource = element("small", "canvas-frame-source");
-  const readerClose = button(ct("close"), () => reader.close());
-  readerHead.append(readerTitle, readerSource, readerClose); reader.append(readerHead); document.body.append(reader);
+  const closeReader = () => { rememberReaderPosition(); reader.close(); };
+  const readerClose = button(ct("close"), closeReader);
+  readerClose.classList.add("canvas-reader-close");
+  const readerToggle = button(ct("readerHideOutline"), () => {
+    reader.classList.toggle("is-outline-collapsed");
+    readerToggle.textContent = ct(reader.classList.contains("is-outline-collapsed") ? "readerShowOutline" : "readerHideOutline");
+    readerToggle.setAttribute("aria-expanded", String(!reader.classList.contains("is-outline-collapsed")));
+  });
+  const readerWorkspace = element("div", "canvas-reader-workspace");
+  const readerOutline = element("nav", "canvas-reader-outline");
+  const readerOutlineTitle = element("strong", "canvas-reader-outline-title");
+  const readerAll = button(ct("readerAll"), () => showReaderBlock(null));
+  const readerWidth = element("input", "canvas-reader-width");
+  readerWidth.type = "range"; readerWidth.min = "180"; readerWidth.max = "420"; readerWidth.value = "250";
+  readerWidth.setAttribute("aria-label", ct("readerOutlineWidth"));
+  readerWidth.addEventListener("input", () => readerWorkspace.style.setProperty("--outline-width", `${readerWidth.value}px`));
+  const readerAtoms = element("div", "canvas-reader-atoms");
+  const readerEdit = button(ct("readerEdit"), () => {
+    const frame = readingKey ? frames.get(readingKey) : undefined;
+    if (frame?.reply && readerBlockId) frame.editor?.editBlock(frame.reply.id, readerBlockId);
+  });
+  let readerBlockId: string | null = null;
+  let readerOutlineKey = "";
+  let readerComparing = false;
+  const readerPositions = new Map<string, number>();
+  const readerLastBlock = new Map<string, string | null>();
+  const readerBatch = element("div", "canvas-reader-batch");
+  const readerCount = element("span"); readerCount.setAttribute("role", "status");
+  const readerCompare = button(ct("readerCompare"), () => {
+    rememberReaderPosition(); readerComparing = true; readerBlockId = null;
+    paintReaderSelection(); restoreReaderPosition();
+  });
+  readerCompare.classList.add("canvas-reader-compare");
+  const readerCopy = button(ct("readerCopy"), () => { void copyReaderSelection(); });
+  const readerDiscuss = button(ct("readerDiscuss"), () => {
+    closeReader(); discussSelection();
+  });
+  readerDiscuss.classList.add("canvas-reader-discuss");
+  const readerClear = button(ct("clearSelection"), () => { if (readingKey) blockSelections.set(readingKey, new Set()); readerComparing = false; paintReaderSelection(); });
+  const readerPickAll = button(ct("selectAll"), () => {
+    const frame = readingKey ? frames.get(readingKey) : undefined; if (!frame?.reply) return;
+    blockSelections.set(frame.object.id, new Set(frame.reply.blocks.slice(0, 32).map(block => block.id))); paintReaderSelection();
+    if (frame.reply.blocks.length > 32) handlers.onFocusNotice?.(ct("selectionLimit"));
+  });
+  readerBatch.append(readerCount, readerCompare, readerCopy, readerDiscuss, readerClear);
+  readerOutline.append(readerOutlineTitle, readerAll, readerPickAll, readerWidth, readerAtoms, readerEdit);
+  readerWorkspace.append(readerOutline);
+  readerHead.append(readerTitle, readerSource, readerToggle, readerClose);
+  reader.append(readerHead, readerBatch, readerWorkspace); document.body.append(reader);
+  function readerPositionKey() {
+    return JSON.stringify([readingKey, readerComparing ? [...(blockSelections.get(readingKey!) ?? [])].sort() : readerBlockId]);
+  }
+  function rememberReaderPosition() {
+    const frame = readingKey ? frames.get(readingKey) : undefined;
+    if (frame) readerPositions.set(readerPositionKey(), frame.content.scrollTop);
+  }
+  function restoreReaderPosition() {
+    const key = readingKey, viewKey = readerPositionKey(), position = readerPositions.get(viewKey) ?? 0;
+    const frame = key ? frames.get(key) : undefined;
+    if (frame) frame.content.scrollTop = position;
+    requestAnimationFrame(() => { if (readingKey === key && readerPositionKey() === viewKey && frame) frame.content.scrollTop = position; });
+  }
+  function paintReaderSelection() {
+    const frame = readingKey ? frames.get(readingKey) : undefined;
+    if (!frame?.reply) return;
+    const picked = blockSelections.get(frame.object.id) ?? new Set<string>();
+    const blocks = frame.reply.blocks;
+    for (const id of picked) if (!blocks.some(block => block.id === id)) picked.delete(id);
+    readerBatch.hidden = !picked.size;
+    readerCount.textContent = ct("selectedBlocks", { n: picked.size });
+    readerCompare.disabled = picked.size < 2;
+    if (readerComparing && picked.size < 2) { readerComparing = false; readerBlockId = [...picked][0] ?? null; }
+    reader.classList.toggle("is-comparing", readerComparing);
+    reader.classList.toggle("is-atom-focused", Boolean(readerBlockId) && !readerComparing);
+    readerAll.setAttribute("aria-pressed", String(!readerBlockId && !readerComparing));
+    for (const row of readerAtoms.querySelectorAll<HTMLElement>(".canvas-reader-atom-row")) {
+      const id = row.dataset.blockId!;
+      row.querySelector<HTMLInputElement>("input")!.checked = picked.has(id);
+      row.querySelector("button")!.setAttribute("aria-pressed", String(readerBlockId === id && !readerComparing));
+    }
+    for (const block of frame.content.querySelectorAll<HTMLElement>(".rb-block[data-block-id]")) {
+      block.classList.toggle("is-reader-current", block.dataset.blockId === readerBlockId);
+      block.classList.toggle("is-reader-picked", picked.has(block.dataset.blockId!));
+    }
+    paintSummarySelection();
+    readerEdit.disabled = !readerBlockId || readerComparing || blocks.find(block => block.id === readerBlockId)?.type === "artifact";
+    paintReaderDrafts();
+    handlers.onSelect(getSelection()); paintSelectionTools();
+  }
+  function paintReaderDrafts() {
+    const frame = readingKey ? frames.get(readingKey) : undefined;
+    if (!frame?.reply) return;
+    for (const row of readerAtoms.querySelectorAll<HTMLElement>(".canvas-reader-atom-row")) {
+      const state = frame.editor?.getEditState(frame.reply.id, row.dataset.blockId!) ?? "clean";
+      row.dataset.editState = state;
+      const badge = row.querySelector<HTMLElement>(".canvas-reader-draft")!;
+      badge.hidden = state === "clean";
+      badge.textContent = state === "clean" ? "" : ct(state === "saving" ? "readerSaving" : state === "error" ? "readerSaveFailed" : "readerUnsaved");
+    }
+  }
+  async function copyReaderSelection() {
+    const frame = readingKey ? frames.get(readingKey) : undefined; if (!frame?.reply) return;
+    const selected = blockSelections.get(frame.object.id);
+    const drafts = replyDrafts.list().filter(draft => draft.object_id === frame.object.id && draft.kind === "edit");
+    const text = frame.reply.blocks.filter(block => selected?.has(block.id)).map(savedBlock => {
+      const block = drafts.find(draft => draft.block_id === savedBlock.id)?.block ?? savedBlock;
+      const body = block.type === "text" ? block.text : block.type === "graph" ? block.nodes.map(node => `${node.title}${node.detail ? `: ${node.detail}` : ""}`).join("\n")
+        : block.type === "sequence" ? block.steps.map((step, i) => `${i + 1}. ${step.title}\n${step.action}`).join("\n\n")
+        : block.type === "comparison" ? [block.criteria.join(" | "), ...block.options.map(option => `${option.title}: ${option.summary}\n${option.values.join(" | ")}`)].join("\n") : block.description;
+      return `${block.title ? `## ${block.title}\n\n` : ""}${body}`;
+    }).join("\n\n");
+    try { await navigator.clipboard.writeText(text); readerCount.textContent = ct("copied"); } catch (error) { fail(error); }
+  }
+  function showReaderBlock(blockId: string | null, fromUser = true) {
+    const frame = readingKey ? frames.get(readingKey) : undefined;
+    if (blockId && !frame?.reply?.blocks.some(block => block.id === blockId)) blockId = null;
+    if (fromUser) rememberReaderPosition();
+    readerBlockId = blockId;
+    if (fromUser) {
+      readerComparing = false;
+      if (frame) { blockSelections.set(frame.object.id, new Set(blockId ? [blockId] : [])); readerLastBlock.set(frame.object.id, blockId); }
+    }
+    paintReaderSelection();
+    if (fromUser && blockId && frame?.reply) frame.editor?.selectBlock(frame.reply.id, blockId);
+    if (fromUser) restoreReaderPosition();
+  }
+  function paintReaderOutline(force = false) {
+    const frame = readingKey ? frames.get(readingKey) : undefined;
+    if (!frame) return;
+    const blocks = frame?.reply?.blocks ?? [];
+    const signature = JSON.stringify(blocks.map(block => [block.id, block.type, block.title]));
+    readerOutline.hidden = blocks.length < 2;
+    readerWorkspace.classList.toggle("has-outline", blocks.length >= 2);
+    readerOutlineTitle.textContent = ct("readerOutline", { n: blocks.length });
+    readerAll.textContent = ct("readerAll");
+    readerEdit.textContent = ct("readerEdit");
+    if (force || signature !== readerOutlineKey) {
+      readerOutlineKey = signature;
+      readerAtoms.replaceChildren(...blocks.map((block, index) => {
+        const title = block.title?.trim() || ct("untitledBlock");
+        const row = element("div", "canvas-reader-atom-row"); row.dataset.blockId = block.id;
+        const pick = element("input"); pick.type = "checkbox"; pick.setAttribute("aria-label", ct("selectBlock", { title }));
+        pick.addEventListener("change", () => {
+          const selected = blockSelections.get(frame.object.id) ?? new Set<string>();
+          if (pick.checked && selected.size >= 32) { pick.checked = false; handlers.onFocusNotice?.(ct("selectionLimit")); return; }
+          if (pick.checked) selected.add(block.id); else selected.delete(block.id);
+          blockSelections.set(frame.object.id, selected); paintReaderSelection();
+        });
+        const atom = button(String(index + 1) + ". " + title, event => {
+          if (event.shiftKey || event.ctrlKey || event.metaKey) { pick.click(); return; }
+          showReaderBlock(block.id);
+        }, title);
+        atom.dataset.blockId = block.id;
+        const badge = element("small", "canvas-reader-draft");
+        row.append(pick, atom, badge); return row;
+      }));
+    }
+    showReaderBlock(readerBlockId, false);
+  }
+  reader.addEventListener("cancel", rememberReaderPosition);
   reader.addEventListener("close", () => {
-    const content = reader.querySelector<HTMLElement>(".canvas-frame-content");
+    const content = readerWorkspace.querySelector<HTMLElement>(":scope > .canvas-frame-content");
     const frame = readingKey ? frames.get(readingKey) : null;
     if (content && frame) { content.inert = true; frame.native?.setActive(false); frame.root.insertBefore(content, frame.root.querySelector(".canvas-card-drag")); } else content?.remove();
+    reader.classList.remove("is-atom-focused", "is-comparing"); readerComparing = false;
+    readerBlockId = null; readerOutlineKey = ""; readerAtoms.replaceChildren();
     readingKey = null;
   });
-  /** The reader stays as an optional expanded view; in-place activation is the primary way to work with content. */
+  reader.addEventListener("keydown", event => {
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.isComposing || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    const blocks = readingKey ? frames.get(readingKey)?.reply?.blocks : undefined; if (!blocks?.length) return;
+    event.preventDefault();
+    const current = blocks.findIndex(block => block.id === readerBlockId);
+    showReaderBlock(blocks[Math.max(0, Math.min(blocks.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))].id);
+  });
+  /** A full-window work area keeps one source object while exposing its blocks as navigable editing units. */
   function openReader(key: string) {
     const frame = frames.get(key); if (!frame || reader.open) return;
+    const picked = blockSelections.get(key) ? new Set(blockSelections.get(key)) : undefined;
     deactivate(false); choose(key, false, true); readingKey = key; readerTitle.textContent = frame.title.textContent;
+    if (picked?.size) blockSelections.set(key, picked);
     readerSource.textContent = frame.source.textContent;
-    frame.content.inert = false; frame.native?.setActive(true); reader.append(frame.content); reader.showModal();
+    frame.content.inert = false; frame.native?.setActive(true); readerWorkspace.append(frame.content);
+    readerBlockId = picked?.size === 1 ? [...picked][0] : picked?.size ? null : readerLastBlock.get(key) ?? null;
+    if (readerBlockId && !picked?.size) blockSelections.set(key, new Set([readerBlockId]));
+    readerToggle.hidden = !frame.reply || frame.reply.blocks.length < 2;
+    readerBatch.hidden = !frame.reply;
+    paintReaderOutline(); reader.showModal(); restoreReaderPosition();
+  }
+  type SelectionDocument = { anchor: CanvasAnchor; title: string; source: string; body: string; image?: { src: string; alt: string }; draft: boolean };
+  function selectionDocuments(): SelectionDocument[] {
+    const drafts = replyDrafts.list().filter(draft => draft.kind === "edit");
+    return (getSelection()?.anchors ?? []).flatMap(anchor => {
+      const frame = frames.get(anchor.object_id); if (!frame) return [];
+      const content = frame.object.content;
+      const origin = board ? originForObject(frame.object, board, overviewMeta.bindings) : undefined;
+      const source = origin?.taskLabel || frame.reply?.source_label || frame.object.origin?.label || frame.source.textContent?.trim() || frame.object.source_id || ct("overviewUnsorted");
+      let title = frame.title.textContent?.trim() || ct("untitledBlock"), body = "";
+      let image: SelectionDocument["image"], draft = false;
+      if (frame.reply) {
+        const blocks = anchor.block_id ? frame.reply.blocks.filter(block => block.id === anchor.block_id) : frame.reply.blocks;
+        if (anchor.block_id && blocks.length) title = blocks[0].title?.trim() || title;
+        body = blocks.map(saved => {
+          const edit = drafts.find(record => record.object_id === frame.object.id && record.block_id === saved.id && record.block?.type === saved.type);
+          const block = edit?.block ?? saved; if (edit) draft = true;
+          if (blocks.length === 1) return readableBlock(block);
+          return `${block.title?.trim() || ct("untitledBlock")}\n\n${readableBlock(block)}`;
+        }).join("\n\n────────\n\n");
+        if (blocks.length === 1 && blocks[0].type === "artifact" && blocks[0].state_preview) image = blocks[0].state_preview;
+      } else if (content.type === "text" || content.type === "shape") body = content.text;
+      else if (content.type === "image") { body = content.alt; image = { src: content.src, alt: content.alt || title }; }
+      return [{ anchor, title, source, body, image, draft }];
+    });
+  }
+  function discussSelection() {
+    handlers.onSelect(getSelection());
+    if (handlers.onDiscussSelection) handlers.onDiscussSelection();
+    else handlers.onFocusNotice?.(ct("selectionDiscussReady"));
+  }
+  async function copySelection() {
+    const documents = selectionDocuments(); if (!documents.length) return;
+    const value = documents.map((document, index) => `## ${index + 1}. ${document.title}\n${ct("source", { source: document.source })}${document.draft ? ` · ${ct("readerUnsaved")}` : ""}\n\n${document.body}`).join("\n\n---\n\n");
+    try { await navigator.clipboard.writeText(value); handlers.onFocusNotice?.(ct("copied")); } catch (error) { fail(error); }
+  }
+  const selectionReader = element("dialog", "board-dialog canvas-selection-reader");
+  const selectionReaderHead = element("header"), selectionReaderTitle = element("h2");
+  const selectionReaderDiscuss = button(ct("readerDiscuss"), () => { selectionReader.close(); discussSelection(); });
+  const selectionReaderCopy = button(ct("readerCopy"), () => { void copySelection(); });
+  const selectionReaderClose = button(ct("close"), () => selectionReader.close());
+  const selectionReaderGrid = element("div", "canvas-selection-reader-grid");
+  selectionReaderHead.append(selectionReaderTitle, selectionReaderDiscuss, selectionReaderCopy, selectionReaderClose);
+  selectionReader.append(selectionReaderHead, selectionReaderGrid); document.body.append(selectionReader);
+  function openSelectionReader() {
+    const documents = selectionDocuments(); if (documents.length < 2) return;
+    selectionReaderTitle.textContent = ct("selectionReaderTitle", { n: documents.length });
+    selectionReaderGrid.classList.toggle("is-many", documents.length > 2);
+    selectionReaderGrid.replaceChildren(...documents.map(document => {
+      const card = element("article", "canvas-selection-reader-card"); card.dataset.objectId = document.anchor.object_id;
+      if (document.anchor.block_id) card.dataset.blockId = document.anchor.block_id;
+      const head = element("header"), title = element("h3", "", document.title);
+      const source = element("small", "", ct("source", { source: document.source }));
+      const open = button(ct("open"), () => {
+        selectionReader.close(); openReader(document.anchor.object_id);
+        if (document.anchor.block_id && readingKey === document.anchor.object_id) showReaderBlock(document.anchor.block_id);
+      });
+      head.append(title, source, open);
+      const body = element("div", "canvas-selection-reader-body");
+      if (document.draft) body.append(element("small", "canvas-selection-reader-draft", ct("readerUnsaved")));
+      if (document.image) { const img = element("img"); img.src = document.image.src; img.alt = document.image.alt; body.append(img); }
+      body.append(element("div", "canvas-selection-reader-text", document.body));
+      card.append(head, body); return card;
+    }));
+    selectionReader.showModal();
   }
   const fail = (error: unknown) => handlers.onError?.(error instanceof Error ? error.message : String(error));
   function worldBox(cells: Node[]) {
@@ -392,6 +684,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
 
   /* ---------- selection vs. activation ---------- */
   function choose(key: string | null, additive = false, fromUser = false) {
+    if (fromUser || !key) blockSelections.clear();
     if (fromUser || !key) selectedAnnotationId = null;
     if (key && isComposition(key) && compositionMembers(key).some(id => frames.has(id) && !visibleFrames.has(id))) {
       // An explicitly chosen whole idea must not silently send only its visible members.
@@ -406,9 +699,33 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       locateIntent = key ? { kind: "object", id: key } : { kind: "none" };
       handlers.onHumanSelect?.();
     }
+    refreshSelection();
+  }
+  function toggleBlockSelection(key: string, blockId: string) {
+    const frame = frames.get(key);
+    if (!frame?.reply?.blocks.some(block => block.id === blockId)) return;
+    const picked = new Set(blockSelections.get(key));
+    if (picked.has(blockId)) picked.delete(blockId);
+    else {
+      if (picked.size >= 32) { handlers.onFocusNotice?.(ct("selectionLimit")); return; }
+      picked.add(blockId);
+    }
+    if (picked.size) { selectedUnits.add(key); blockSelections.set(key, picked); selection = key; }
+    else { selectedUnits.delete(key); blockSelections.delete(key); selection = [...selectedUnits].at(-1) ?? null; }
+    selectedAnnotationId = null;
+    locateIntent = selection ? { kind: "object", id: selection } : { kind: "none" };
+    handlers.onHumanSelect?.(); refreshSelection();
+    if (readingKey === key) paintReaderSelection();
+  }
+  function paintSummarySelection() {
+    for (const frame of frames.values()) for (const atom of frame.summary?.querySelectorAll<HTMLButtonElement>(".canvas-reply-summary-atom") ?? [])
+      atom.setAttribute("aria-pressed", String(blockSelections.get(frame.object.id)?.has(atom.dataset.blockId!) ?? false));
+  }
+  function refreshSelection() {
     if (active && !selectedObjectIds().includes(active)) deactivate(false);
     const visual = new Set(selectedObjectIds());
     for (const [id, frame] of frames) frame.root.classList.toggle("is-selected", visual.has(id));
+    paintSummarySelection();
     paintSelectionTools();
     hostFocus();
     handlers.onSelect(getSelection());
@@ -438,13 +755,29 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const frame = primaryFrame(); const object = frame?.object ?? objectById(object_ids[0]); if (!object) return null;
     const inner: CanvasSelection = object.content.type === "block" ? { block_id: object.content.block.id } : frame?.note ? { node_id: frame.note.id }
       : frame?.editor?.getSelection() ?? (frame?.reply ? { reply_id: frame.reply.id } : {});
-    return { object_id: object.id, object_ids, ...(selection && isComposition(selection) && selectedUnits.size === 1 ? { composition_id: selection } : {}), anchors: object_ids.map(id => {
+    const picked = blockSelections.get(object.id);
+    if (picked) { inner.block_id = picked.size === 1 ? [...picked][0] : undefined; }
+    return { object_id: object.id, object_ids, ...(selection && isComposition(selection) && selectedUnits.size === 1 ? { composition_id: selection } : {}), anchors: object_ids.flatMap(id => {
       const selected = frames.get(id), anchor = anchorFor(selected?.object ?? objectById(id)!, selected);
       const compositions = compositionDependencies().filter(group => compositionContains(group, id)).map(group => ({ id: group, revision: compositionById(group)!.revision }));
-      return { ...anchor, ...(compositions.length ? { compositions } : {}) };
+      const chosen = blockSelections.get(id);
+      const base = { ...anchor, ...(compositions.length ? { compositions } : {}) };
+      if (!chosen) return [base];
+      if (!chosen.size) return [{ object_id: base.object_id, content_revision: base.content_revision, ...(compositions.length ? { compositions } : {}) }];
+      return (selected?.reply?.blocks ?? []).filter(block => chosen.has(block.id)).map(block => ({
+        object_id: id, content_revision: base.content_revision, block_id: block.id,
+        ...(compositions.length ? { compositions } : {}),
+        ...(base.block_id === block.id ? base : {}),
+        ...(block.type === "artifact" ? { artifact: { bundle_id: block.bundle_id, state_revision: block.state_revision, state: block.state }, inputs: dataflow.snapshot(id, block.id) } : {}),
+      }));
     }), ...inner };
   }
   /** Activation hands input to the content in place; the host keeps selection and the way back. */
+  function workInside(key: string) {
+    const frame = frames.get(key);
+    if (frame?.reply && frame.reply.blocks.length > 1) openReader(key);
+    else activate(key);
+  }
   function activate(key: string) {
     const frame = frames.get(key); if (!frame || reader.open) return;
     if (active !== key) {
@@ -468,11 +801,12 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
   function paintMode() {
     root.classList.toggle("has-active", Boolean(active));
-    const modeLabel = ct(active ? "done" : "activate");
+    const chosen = primaryFrame();
+    const modeLabel = ct(active ? "done" : chosen?.reply && chosen.reply.blocks.length > 1 ? "open" : "activate");
     workButton.textContent = modeLabel; workButton.title = modeLabel; workButton.setAttribute("aria-label", modeLabel);
     workButton.setAttribute("aria-pressed", String(Boolean(active))); workButton.disabled = !primaryFrame();
     for (const [id, frame] of frames) {
-      const on = id === active; const label = ct(on ? "done" : "activate");
+      const on = id === active; const label = ct(on ? "done" : frame.reply && frame.reply.blocks.length > 1 ? "open" : "activate");
       frame.activateButton.textContent = label; frame.activateButton.title = label; frame.activateButton.setAttribute("aria-label", label);
       frame.activateButton.setAttribute("aria-pressed", String(on));
     }
@@ -630,8 +964,11 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const fitButton = button(ct("fit"), fit);
   const overviewButton = button(ct("overview"), () => { paintOverview(); overview.showModal(); });
   const tidyButton = button(ct("arrange"), tidy);
-  const handButton = button(ct("pan"), () => { hand = !hand; paintPan(); });
-  const workButton = button(ct("activate"), () => { const frame = primaryFrame(); if (active) deactivate(); else if (frame) activate(frame.object.id); });
+  const handButton = button(ct("pan"), () => { hand = !hand; if (hand) multiSelect = false; paintPan(); paintMultiSelect(); });
+  const multiButton = button(ct("multiSelect"), () => { multiSelect = !multiSelect; if (multiSelect) { hand = false; deactivate(false); } paintPan(); paintMultiSelect(); });
+  multiButton.classList.add("canvas-tool-multiselect");
+  function paintMultiSelect() { multiButton.setAttribute("aria-pressed", String(multiSelect)); root.classList.toggle("is-multiselect", multiSelect); }
+  const workButton = button(ct("activate"), () => { const frame = primaryFrame(); if (active) deactivate(); else if (frame) workInside(frame.object.id); });
   const workSettingsButton = button(ct("workSettings"), () => {
     const frame = primaryFrame(); if (!frame) return;
     activate(frame.object.id);
@@ -714,8 +1051,45 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     await runBatch({ request_id: crypto.randomUUID(), reads: [{ kind: "composition", id, revision: composition.revision }, ...(parent ? [{ kind: "composition" as const, id: parent.id, revision: parent.revision }] : [])],
       operations: [{ op: "ungroup", id, expected_revision: composition.revision }] });
   }
-  const groupButton = button(ct("group"), () => { void composeSelected(); });
+  const groupButton = button(ct("group"), () => { void composeSelected(); }, ct("groupHint"));
   const ungroupButton = button(ct("ungroup"), () => { void ungroupSelected(); });
+  const selectionDiscussButton = button(ct("readerDiscuss"), () => discussSelection());
+  selectionDiscussButton.classList.add("canvas-selection-discuss", "canvas-tool-primary");
+  const selectionCompareButton = button(ct("readerCompare"), () => openSelectionReader());
+  selectionCompareButton.classList.add("canvas-selection-compare");
+  const selectionCopyButton = button(ct("readerCopy"), () => { void copySelection(); });
+  selectionCopyButton.classList.add("canvas-selection-copy");
+  const clearButton = button(ct("clearSelection"), () => choose(null, false, true));
+  const removeButton = button(ct("removeSelected"), () => { void removeSelection(); });
+  const alignButton = button(ct("alignLeft"), () => arrangeSelection(false), ct("alignLeftHint"));
+  const rowButton = button(ct("arrangeRow"), () => arrangeSelection(true));
+  alignButton.classList.add("canvas-align-left"); rowButton.classList.add("canvas-arrange-row");
+  const selectionMore = element("details", "canvas-selection-more");
+  const selectionMoreSummary = element("summary", "", ct("selectionMore"));
+  const selectionMoreMenu = element("div", "canvas-tool-menu");
+  selectionMoreMenu.append(selectionCopyButton, alignButton, rowButton, removeButton);
+  selectionMore.append(selectionMoreSummary, selectionMoreMenu);
+  selectionMoreMenu.addEventListener("click", event => { if ((event.target as HTMLElement).closest("button")) selectionMore.open = false; });
+  function arrangeSelection(row: boolean) {
+    const selected = selectedObjectIds().map(id => frames.get(id)!);
+    if (selected.length < 2) return;
+    selected.sort((a, b) => row
+      ? currentPlacement(a).x - currentPlacement(b).x || currentPlacement(a).y - currentPlacement(b).y
+      : currentPlacement(a).y - currentPlacement(b).y || currentPlacement(a).x - currentPlacement(b).x);
+    let x = Math.min(...selected.map(frame => currentPlacement(frame).x));
+    const top = Math.min(...selected.map(frame => currentPlacement(frame).y));
+    let bottom = -Infinity;
+    graph.model.startBatch("layout");
+    try {
+      for (const frame of selected) {
+        const current = currentPlacement(frame), size = frame.cell.getSize();
+        const nextX = x, nextY = row ? top : Math.max(current.y, bottom + 32);
+        if (current.x !== nextX || current.y !== nextY) { frame.cell.position(nextX, nextY); mark(frame.cell); }
+        if (row) x += size.width + 32;
+        else bottom = nextY + size.height;
+      }
+    } finally { graph.model.stopBatch("layout"); }
+  }
   const connections = canvasConnections(async request => {
     try { update(await handlers.onBatch(request)); }
     catch (error) { try { update(await handlers.onReload()); } catch { /* Keep the reviewed connection request while disconnected. */ } throw error; }
@@ -769,13 +1143,24 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const allAnnotationsButton = button(annotationLabel(), () => { void annotationsPanel.show(); });
   function paintSelectionTools() {
     const frame = primaryFrame();
-    for (const node of [frontButton, backButton, cardButton]) node.disabled = !frame;
+    const count = selectedObjectIds().length;
+    const picked = count === 1 ? blockSelections.get(frame?.object.id ?? "")?.size ?? 0 : 0;
+    const multi = count > 1 || picked > 1;
+    for (const node of [frontButton, backButton, cardButton]) node.disabled = !frame || count !== 1;
     groupButton.disabled = composeMembers().length < 2;
+    groupButton.hidden = count < 2;
+    selectionDiscussButton.hidden = selectionCompareButton.hidden = selectionMore.hidden = !multi;
+    selectionCompareButton.disabled = !multi;
+    selectionCopyButton.disabled = !multi;
+    if (!multi) selectionMore.open = false;
+    alignButton.hidden = rowButton.hidden = count < 2;
+    clearButton.hidden = !multi; removeButton.hidden = count < 2;
+    workButton.hidden = annotationsButton.hidden = connectionsButton.hidden = count > 1;
     ungroupButton.disabled = !selection || !isComposition(selection);
     ideaButton.hidden = !selection || !isComposition(selection);
-    workButton.disabled = !frame;
+    workButton.disabled = !frame || count !== 1;
     workSettingsButton.hidden = !frame?.root.classList.contains("is-work");
-    annotationsButton.disabled = selectedObjectIds().length !== 1;
+    annotationsButton.disabled = count !== 1 || (frame ? (blockSelections.get(frame.object.id)?.size ?? 0) > 1 : false);
     focusButton.disabled = !selectedObjectIds().length;
     connectionsButton.disabled = !frame || (frame.object.content.type !== "text" && !frame.reply?.blocks.some(block => block.type === "artifact"));
     cardButton.setAttribute("aria-pressed", String(frame ? currentPlacement(frame).appearance === "card" : false));
@@ -819,6 +1204,11 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (target?.closest("input, textarea, select, [role=textbox]") || target?.isContentEditable) return;
     if ((event.ctrlKey || event.metaKey) && !event.altKey && target && (root.contains(target) || target === document.body)) {
       const key = event.key.toLowerCase();
+      if (key === "a") {
+        event.preventDefault(); blockSelections.clear(); selectedUnits.clear();
+        for (const id of visibleFrames) selectedUnits.add(id);
+        selection = [...selectedUnits].at(-1) ?? null; refreshSelection(); return;
+      }
       const undoKey = key === "z" && !event.shiftKey;
       const redoKey = (key === "z" && event.shiftKey) || (key === "y" && !event.shiftKey);
       if (undoKey || redoKey) {
@@ -834,8 +1224,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (modifier) return;
     const frame = primaryFrame();
     const onHost = target === graphHost || Boolean(frame && target === frame.head);
-    if (event.key === "Escape") { if (active) { event.preventDefault(); deactivate(); } else if (onHost && selection) { event.preventDefault(); choose(null, false, true); } return; }
-    if (event.key === "Enter" && onHost && frame) { event.preventDefault(); if (!event.repeat) activate(frame.object.id); return; }
+    if (event.key === "Escape") { if (active) { event.preventDefault(); deactivate(); } else if ((onHost || target?.closest(".canvas-toolbar")) && (selection || multiSelect)) { event.preventDefault(); choose(null, false, true); multiSelect = false; paintMultiSelect(); } return; }
+    if (event.key === "Enter" && onHost && frame) { event.preventDefault(); if (!event.repeat) workInside(frame.object.id); return; }
     if (onHost && (event.key === "Delete" || event.key === "Backspace")) { event.preventDefault(); if (!event.repeat) void removeSelection(); return; }
     if (onHost && frame && moveSelected(event, frame)) return;
     const step = { KeyW: [0, 48], KeyA: [48, 0], KeyS: [0, -48], KeyD: [-48, 0] }[event.code];
@@ -902,7 +1292,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (board) update(board);
     paintLegacyEdges();
   });
-  moreMenu.append(jump, allAnnotationsButton, groupButton, ungroupButton, proposalsButton, tidyButton, undo, redo, frontButton, backButton, cardButton, draftsButton, removedButton, legacyEdgesButton);
+  moreMenu.append(jump, allAnnotationsButton, ungroupButton, proposalsButton, tidyButton, undo, redo, frontButton, backButton, cardButton, draftsButton, removedButton, legacyEdgesButton);
   more.append(moreSummary, moreMenu);
   function paintLegacyEdges() {
     const hasLegacy = (board?.edges ?? []).some((edge) => (edge.relation ?? "unconfirmed") !== "parent");
@@ -925,14 +1315,15 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const closeMore = (event: PointerEvent) => {
     const target = event.target;
     if (more.open && target instanceof Element && !more.contains(target)) more.open = false;
+    if (selectionMore.open && target instanceof Element && !selectionMore.contains(target)) selectionMore.open = false;
   };
   window.addEventListener("pointerdown", closeMore, true);
   actual.classList.add("canvas-zoom-value");
   workButton.classList.add("canvas-tool-primary");
-  const rail = toolGroup(add, overviewButton, layersButton, handButton, more);
+  const rail = toolGroup(add, multiButton, overviewButton, layersButton, handButton, more);
   rail.classList.add("canvas-tool-rail");
   const selectionTitle = element("span", "canvas-tool-selection-title");
-  const selectionDock = toolGroup(selectionTitle, ideaButton, workButton, workSettingsButton, annotationsButton, connectionsButton, focusButton);
+  const selectionDock = toolGroup(selectionTitle, selectionDiscussButton, selectionCompareButton, groupButton, ideaButton, workButton, workSettingsButton, annotationsButton, connectionsButton, focusButton, selectionMore, clearButton);
   selectionDock.classList.add("canvas-tool-selection");
   const camera = toolGroup(fitButton, zoomOut, actual, zoomIn);
   camera.classList.add("canvas-tool-camera");
@@ -941,7 +1332,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     selectionDock.hidden = !ids.length;
     const frame = primaryFrame();
     const composition = selection ? compositionById(selection) : undefined;
-    selectionTitle.textContent = composition?.title
+    const blocks = ids.length === 1 ? blockSelections.get(ids[0])?.size ?? 0 : 0;
+    selectionTitle.textContent = blocks > 1 ? ct("selectedBlocks", { n: blocks }) : ids.length > 1 ? ct("selectedItems", { n: ids.length }) : composition?.title
       || frame?.title.textContent
       || (ids.length > 1 ? String(ids.length) : "");
   }
@@ -987,9 +1379,52 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   history.on("undo", saveHistoryReplay);
   history.on("redo", saveHistoryReplay);
   history.on("change", paintStatus);
-  graph.on("blank:click", () => choose(null, false, true));
-  graph.on("node:click", ({ node, e }: { node: Node; e?: MouseEvent }) => choose(node.id, Boolean(e?.shiftKey), true));
-  graph.on("node:dblclick", ({ node }) => { if (!panning()) activate(node.id); });
+  graph.on("blank:click", () => { if (!suppressBlankClick) choose(null, false, true); });
+  graph.on("node:click", ({ node, e }: { node: Node; e?: MouseEvent }) => choose(node.id, Boolean(e && additiveSelection(e)), true));
+  graph.on("node:dblclick", ({ node, e }: { node: Node; e?: MouseEvent }) => { if (!panning() && !multiSelect && !(e && additiveSelection(e))) workInside(node.id); });
+
+  // Selection gestures stay outside embedded content and use client coordinates at every zoom.
+  const selectionController = new AbortController();
+  const marquee = element("div", "canvas-marquee"); marquee.hidden = true; viewport.append(marquee);
+  let suppressBlankClick = false;
+  let sweep: { pointer: number; x: number; y: number; previous: string[]; moved: boolean } | null = null;
+  graphHost.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || panning() || (!multiSelect && !event.shiftKey && !event.ctrlKey && !event.metaKey) || (event.target as Element).closest(".x6-node, .x6-edge, .x6-widget-transform")) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    sweep = { pointer: event.pointerId, x: event.clientX, y: event.clientY, previous: event.shiftKey || event.ctrlKey || event.metaKey ? [...selectedUnits] : [], moved: false };
+    graphHost.setPointerCapture(event.pointerId);
+  }, { capture: true, signal: selectionController.signal });
+  graphHost.addEventListener("pointermove", event => {
+    if (!sweep || sweep.pointer !== event.pointerId) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (Math.hypot(event.clientX - sweep.x, event.clientY - sweep.y) < 4 && !sweep.moved) return;
+    sweep.moved = true;
+    const box = viewport.getBoundingClientRect(); marquee.hidden = false;
+    Object.assign(marquee.style, { left: `${Math.min(sweep.x, event.clientX) - box.left}px`, top: `${Math.min(sweep.y, event.clientY) - box.top}px`, width: `${Math.abs(event.clientX - sweep.x)}px`, height: `${Math.abs(event.clientY - sweep.y)}px` });
+  }, { capture: true, signal: selectionController.signal });
+  const finishSweep = (event: PointerEvent) => {
+    if (!sweep || event.pointerId !== sweep.pointer) return;
+    const held = sweep; sweep = null; marquee.hidden = true;
+    event.preventDefault(); event.stopImmediatePropagation();
+    suppressBlankClick = true; window.setTimeout(() => { suppressBlankClick = false; }, 0);
+    if (graphHost.hasPointerCapture(event.pointerId)) graphHost.releasePointerCapture(event.pointerId);
+    if (event.type === "pointercancel") return;
+    selectedUnits.clear(); held.previous.forEach(id => selectedUnits.add(id)); blockSelections.clear();
+    if (held.moved) {
+      const left = Math.min(held.x, event.clientX), right = Math.max(held.x, event.clientX), top = Math.min(held.y, event.clientY), bottom = Math.max(held.y, event.clientY);
+      for (const [id, frame] of frames) {
+        if (!visibleFrames.has(id)) continue;
+        const box = frame.root.getBoundingClientRect();
+        if (box.left < right && box.right > left && box.top < bottom && box.bottom > top) selectedUnits.add(id);
+      }
+    }
+    selection = [...selectedUnits].at(-1) ?? null; selectedAnnotationId = null;
+    locateIntent = selection ? { kind: "object", id: selection } : { kind: "none" };
+    handlers.onHumanSelect?.(); refreshSelection();
+  };
+  graphHost.addEventListener("pointerup", finishSweep, { capture: true, signal: selectionController.signal });
+  graphHost.addEventListener("pointercancel", finishSweep, { capture: true, signal: selectionController.signal });
+  window.addEventListener("blur", () => { sweep = null; marquee.hidden = true; }, { signal: selectionController.signal });
 
   const overview = element("dialog", "board-dialog canvas-overview");
   const overviewHead = element("header"), overviewTitle = element("h2"), overviewHelp = element("p");
@@ -1126,7 +1561,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   function layerPick(label: string, id: string) {
     const pick = element("button", "ghost canvas-layer-pick", label) as HTMLButtonElement;
     pick.type = "button"; pick.setAttribute("aria-pressed", String(selectedUnits.has(id)));
-    pick.addEventListener("click", event => { choose(id, (event as MouseEvent).shiftKey, true); paintLayers(); });
+    pick.addEventListener("click", event => { choose(id, additiveSelection(event), true); paintLayers(); });
     return pick;
   }
   function paintLayers() {
@@ -1452,7 +1887,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const title = element("strong", "", label);
     const source = element("small", "canvas-frame-source");
     const provenance = element("small", "canvas-origin");
-    const activateButton = button(ct("activate"), () => { if (active === key) deactivate(); else activate(key); });
+    const activateButton = button(ct("activate"), () => { if (active === key) deactivate(); else workInside(key); });
     const openButton = button(ct("open"), () => openReader(key), ct("open"));
     const annotationBadge = button(annotationLabel(), () => { choose(key, false, true); void annotationsPanel.show(key); });
     annotationBadge.classList.add("canvas-annotation-badge"); annotationBadge.hidden = true;
@@ -1465,7 +1900,16 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     content.inert = true;
     const drag = element("div", "canvas-card-drag"); drag.setAttribute("aria-hidden", "true");
     for (const name of ["mousedown", "pointerdown", "dblclick"]) content.addEventListener(name, event => event.stopPropagation());
-    content.addEventListener("pointerdown", event => choose(key, event.shiftKey, true), { capture: true });
+    content.addEventListener("pointerdown", event => { if (readingKey !== key) choose(key, additiveSelection(event), true); }, { capture: true });
+    content.addEventListener("click", event => {
+      if (readingKey !== key || !(event.ctrlKey || event.metaKey) || !reply) return;
+      const target = event.target as HTMLElement;
+      if (target.closest("button, a, input, textarea, select, form, [contenteditable]")) return;
+      const block = target.closest<HTMLElement>(".rb-block[data-block-id]");
+      if (!block || !content.contains(block)) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      toggleBlockSelection(key, block.dataset.blockId!);
+    }, { capture: true });
     frame.append(head, provenance, content, drag, annotationBadge);
     let editor: ReplyBoardHandle | undefined;
     let native: NativeCanvasContent | undefined;
@@ -1533,6 +1977,16 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
           if (!note) return handlers.onAction(request);
           await handlers.onNodeAsk(note.id, request.text ?? ""); return noteReply(frames.get(key)?.note ?? note, key);
         },
+        onEditStart: (_replyId, blockId) => {
+          if (readingKey !== key) openReader(key);
+          if (readingKey === key) {
+            rememberReaderPosition(); readerComparing = false;
+            blockSelections.set(key, new Set([blockId])); readerLastBlock.set(key, blockId);
+            showReaderBlock(blockId, false);
+            content.scrollTop = 0;
+          }
+        },
+        onEditStateChange: () => { if (readingKey === key) paintReaderDrafts(); },
         onSelect: () => { if (selectedUnits.has(key)) handlers.onSelect(getSelection()); },
         onFocusNotice: message => { choose(key, false, true); handlers.onFocusNotice?.(message); },
         onError: handlers.onError,
@@ -1546,6 +2000,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     requestAnimationFrame(() => { if (!destroyed && html.get(key) === frame) mountHtml(cell, frame, native); });
     const held: Frame = { object, root: frame, head, title, source, provenance, content, activateButton, openButton, cell, editor, native, reply, placement: p, note };
     frames.set(key, held); applyAppearance(held, p); if (editor && reply) editor.update([reply]);
+    paintReplySummary(held);
     frame.classList.toggle("is-selected", selectedObjectIds().includes(key));
   }
 
@@ -1639,11 +2094,23 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
         addFrame(object, p, reply, note); continue;
       }
       frame.object = object; frame.note = note; frame.reply = reply; frame.placement = p;
+      const selectedBlocks = blockSelections.get(key);
+      if (selectedBlocks?.size) {
+        for (const id of selectedBlocks) if (!reply?.blocks.some(block => block.id === id)) selectedBlocks.delete(id);
+        if (!selectedBlocks.size) {
+          blockSelections.delete(key); selectedUnits.delete(key);
+          if (selection === key) selection = [...selectedUnits].at(-1) ?? null;
+        }
+      }
       frame.native?.update(object);
       const label = frame.native?.title() ?? titleFor(object, reply);
       frame.title.textContent = label; frame.source.textContent = reply?.source_label ?? object.source_id ?? ""; frame.head.setAttribute("aria-label", label);
       if (frame.editor && reply) frame.editor.update([reply]);
-      if (readingKey === key) { readerTitle.textContent = label; readerSource.textContent = frame.source.textContent; }
+      paintReplySummary(frame);
+      if (readingKey === key) {
+        readerTitle.textContent = label; readerSource.textContent = frame.source.textContent;
+        paintReaderOutline();
+      }
       // Unsaved local changes win over the server placement; confirmed or conflicting ones follow the layout.
       if (!dirty.has(key) && !groupLocal.has(key) && !groupDragStart?.has(key)) { frame.cell.position(p.x, p.y, { remote: true }); frame.cell.resize(p.width, p.height, { remote: true }); }
       sizeHtml(frame.cell);
@@ -1691,6 +2158,14 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
   function labels() {
     applyScope();
+    for (const [node, key] of [[multiButton, "multiSelect"], [clearButton, "clearSelection"], [removeButton, "removeSelected"], [alignButton, "alignLeft"], [rowButton, "arrangeRow"], [selectionDiscussButton, "readerDiscuss"], [selectionCompareButton, "readerCompare"], [selectionCopyButton, "readerCopy"], [selectionReaderDiscuss, "readerDiscuss"], [selectionReaderCopy, "readerCopy"], [readerPickAll, "selectAll"], [readerCompare, "readerCompare"], [readerCopy, "readerCopy"], [readerDiscuss, "readerDiscuss"], [readerClear, "clearSelection"]] as const) {
+      node.textContent = ct(key); node.title = ct(key); node.setAttribute("aria-label", ct(key));
+    }
+    selectionMoreSummary.textContent = ct("selectionMore"); selectionMoreSummary.setAttribute("aria-label", ct("selectionMore"));
+    if (selectionReader.open) selectionReaderTitle.textContent = ct("selectionReaderTitle", { n: selectionReaderGrid.children.length });
+    readerToggle.textContent = ct(reader.classList.contains("is-outline-collapsed") ? "readerShowOutline" : "readerHideOutline");
+    readerToggle.setAttribute("aria-label", readerToggle.textContent);
+    readerWidth.setAttribute("aria-label", ct("readerOutlineWidth"));
     workSettingsButton.textContent = ct("workSettings"); workSettingsButton.title = ct("workSettings"); workSettingsButton.setAttribute("aria-label", ct("workSettings"));
     for (const node of [annotationsButton, allAnnotationsButton]) { node.textContent = annotationLabel(); node.setAttribute("aria-label", annotationLabel()); }
     graphHost.setAttribute("aria-label", ct("canvas"));
@@ -1699,16 +2174,19 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     focusButton.textContent = ct("focusSelection"); focusButton.title = ct("focusSelectionHint"); focusButton.setAttribute("aria-label", ct("focusSelectionHint"));
     paintLegacyEdges();
     for (const [node, key] of [[fitButton, "fit"], [undo, "undo"], [redo, "redo"], [retry, "retry"], [proposalsButton, "proposals"], [tidyButton, "arrange"], [overviewClose, "close"], [layersClose, "close"], [proposalsClose, "close"], [proposalRefresh, "proposalRefresh"], [frontButton, "toFront"], [backButton, "toBack"], [cardButton, "cardStyle"], [groupButton, "group"], [ungroupButton, "ungroup"]] as const) { node.textContent = ct(key); node.title = ct(key); node.setAttribute("aria-label", ct(key)); }
+    alignButton.title = ct("alignLeftHint"); alignButton.setAttribute("aria-label", ct("alignLeftHint"));
+    groupButton.title = ct("groupHint"); groupButton.setAttribute("aria-label", ct("groupHint"));
     undo.title = `${ct("undo")} (Ctrl+Z)`;
     redo.title = `${ct("redo")} (Ctrl+Shift+Z / Ctrl+Y)`;
     for (const [node, key] of [[add, "addComponent"], [overviewButton, "overview"], [layersButton, "layers"], [handButton, "pan"], [zoomIn, "zoomIn"], [zoomOut, "zoomOut"]] as const) { node.title = ct(key); node.setAttribute("aria-label", ct(key)); }
     ideaButton.textContent = ct("ideaEdit"); ideaButton.setAttribute("aria-label", ct("ideaEdit"));
     paintIcons();
     if (overview.open) paintOverview(); if (layers.open) paintLayers(); paintProposals(); paintPan(); paintMode();
-    for (const closeButton of [readerClose, close, removedClose]) { closeButton.textContent = ct("close"); closeButton.setAttribute("aria-label", ct("close")); }
+    for (const closeButton of [readerClose, selectionReaderClose, close, removedClose]) { closeButton.textContent = ct("close"); closeButton.setAttribute("aria-label", ct("close")); }
+    if (readingKey) paintReaderOutline(true);
     actual.title = ct("actualSize"); actual.setAttribute("aria-label", ct("actualSize"));
     jump.setAttribute("aria-label", ct("openItem")); if (jump.options[0]) jump.options[0].textContent = ct("openItem");
-    for (const frame of frames.values()) { frame.openButton.textContent = ct("open"); frame.openButton.title = ct("open"); frame.openButton.setAttribute("aria-label", ct("open")); frame.native?.refreshLabels(); }
+    for (const frame of frames.values()) { frame.openButton.textContent = ct("open"); frame.openButton.title = ct("open"); frame.openButton.setAttribute("aria-label", ct("open")); frame.native?.refreshLabels(); paintReplySummary(frame); }
     emptyTitle.textContent = ct("emptyCanvas"); emptyHelp.textContent = ct("emptyHelp"); paintStatus(); paintDrafts(); paintRemovedButton(); paintProposals(); paintSelectionTools();
     if (removedDialog.open) paintRemovedList();
   }
@@ -1763,6 +2241,6 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       locateIntent = { kind: "object", id: object.id };
       reveal(object);
     },
-    destroy() { persistView(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistView); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); unsubscribeLocale(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
+    destroy() { persistView(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistView); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); selectionController.abort(); unsubscribeLocale(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); selectionReader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
   };
 }
