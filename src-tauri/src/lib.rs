@@ -7,11 +7,22 @@ mod completion_hook;
 mod completion_read;
 mod completions;
 mod completion_speech;
+mod state_path;
 
 /// Headless notification mode runs before Tauri, so completed tasks never launch the board.
 pub fn handle_completion_command() -> bool {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("--migrate-state-from") => {
+            let result = args.get(2).filter(|_| args.len() == 3)
+                .ok_or_else(|| "Usage: spellcast --migrate-state-from <database>".to_string())
+                .and_then(|source| state_path::import_default(std::path::Path::new(source)));
+            match result {
+                Ok(path) => println!("{}", path.display()),
+                Err(err) => { eprintln!("{err}"); std::process::exit(1); }
+            }
+            true
+        }
         Some("--codex-notify") => {
             if let (Some(root), Some(raw)) = (args.get(2), args.get(3)) {
                 completion_hook::notify(std::path::Path::new(root), raw);
@@ -393,7 +404,7 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(instance::plugin());
 
-    builder
+    let result = builder
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
@@ -407,15 +418,8 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             // Shared bridge state keeps board, feedback, and explicit memory in one transaction.
-            let data_path = match std::env::var_os("SPELLCAST_STATE_FILE") {
-                Some(path) => std::path::PathBuf::from(path),
-                None => app.path()
-                        .app_data_dir()
-                        .map_err(|err| {
-                            std::io::Error::other(format!("找不到 Spellcast 数据目录：{err}"))
-                        })?
-                        .join("spellcast.sqlite3"),
-            };
+            let data_path = state_path::resolve(|| app.path().app_data_dir().map_err(|e| e.to_string()))
+                .map_err(std::io::Error::other)?;
             let bridge = Arc::new(
                 Bridge::open(
                     Desktop {
@@ -490,6 +494,9 @@ pub fn run() {
             completions::set_ui_locale,
             close_bubbles
         ])
-        .run(tauri::generate_context!())
-        .expect("Spellcast failed to start");
+        .run(tauri::generate_context!());
+    if let Err(error) = result {
+        state_path::report_startup_error(&error.to_string());
+        std::process::exit(1);
+    }
 }

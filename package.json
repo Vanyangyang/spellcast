@@ -2,7 +2,7 @@
   "name": "spellcast",
   "private": true,
   "license": "AGPL-3.0-or-later",
-  "version": "0.4.10",
+  "version": "0.4.11",
   "type": "module",
   "scripts": {
     "start": "node scripts/start.mjs",
@@ -14,6 +14,8 @@
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:content-organization": "node scripts/check-content-organization.mjs",
     "check:content-organization-preview": "node scripts/check-content-organization-preview.mjs",
+    "check:bubble-flight": "node scripts/check-bubble-flight.mjs",
+    "check:completion-pointer": "node scripts/check-completion-pointer.mjs",
     "dev": "vite --host 127.0.0.1 --port 47193",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 47193",

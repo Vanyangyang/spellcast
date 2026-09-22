@@ -23,6 +23,7 @@ import { initialFocusKey, type LocateIntent } from "./canvas-nav";
 import { savedViewIsPlausible, viewShouldRecover, viewportIsUsable } from "./canvas-view";
 import { scaledPresentation } from "./canvas-scale";
 import { contentUsesWheel, wheelScale } from "./canvas-wheel";
+import { canvasTypography, onCanvasTypographyChange, setCanvasFontPercent } from "./canvas-typography";
 import "./canvas.css";
 
 /** object_id is the canonical canvas identity; reply/block/node ids stay for existing callers. */
@@ -241,6 +242,18 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   let jumpKey = "";
   let layoutMessage: "layoutSaving" | "layoutSaved" | "layoutFailed" | null = null;
   let readingKey: string | null = null;
+  type ReaderSession = { objectId: string; blockId: string | null; selectedIds: string[]; comparing: boolean; scrollTop: number; open: boolean; workspace: string; task: string };
+  const readerSessionKey = "spellcast.canvas-reader-session";
+  let savedReaderSession: ReaderSession | null = null;
+  try {
+    const value = JSON.parse(localStorage.getItem(readerSessionKey) ?? "null");
+    if (value && typeof value.objectId === "string" && typeof value.open === "boolean" &&
+      (value.blockId === null || typeof value.blockId === "string") && Array.isArray(value.selectedIds) &&
+      value.selectedIds.length <= 32 && value.selectedIds.every((id: unknown) => typeof id === "string") &&
+      typeof value.workspace === "string" && typeof value.task === "string" &&
+      Number.isFinite(value.scrollTop) && value.scrollTop >= 0) savedReaderSession = value as ReaderSession;
+  } catch { /* Reading still works when saved state is unavailable. */ }
+  let readerSessionRestored = false;
 
   /* ---------- identity mapping: object ids are canonical, legacy keys only resolve through the layout ---------- */
   const objectById = (id: string) => savedLayout.objects.find(object => object.id === id);
@@ -337,6 +350,10 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const closeReader = () => { rememberReaderPosition(); reader.close(); };
   const readerClose = button(ct("close"), closeReader);
   readerClose.classList.add("canvas-reader-close");
+  const readerTextSize = button("100%", () => setReadingTextPercent(100), ct("readerTextSizeHint"));
+  readerTextSize.classList.add("canvas-reader-text-size");
+  const readerFontSettings = button(ct("readerFontSettings"), () => document.dispatchEvent(new Event("spellcast-open-settings")));
+  readerFontSettings.classList.add("canvas-reader-font-settings");
   const readerToggle = button(ct("readerHideOutline"), () => {
     reader.classList.toggle("is-outline-collapsed");
     readerToggle.textContent = ct(reader.classList.contains("is-outline-collapsed") ? "readerShowOutline" : "readerHideOutline");
@@ -360,11 +377,33 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   let readerComparing = false;
   const readerPositions = new Map<string, number>();
   const readerLastBlock = new Map<string, string | null>();
+  let readerSaveTimer = 0, readerRestoreToken = 0, readerRestoringPosition = false;
+  function persistReaderSession(open = reader.open) {
+    if (!readingKey) return;
+    const frame = frames.get(readingKey); if (!frame) return;
+    const selectedIds = [...(blockSelections.get(readingKey) ?? [])].slice(0, 32);
+    const scrollTop = open && !readerRestoringPosition ? frame.content.scrollTop : readerPositions.get(readerPositionKey()) ?? frame.content.scrollTop;
+    readerPositions.set(readerPositionKey(), scrollTop);
+    const value: ReaderSession = { objectId: readingKey, blockId: readerBlockId, selectedIds,
+      comparing: readerComparing, scrollTop, open, workspace: scopeWorkspace, task: scopeTask };
+    try { localStorage.setItem(readerSessionKey, JSON.stringify(value)); } catch { /* Session persistence is optional. */ }
+  }
+  function queueReaderSession() {
+    window.clearTimeout(readerSaveTimer);
+    readerSaveTimer = window.setTimeout(() => persistReaderSession(), 120);
+  }
+  readerWorkspace.addEventListener("scroll", event => {
+    if (!readerRestoringPosition && event.target === readerWorkspace.querySelector(":scope > .canvas-frame-content")) queueReaderSession();
+  }, true);
+  const stopReaderRestore = () => { readerRestoreToken++; readerRestoringPosition = false; };
+  reader.addEventListener("wheel", stopReaderRestore, { passive: true });
+  reader.addEventListener("pointerdown", stopReaderRestore);
+  reader.addEventListener("keydown", stopReaderRestore);
   const readerBatch = element("div", "canvas-reader-batch");
   const readerCount = element("span"); readerCount.setAttribute("role", "status");
   const readerCompare = button(ct("readerCompare"), () => {
     rememberReaderPosition(); readerComparing = true; readerBlockId = null;
-    paintReaderSelection(); restoreReaderPosition();
+    paintReaderSelection(); restoreReaderPosition(); queueReaderSession();
   });
   readerCompare.classList.add("canvas-reader-compare");
   const readerCopy = button(ct("readerCopy"), () => { void copyReaderSelection(); });
@@ -372,16 +411,16 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     closeReader(); discussSelection();
   });
   readerDiscuss.classList.add("canvas-reader-discuss");
-  const readerClear = button(ct("clearSelection"), () => { if (readingKey) blockSelections.set(readingKey, new Set()); readerComparing = false; paintReaderSelection(); });
+  const readerClear = button(ct("clearSelection"), () => { if (readingKey) blockSelections.set(readingKey, new Set()); readerComparing = false; paintReaderSelection(); queueReaderSession(); });
   const readerPickAll = button(ct("selectAll"), () => {
     const frame = readingKey ? frames.get(readingKey) : undefined; if (!frame?.reply) return;
-    blockSelections.set(frame.object.id, new Set(frame.reply.blocks.slice(0, 32).map(block => block.id))); paintReaderSelection();
+    blockSelections.set(frame.object.id, new Set(frame.reply.blocks.slice(0, 32).map(block => block.id))); paintReaderSelection(); queueReaderSession();
     if (frame.reply.blocks.length > 32) handlers.onFocusNotice?.(ct("selectionLimit"));
   });
   readerBatch.append(readerCount, readerCompare, readerCopy, readerDiscuss, readerClear);
   readerOutline.append(readerOutlineTitle, readerAll, readerPickAll, readerWidth, readerAtoms, readerEdit);
   readerWorkspace.append(readerOutline);
-  readerHead.append(readerTitle, readerSource, readerToggle, readerClose);
+  readerHead.append(readerTitle, readerSource, readerToggle, readerTextSize, readerFontSettings, readerClose);
   reader.append(readerHead, readerBatch, readerWorkspace); document.body.append(reader);
   function readerPositionKey() {
     return JSON.stringify([readingKey, readerComparing ? [...(blockSelections.get(readingKey!) ?? [])].sort() : readerBlockId]);
@@ -393,8 +432,12 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   function restoreReaderPosition() {
     const key = readingKey, viewKey = readerPositionKey(), position = readerPositions.get(viewKey) ?? 0;
     const frame = key ? frames.get(key) : undefined;
+    readerRestoringPosition = true;
     if (frame) frame.content.scrollTop = position;
-    requestAnimationFrame(() => { if (readingKey === key && readerPositionKey() === viewKey && frame) frame.content.scrollTop = position; });
+    const token = ++readerRestoreToken;
+    const apply = () => { if (readerRestoreToken === token && readingKey === key && readerPositionKey() === viewKey && frame) frame.content.scrollTop = position; };
+    requestAnimationFrame(() => requestAnimationFrame(apply));
+    window.setTimeout(() => { apply(); if (readerRestoreToken === token) readerRestoringPosition = false; }, 240);
   }
   function paintReaderSelection() {
     const frame = readingKey ? frames.get(readingKey) : undefined;
@@ -458,7 +501,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     }
     paintReaderSelection();
     if (fromUser && blockId && frame?.reply) frame.editor?.selectBlock(frame.reply.id, blockId);
-    if (fromUser) restoreReaderPosition();
+    if (fromUser) { restoreReaderPosition(); queueReaderSession(); }
   }
   function paintReaderOutline(force = false) {
     const frame = readingKey ? frames.get(readingKey) : undefined;
@@ -480,7 +523,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
           const selected = blockSelections.get(frame.object.id) ?? new Set<string>();
           if (pick.checked && selected.size >= 32) { pick.checked = false; handlers.onFocusNotice?.(ct("selectionLimit")); return; }
           if (pick.checked) selected.add(block.id); else selected.delete(block.id);
-          blockSelections.set(frame.object.id, selected); paintReaderSelection();
+          blockSelections.set(frame.object.id, selected); paintReaderSelection(); queueReaderSession();
         });
         const atom = button(String(index + 1) + ". " + title, event => {
           if (event.shiftKey || event.ctrlKey || event.metaKey) { pick.click(); return; }
@@ -495,6 +538,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
   reader.addEventListener("cancel", rememberReaderPosition);
   reader.addEventListener("close", () => {
+    window.clearTimeout(readerSaveTimer); persistReaderSession(false);
     const content = readerWorkspace.querySelector<HTMLElement>(":scope > .canvas-frame-content");
     const frame = readingKey ? frames.get(readingKey) : null;
     if (content && frame) { content.inert = true; frame.native?.setActive(false); frame.root.insertBefore(content, frame.root.querySelector(".canvas-card-drag")); } else content?.remove();
@@ -510,10 +554,10 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     showReaderBlock(blocks[Math.max(0, Math.min(blocks.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)))].id);
   });
   /** A full-window work area keeps one source object while exposing its blocks as navigable editing units. */
-  function openReader(key: string) {
+  function openReader(key: string, restored = false) {
     const frame = frames.get(key); if (!frame || reader.open) return;
     const picked = blockSelections.get(key) ? new Set(blockSelections.get(key)) : undefined;
-    deactivate(false); choose(key, false, true); readingKey = key; readerTitle.textContent = frame.title.textContent;
+    deactivate(false); choose(key, false, !restored); readingKey = key; readerTitle.textContent = frame.title.textContent;
     if (picked?.size) blockSelections.set(key, picked);
     readerSource.textContent = frame.source.textContent;
     frame.content.inert = false; frame.native?.setActive(true); readerWorkspace.append(frame.content);
@@ -521,7 +565,28 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (readerBlockId && !picked?.size) blockSelections.set(key, new Set([readerBlockId]));
     readerToggle.hidden = !frame.reply || frame.reply.blocks.length < 2;
     readerBatch.hidden = !frame.reply;
-    paintReaderOutline(); reader.showModal(); restoreReaderPosition();
+    paintReaderOutline(); reader.showModal(); restoreReaderPosition(); if (!restored) queueReaderSession();
+  }
+  function restoreSavedReaderSession() {
+    if (readerSessionRestored || !initialView || !savedReaderSession) return;
+    const saved = savedReaderSession;
+    if (saved.workspace !== scopeWorkspace || saved.task !== scopeTask) { readerSessionRestored = true; return; }
+    const frame = frames.get(saved.objectId);
+    if (!frame || !visibleFrames.has(saved.objectId)) return;
+    readerSessionRestored = true;
+    const valid = new Set(frame.reply?.blocks.map(block => block.id) ?? []);
+    const selected = saved.selectedIds.filter(id => valid.has(id));
+    if (selected.length) blockSelections.set(saved.objectId, new Set(selected));
+    const blockId = saved.blockId && valid.has(saved.blockId) ? saved.blockId : null;
+    readerLastBlock.set(saved.objectId, blockId);
+    const comparing = saved.comparing && selected.length >= 2;
+    readerPositions.set(JSON.stringify([saved.objectId, comparing ? [...selected].sort() : blockId]), saved.scrollTop);
+    if (!saved.open) return;
+    openReader(saved.objectId, true);
+    readerComparing = comparing;
+    readerBlockId = comparing ? null : blockId;
+    paintReaderSelection(); restoreReaderPosition();
+    window.setTimeout(() => { if (reader.open && readingKey === saved.objectId) queueReaderSession(); }, 300);
   }
   type SelectionDocument = { anchor: CanvasAnchor; title: string; source: string; body: string; image?: { src: string; alt: string }; draft: boolean };
   function selectionDocuments(): SelectionDocument[] {
@@ -563,9 +628,43 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const selectionReaderDiscuss = button(ct("readerDiscuss"), () => { selectionReader.close(); discussSelection(); });
   const selectionReaderCopy = button(ct("readerCopy"), () => { void copySelection(); });
   const selectionReaderClose = button(ct("close"), () => selectionReader.close());
+  const selectionTextSize = button("100%", () => setReadingTextPercent(100), ct("readerTextSizeHint"));
+  selectionTextSize.classList.add("canvas-reader-text-size");
+  const selectionFontSettings = button(ct("readerFontSettings"), () => document.dispatchEvent(new Event("spellcast-open-settings")));
+  selectionFontSettings.classList.add("canvas-reader-font-settings");
   const selectionReaderGrid = element("div", "canvas-selection-reader-grid");
-  selectionReaderHead.append(selectionReaderTitle, selectionReaderDiscuss, selectionReaderCopy, selectionReaderClose);
+  selectionReaderHead.append(selectionReaderTitle, selectionReaderDiscuss, selectionReaderCopy, selectionTextSize, selectionFontSettings, selectionReaderClose);
   selectionReader.append(selectionReaderHead, selectionReaderGrid); document.body.append(selectionReader);
+  let readingTypography = canvasTypography(), readingWheelDelta = 0;
+  function paintReadingTypography() {
+    const value = `${readingTypography.body}%`, hint = ct("readerTextSizeHint");
+    for (const dialog of [reader, selectionReader]) {
+      dialog.style.setProperty("--canvas-reading-text-scale", String(readingTypography.body / 100));
+      dialog.style.setProperty("--canvas-title-font-scale", String(readingTypography.title / 100));
+      dialog.style.setProperty("--canvas-interface-font-scale", String(readingTypography.interface / 100));
+    }
+    for (const control of [readerTextSize, selectionTextSize]) {
+      control.textContent = value; control.title = hint; control.setAttribute("aria-label", `${ct("readerTextSize")} ${value}. ${hint}`);
+    }
+  }
+  function setReadingTextPercent(value: number) {
+    readingWheelDelta = 0;
+    setCanvasFontPercent("body", value);
+  }
+  function readingTextWheel(event: WheelEvent) {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || !event.deltaY) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest(".rb-graph-canvas, select, input[type=range], input[type=number], iframe")) return;
+    event.preventDefault(); event.stopPropagation();
+    readingWheelDelta += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1);
+    if (Math.abs(readingWheelDelta) < 80) return;
+    const direction = Math.sign(readingWheelDelta); readingWheelDelta = 0;
+    setReadingTextPercent(readingTypography.body - direction * 10);
+  }
+  reader.addEventListener("wheel", readingTextWheel, { capture: true, passive: false });
+  selectionReader.addEventListener("wheel", readingTextWheel, { capture: true, passive: false });
+  const unsubscribeTypography = onCanvasTypographyChange(value => { readingTypography = value; paintReadingTypography(); });
+  paintReadingTypography();
   function openSelectionReader() {
     const documents = selectionDocuments(); if (documents.length < 2) return;
     selectionReaderTitle.textContent = ct("selectionReaderTitle", { n: documents.length });
@@ -668,6 +767,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       choose(null);
     }
     viewReady = true; rememberView();
+    requestAnimationFrame(restoreSavedReaderSession);
     return true;
   }
   function tidy() {
@@ -1239,7 +1339,9 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   function middleUp() { middle = false; paintPan(); }
   window.addEventListener("keydown", keyDown); window.addEventListener("keyup", keyUp); window.addEventListener("blur", releasePan);
   graphHost.addEventListener("mousedown", middleDown, true); window.addEventListener("mouseup", middleUp, true);
-  window.addEventListener("pagehide", persistView);
+  const persistWorkspaceSession = () => { persistView(); persistReaderSession(); };
+  window.addEventListener("pagehide", persistWorkspaceSession);
+  window.addEventListener("beforeunload", persistWorkspaceSession);
   function replayHistory(action: "undo" | "redo") { if (!pointerLayout) history[action]({ historyReplay: true }); }
   const undo = button(ct("undo"), () => replayHistory("undo"));
   const redo = button(ct("redo"), () => replayHistory("redo"));
@@ -1478,7 +1580,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     }
     for (const edge of graph.getEdges()) edge.setVisible(visibleFrames.has(edge.getSourceCellId()) && visibleFrames.has(edge.getTargetCellId()), { remote: true });
     if (active && !visibleFrames.has(active)) deactivate(false);
-    if (readingKey && !visibleFrames.has(readingKey)) reader.close();
+    if (readingKey && !visibleFrames.has(readingKey)) { rememberReaderPosition(); reader.close(); }
     if (selectedUnits.size && !selectedObjectIds().length) choose(null);
     empty.hidden = visibleFrames.size > 0;
     scopeBar.setAttribute("aria-label", ct("workspaceScope"));
@@ -2080,7 +2182,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       jump.replaceChildren(first, ...shown.map(entry => { const option = element("option", "", titleFor(entry.object, entry.reply)); option.value = entry.object.id; return option; }));
     }
     for (const [key, frame] of frames) if (!keys.has(key)) {
-      if (readingKey === key) reader.close();
+      if (readingKey === key) { rememberReaderPosition(); reader.close(); }
       if (active === key) deactivate(false);
       frame.editor?.destroy(); frame.native?.destroy();
       frame.root.remove();
@@ -2148,6 +2250,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (shown.length && !initialView && host.clientWidth > 0) {
       requestAnimationFrame(() => { if (!destroyed) applyInitialView(); });
     }
+    if (initialView && !readerSessionRestored) requestAnimationFrame(restoreSavedReaderSession);
     paintData(); paintStatus();
   }
   /** Existing callers still address content by reply/node id; the layout mapping turns that into an object. */
@@ -2158,11 +2261,12 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
   function labels() {
     applyScope();
-    for (const [node, key] of [[multiButton, "multiSelect"], [clearButton, "clearSelection"], [removeButton, "removeSelected"], [alignButton, "alignLeft"], [rowButton, "arrangeRow"], [selectionDiscussButton, "readerDiscuss"], [selectionCompareButton, "readerCompare"], [selectionCopyButton, "readerCopy"], [selectionReaderDiscuss, "readerDiscuss"], [selectionReaderCopy, "readerCopy"], [readerPickAll, "selectAll"], [readerCompare, "readerCompare"], [readerCopy, "readerCopy"], [readerDiscuss, "readerDiscuss"], [readerClear, "clearSelection"]] as const) {
+    for (const [node, key] of [[multiButton, "multiSelect"], [clearButton, "clearSelection"], [removeButton, "removeSelected"], [alignButton, "alignLeft"], [rowButton, "arrangeRow"], [selectionDiscussButton, "readerDiscuss"], [selectionCompareButton, "readerCompare"], [selectionCopyButton, "readerCopy"], [selectionReaderDiscuss, "readerDiscuss"], [selectionReaderCopy, "readerCopy"], [readerFontSettings, "readerFontSettings"], [selectionFontSettings, "readerFontSettings"], [readerPickAll, "selectAll"], [readerCompare, "readerCompare"], [readerCopy, "readerCopy"], [readerDiscuss, "readerDiscuss"], [readerClear, "clearSelection"]] as const) {
       node.textContent = ct(key); node.title = ct(key); node.setAttribute("aria-label", ct(key));
     }
     selectionMoreSummary.textContent = ct("selectionMore"); selectionMoreSummary.setAttribute("aria-label", ct("selectionMore"));
     if (selectionReader.open) selectionReaderTitle.textContent = ct("selectionReaderTitle", { n: selectionReaderGrid.children.length });
+    paintReadingTypography();
     readerToggle.textContent = ct(reader.classList.contains("is-outline-collapsed") ? "readerShowOutline" : "readerHideOutline");
     readerToggle.setAttribute("aria-label", readerToggle.textContent);
     readerWidth.setAttribute("aria-label", ct("readerOutlineWidth"));
@@ -2241,6 +2345,6 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       locateIntent = { kind: "object", id: object.id };
       reveal(object);
     },
-    destroy() { persistView(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistView); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); selectionController.abort(); unsubscribeLocale(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); selectionReader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
+    destroy() { persistWorkspaceSession(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.clearTimeout(readerSaveTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistWorkspaceSession); window.removeEventListener("beforeunload", persistWorkspaceSession); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); selectionController.abort(); unsubscribeLocale(); unsubscribeTypography(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); selectionReader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
   };
 }

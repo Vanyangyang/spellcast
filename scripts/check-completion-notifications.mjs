@@ -71,6 +71,28 @@ async function focus(page) {
   await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('plugin:window|set_focus', { label: 'completions' }));
   await until(() => page.evaluate(() => document.hasFocus()), 'Native test window did not gain focus');
 }
+async function routeTestCursor(page, x, y) {
+  await page.evaluate(async ({ x, y }) => {
+    const internals = window.__TAURI_INTERNALS__;
+    if (!window.__spellcastTestInvoke) {
+      window.__spellcastTestInvoke = internals.invoke.bind(internals);
+      internals.invoke = (command, args, options) => {
+        if (command === 'plugin:window|cursor_position' && window.__spellcastTestCursor) {
+          return Promise.resolve(window.__spellcastTestCursor);
+        }
+        return window.__spellcastTestInvoke(command, args, options);
+      };
+    }
+    const [position, scale] = await Promise.all([
+      window.__spellcastTestInvoke('plugin:window|inner_position', { label: 'completions' }),
+      window.__spellcastTestInvoke('plugin:window|scale_factor', { label: 'completions' }),
+    ]);
+    window.__spellcastTestCursor = {
+      x: Math.round(position.x + x * scale),
+      y: Math.round(position.y + y * scale),
+    };
+  }, { x, y });
+}
 async function stop() {
   if (browser) {
     for (const page of browser.contexts().flatMap(context => context.pages()).sort((a, b) => Number(a.url().endsWith('/')) - Number(b.url().endsWith('/')))) {
@@ -103,6 +125,14 @@ try {
   report.style = style;
   report.alwaysOnTop = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('plugin:window|is_always_on_top', { label: 'completions' }));
   assert.equal(report.alwaysOnTop, true);
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  await routeTestCursor(page, 2, viewport.height - 2);
+  await until(() => page.locator('html').getAttribute('data-cursor-routing').then(value => value === 'passthrough'), 'Transparent completion area did not become click-through');
+  const cardBox = await page.locator('.completion-bubble').boundingBox();
+  assert(cardBox);
+  await routeTestCursor(page, cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2);
+  await until(() => page.locator('html').getAttribute('data-cursor-routing').then(value => value === 'capture'), 'Completion card did not restore pointer capture');
+  report.transparentAreaPassesClicks = true;
   await focus(page);
   assert.equal(await page.locator('#completion-voice').getAttribute('aria-pressed'), 'true');
   await page.locator('#completion-voice').click();
@@ -112,6 +142,10 @@ try {
   assert.match(await page.locator('.hint').innerText(), /双击回到 Codex ↗|Double-click to return to Codex ↗/);
   await sleep(17000); assert.equal(await page.locator('.completion-bubble').count(), 1);
   report.survivesOrdinaryBubbleLifetime = true;
+  const openBox = await page.locator('.completion-bubble').boundingBox();
+  assert(openBox);
+  await routeTestCursor(page, openBox.x + openBox.width / 2, openBox.y + openBox.height / 2);
+  await until(() => page.locator('html').getAttribute('data-cursor-routing').then(value => value === 'capture'), 'Completion card was not ready for double click');
   await page.locator('.task').dblclick();
   await until(() => page.isClosed(), 'Double click did not dismiss the opened completion');
   report.doubleClickOpensAndDismisses = true;

@@ -122,6 +122,19 @@ pub struct Status {
     pub observer_policy_revision: u64,
 }
 
+fn default_ui_locale() -> String {
+    "zh-CN".into()
+}
+
+fn normalize_ui_locale(raw: &str) -> &'static str {
+    let locale = raw.trim().to_ascii_lowercase();
+    if locale.is_empty() || locale.starts_with("zh") {
+        "zh-CN"
+    } else {
+        "en"
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BubbleOutcome {
     pub bubble: ThrownBubble,
@@ -162,6 +175,9 @@ struct PersistedState {
     /// Bumps only when the aside switch or observation-relevant pause actually changes.
     #[serde(default)]
     observer_policy_revision: u64,
+    /// User-selected product language. Missing in old databases follows the Chinese default.
+    #[serde(default = "default_ui_locale")]
+    ui_locale: String,
 }
 
 #[derive(Default)]
@@ -287,9 +303,10 @@ impl Bridge {
     fn from_parts(
         surface: impl Surface,
         port: u16,
-        state: PersistedState,
+        mut state: PersistedState,
         store: Option<Store>,
     ) -> Self {
+        state.ui_locale = normalize_ui_locale(&state.ui_locale).into();
         Self {
             state: Mutex::new(state),
             store: store.map(Mutex::new),
@@ -450,6 +467,27 @@ impl Bridge {
         Ok(self.observer_status())
     }
 
+    pub fn set_ui_locale(&self, locale: &str) -> Result<String, SpellcastError> {
+        let locale = normalize_ui_locale(locale);
+        let mut changed = false;
+        {
+            let mut observers = self.observers.lock().unwrap();
+            self.update(|state| {
+                changed = normalize_ui_locale(&state.ui_locale) != locale;
+                state.ui_locale = locale.into();
+                if changed {
+                    state.observer_policy_revision =
+                        state.observer_policy_revision.saturating_add(1);
+                }
+                Ok(())
+            })?;
+            if changed {
+                observers.invalidate_all();
+            }
+        }
+        Ok(locale.into())
+    }
+
     pub fn observer_status(&self) -> observer::ObserverStatus {
         self.observer_gate()
     }
@@ -464,6 +502,7 @@ impl Bridge {
             state.paused,
             board_focused,
             state.observer_policy_revision,
+            normalize_ui_locale(&state.ui_locale).into(),
         )
     }
 
@@ -1711,10 +1750,12 @@ mod tests {
         let mut obj = value.as_object().unwrap().clone();
         obj.remove("observer_enabled");
         obj.remove("observer_policy_revision");
+        obj.remove("ui_locale");
         let restored: PersistedState =
             serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
         assert!(!restored.observer_enabled);
         assert_eq!(restored.observer_policy_revision, 0);
+        assert_eq!(restored.ui_locale, "zh-CN");
         assert!(!restored.paused);
         assert!(value.get("bubble_sources").is_none());
         assert!(value.get("bubble_captures").is_none());

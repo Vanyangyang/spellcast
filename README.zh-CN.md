@@ -50,7 +50,7 @@ Spellcast 是给 coding agent 用的本地桌面应用。Agent 继续干活。�
 
 ## 体验版到哪了
 
-- 已经发出去的包是 [0.4.10](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.10)，Windows x64 安装包。说明在 [0.4.10](docs/releases/0.4.10.md)。
+- 已经发出去的包是 [0.4.11](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.11)，桌面安装包由 GitHub Actions 构建。说明在 [0.4.11](docs/releases/0.4.11.md)。
 - 这份预览里有可编辑的画布 Idea、按工作区和任务整理、回发原 Codex Desktop 任务、Codex 一键接入（MCP + Hooks + Skill）。Grok Build 接入还没做。设置里按钮还在，但点不了。背景材料：[运行验收](docs/reviews/2026-09-14-workbench-runtime-acceptance.md)、[回复面板](docs/reviews/2026-09-15-replies-inbox.md)、[仅 Codex 接入](docs/reviews/2026-09-15-codex-only-entry.md)。
 - 版式、文案和 Skill 都还在改。碰到问题就提 issue。下一步想改什么写在[这份提示词](docs/next-improvement-prompt.md)里。
 
@@ -98,6 +98,8 @@ Spellcast 是本地桌面应用，走 MCP。自己不跑模型，也不要模型
 用的时候要让 Spellcast 一直开着。本地 MCP 是 `http://127.0.0.1:47194/mcp`。接入界面目前只支持 Codex。设置里其他宿主还显示，但装不上。macOS 和 Linux 的 CI 包没测过。
 
 ## 本地开发
+
+Windows 画布固定保存在 `%USERPROFILE%\.spellcast\spellcast.sqlite3`，不同启动入口共用同一份数据。参见[存储与旧数据迁移](docs/state-storage.md)。
 
 ```sh
 git clone https://github.com/Vanyangyang/spellcast.git

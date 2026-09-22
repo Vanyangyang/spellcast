@@ -254,6 +254,7 @@ async fn health(State(b): State<Shared>) -> Json<Value> {
         "observer_policy_revision": observer.policy_revision,
         "observer_allowed": observer.allowed,
         "observer_reason": observer.reason,
+        "ui_locale": observer.locale,
     }))
 }
 
@@ -265,6 +266,7 @@ fn observer_payload(b: &Bridge) -> Value {
         "allowed": observer.allowed,
         "reason": observer.reason,
         "policy_revision": observer.policy_revision,
+        "locale": observer.locale,
     })
 }
 
@@ -1184,6 +1186,7 @@ mod tests {
         assert_eq!(body["allowed"], false);
         assert_eq!(body["reason"], "disabled");
         assert_eq!(body["policy_revision"], 0);
+        assert_eq!(body["locale"], "zh-CN");
 
         let health = app
             .clone()
@@ -1195,6 +1198,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(health_body["observer_enabled"], false);
+        assert_eq!(health_body["ui_locale"], "zh-CN");
 
         let bad = app
             .clone()
@@ -1227,6 +1231,7 @@ mod tests {
         let on_body: Value =
             serde_json::from_slice(&on.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(on_body["enabled"], true);
+        assert_eq!(on_body["locale"], "zh-CN");
         assert!(on_body["policy_revision"].as_u64().unwrap() > 0);
 
         let listed = rpc(&app, 1, "tools/list", json!({})).await;
@@ -1247,6 +1252,11 @@ mod tests {
         assert_eq!(
             called["result"]["structuredContent"]["enabled"],
             true,
+            "{called}"
+        );
+        assert_eq!(
+            called["result"]["structuredContent"]["locale"],
+            "zh-CN",
             "{called}"
         );
     }

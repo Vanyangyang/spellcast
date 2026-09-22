@@ -188,6 +188,14 @@
           <button type="button" id="settings-close" class="ghost" data-i18n="settings.close"></button>
         </header>
 
+        <div class="settings-tabs" role="tablist" data-i18n-aria="settings.sections">
+          <button type="button" role="tab" id="settings-tab-connection" aria-controls="settings-panel-connection" aria-selected="true" data-settings-tab="connection" data-i18n="settings.tabConnection"></button>
+          <button type="button" role="tab" id="settings-tab-appearance" aria-controls="settings-panel-appearance" aria-selected="false" tabindex="-1" data-settings-tab="appearance" data-i18n="settings.tabAppearance"></button>
+          <button type="button" role="tab" id="settings-tab-shortcuts" aria-controls="settings-panel-shortcuts" aria-selected="false" tabindex="-1" data-settings-tab="shortcuts" data-i18n="settings.tabShortcuts"></button>
+        </div>
+
+        <div class="settings-panels">
+        <section class="settings-panel" id="settings-panel-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" tabindex="0" hidden>
         <label class="theme-setting" for="theme-preference">
           <span data-i18n="theme.label"></span>
           <select id="theme-preference" data-theme-select>
@@ -196,6 +204,133 @@
             <option value="system" data-i18n="theme.system"></option>
           </select>
         </label>
+
+        <section class="settings-typography" aria-labelledby="settings-typography-title">
+          <h3 id="settings-typography-title" data-i18n="settings.fontTitle"></h3>
+          <p class="hint" data-i18n="settings.fontHelp"></p>
+          <div class="settings-font-controls">
+            <div class="settings-font-control">
+              <label for="settings-font-body" data-i18n="settings.fontBody"></label>
+              <input id="settings-font-body" type="range" min="80" max="300" step="10" data-canvas-font="body" />
+              <output for="settings-font-body">100%</output>
+            </div>
+            <div class="settings-font-control">
+              <label for="settings-font-title" data-i18n="settings.fontHeading"></label>
+              <input id="settings-font-title" type="range" min="80" max="200" step="10" data-canvas-font="title" />
+              <output for="settings-font-title">100%</output>
+            </div>
+            <div class="settings-font-control">
+              <label for="settings-font-interface" data-i18n="settings.fontInterface"></label>
+              <input id="settings-font-interface" type="range" min="80" max="200" step="10" data-canvas-font="interface" />
+              <output for="settings-font-interface">100%</output>
+            </div>
+          </div>
+          <div class="settings-font-preview" aria-label="" data-i18n-aria="settings.fontPreviewLabel">
+            <strong data-i18n="settings.fontPreviewHeading"></strong>
+            <p data-i18n="settings.fontPreviewBody"></p>
+            <small data-i18n="settings.fontPreviewInterface"></small>
+          </div>
+          <button type="button" id="settings-font-reset" class="ghost" data-i18n="settings.fontReset"></button>
+        </section>
+        </section>
+
+        <section class="settings-panel" id="settings-panel-shortcuts" role="tabpanel" aria-labelledby="settings-tab-shortcuts" tabindex="0" hidden>
+        <section class="settings-shortcuts" aria-labelledby="settings-shortcuts-title">
+          <h3 id="settings-shortcuts-title" data-i18n="settings.shortcuts.title"></h3>
+          <div class="settings-shortcuts-content">
+            <p class="hint" data-i18n="settings.shortcuts.intro"></p>
+            <p class="hint" data-i18n="settings.shortcuts.platform"></p>
+            <section aria-labelledby="settings-shortcuts-canvas">
+              <h3 id="settings-shortcuts-canvas" data-i18n="settings.shortcuts.canvas"></h3>
+              <p class="hint" data-i18n="settings.shortcuts.canvasHint"></p>
+              <dl>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.panTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd><span data-i18n="settings.shortcuts.space"></span></kbd> + <span data-i18n="settings.shortcuts.drag"></span></div><p data-i18n="settings.shortcuts.panHelp"></p></dd>
+                </div>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.zoomTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd><span data-i18n="settings.shortcuts.wheel"></span></kbd></div><p data-i18n="settings.shortcuts.zoomHelp"></p></dd>
+                </div>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.selectTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Shift</kbd> + <span data-i18n="settings.shortcuts.click"></span> / <span data-i18n="settings.shortcuts.drag"></span></div><p data-i18n="settings.shortcuts.selectHelp"></p></dd>
+                </div>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.undoTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Z</kbd></div><p data-i18n="settings.shortcuts.undoHelp"></p></dd>
+                </div>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.redoTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd></div><p data-i18n="settings.shortcuts.redoHelp"></p></dd>
+                </div>
+              </dl>
+            </section>
+            <section aria-labelledby="settings-shortcuts-reading">
+              <h3 id="settings-shortcuts-reading" data-i18n="settings.shortcuts.reading"></h3>
+              <dl>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.fontTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Ctrl</kbd> + <span data-i18n="settings.shortcuts.wheel"></span></div><p data-i18n="settings.shortcuts.fontHelp"></p></dd>
+                </div>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.switchTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Alt</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd></div><p data-i18n="settings.shortcuts.switchHelp"></p></dd>
+                </div>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.saveTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></div><p data-i18n="settings.shortcuts.saveHelp"></p></dd>
+                </div>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.backTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Esc</kbd></div><p data-i18n="settings.shortcuts.backHelp"></p></dd>
+                </div>
+              </dl>
+            </section>
+            <section aria-labelledby="settings-shortcuts-message">
+              <h3 id="settings-shortcuts-message" data-i18n="settings.shortcuts.message"></h3>
+              <dl>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.sendTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Enter</kbd></div><p data-i18n="settings.shortcuts.sendHelp"></p></dd>
+                </div>
+                <div class="settings-shortcut">
+                  <dt data-i18n="settings.shortcuts.newlineTitle"></dt>
+                  <dd><div class="settings-shortcut-keys"><kbd>Shift</kbd> + <kbd>Enter</kbd></div><p data-i18n="settings.shortcuts.newlineHelp"></p></dd>
+                </div>
+              </dl>
+            </section>
+          </div>
+        </section>
+        </section>
+
+        <section class="settings-panel" id="settings-panel-connection" role="tabpanel" aria-labelledby="settings-tab-connection" tabindex="0">
+        <section class="settings-observer" aria-labelledby="settings-observer-title">
+          <div class="setup-card-heading setup-observer-head">
+            <div class="setup-observer-title">
+              <h3 id="settings-observer-title" data-i18n="observer.title"></h3>
+              <span class="setup-required" data-i18n="setup.optional"></span>
+            </div>
+            <label class="observer-switch" for="settings-observer-enabled">
+              <span class="observer-switch-title" data-i18n="observer.enable"></span>
+              <span class="observer-switch-side">
+                <input id="settings-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
+                <span class="observer-switch-track" aria-hidden="true"></span>
+                <span class="observer-switch-state">
+                  <span class="observer-state-on" data-i18n="observer.on"></span>
+                  <span class="observer-state-off" data-i18n="observer.off"></span>
+                </span>
+              </span>
+            </label>
+          </div>
+          <p class="settings-body" data-i18n="observer.lead"></p>
+          <ul class="observer-points">
+            <li data-i18n="observer.onMeans"></li>
+            <li data-i18n="observer.offMeans"></li>
+          </ul>
+          <p class="settings-body" data-i18n="observer.body"></p>
+          <p id="settings-observer-error" class="hint has-warning" role="alert" hidden></p>
+        </section>
 
         <section class="setup-card" aria-labelledby="settings-connection-title">
           <div class="setup-card-heading">
@@ -216,6 +351,8 @@
             </div>
             <p class="hint" data-i18n="setup.clientsHint" data-setup-clients-hint></p>
           </div>
+          <details class="settings-component-details">
+          <summary data-i18n="settings.connectionChecks"></summary>
           <ul class="setup-components">
             <li>
               <div>
@@ -248,6 +385,7 @@
               <span data-setup-component="mcp" class="setup-component-status">—</span>
             </li>
           </ul>
+          </details>
           <div class="setup-summary" aria-live="polite" aria-atomic="true">
             <p id="settings-setup-status" class="setup-status"></p>
             <p id="settings-setup-hint" class="hint"></p>
@@ -256,33 +394,6 @@
             <button type="button" id="settings-complete-setup" class="primary" data-i18n="setup.install"></button>
             <button type="button" data-setup-refresh class="ghost" data-i18n="setup.check"></button>
           </div>
-        </section>
-
-        <section class="settings-observer" aria-labelledby="settings-observer-title">
-          <div class="setup-card-heading setup-observer-head">
-            <div class="setup-observer-title">
-              <h3 id="settings-observer-title" data-i18n="observer.title"></h3>
-              <span class="setup-required" data-i18n="setup.optional"></span>
-            </div>
-            <label class="observer-switch" for="settings-observer-enabled">
-              <span class="observer-switch-title" data-i18n="observer.enable"></span>
-              <span class="observer-switch-side">
-                <input id="settings-observer-enabled" type="checkbox" role="switch" data-observer-toggle />
-                <span class="observer-switch-track" aria-hidden="true"></span>
-                <span class="observer-switch-state">
-                  <span class="observer-state-on" data-i18n="observer.on"></span>
-                  <span class="observer-state-off" data-i18n="observer.off"></span>
-                </span>
-              </span>
-            </label>
-          </div>
-          <p class="settings-body" data-i18n="observer.lead"></p>
-          <ul class="observer-points">
-            <li data-i18n="observer.onMeans"></li>
-            <li data-i18n="observer.offMeans"></li>
-          </ul>
-          <p class="settings-body" data-i18n="observer.body"></p>
-          <p id="settings-observer-error" class="hint has-warning" role="alert" hidden></p>
         </section>
 
         <details class="settings-connection-details">
@@ -315,6 +426,8 @@
         </details>
           </div>
         </details>
+        </section>
+        </div>
       </section>
     </dialog>
 

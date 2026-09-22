@@ -59,7 +59,7 @@ try {
     };
     let canvas;
     window.fixtureDiscussCount = 0;
-    canvas = mountCanvas(document.getElementById("host"), {
+    const handlers = {
       onSelect() {},
       onDiscussSelection() { window.fixtureDiscussCount++; },
       onNodePatch: async () => { throw Error("Unexpected node patch"); },
@@ -88,10 +88,21 @@ try {
         queueMicrotask(() => canvas.update(snapshot));
         return next;
       },
-    });
+    };
+    canvas = mountCanvas(document.getElementById("host"), handlers);
     window.fixtureErrors = [];
     canvas.update(snapshot);
-    window.fixture = { canvas, state: () => snapshot, removeBlock: id => {
+    window.fixture = { canvas, state: () => snapshot, remount: () => {
+      canvas.destroy(); canvas = mountCanvas(document.getElementById("host"), handlers);
+      canvas.update(snapshot); window.fixture.canvas = canvas;
+    }, setGraph: () => {
+      const nodes = Array.from({ length: 9 }, (_, i) => ({ id: `node-${i}`, title: `Graph step ${i + 1}`, detail: `Description for step ${i + 1}` }));
+      const graph = { id: "graph", type: "graph", title: "Runtime chain", nodes,
+        edges: nodes.slice(1).map((node, i) => ({ id: `edge-${i}`, from: nodes[i].id, to: node.id, label: `Transition ${i + 1}` })) };
+      snapshot = { ...snapshot, replies: [{ ...snapshot.replies[0], revision: snapshot.replies[0].revision + 1,
+        blocks: snapshot.replies[0].blocks.map(block => block.id === "graph" ? graph : block) }] };
+      canvas.update(snapshot);
+    }, removeBlock: id => {
       snapshot = { ...snapshot, replies: [{ ...snapshot.replies[0], revision: snapshot.replies[0].revision + 1, blocks: snapshot.replies[0].blocks.filter(block => block.id !== id) }] };
       canvas.update(snapshot);
     } };
@@ -118,9 +129,57 @@ try {
   await reader.locator('.canvas-reader-outline > button').first().click();
   const scroll = await readingPane.evaluate(node => ({ height: node.clientHeight, content: node.scrollHeight }));
   assert(scroll.content > scroll.height, "Long atom compositions must remain scrollable.");
+  const readingText = reader.locator('.rb-block[data-block-id="first"] .rb-text p').first();
+  const initialFont = await readingText.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+  const heading = reader.locator('.rb-block[data-block-id="first"] .rb-block-title');
+  const outlineButton = reader.locator('.canvas-reader-outline > button').first();
+  const initialHeading = await heading.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+  const initialOutline = await outlineButton.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+  await page.evaluate(async () => {
+    const typography = await import('/src/canvas-typography.ts');
+    typography.setCanvasFontPercent('title', 140);
+    typography.setCanvasFontPercent('interface', 130);
+  });
+  const configuredHeading = await heading.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+  const configuredOutline = await outlineButton.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+  assert(configuredHeading > initialHeading, 'Heading size must have its own setting.');
+  assert(configuredOutline > initialOutline, 'Outline and action size must have its own setting.');
+  assert.equal(await readingText.evaluate(node => parseFloat(getComputedStyle(node).fontSize)), initialFont, 'Changing heading and interface sizes must leave body text alone.');
+  await page.evaluate(() => { window.fixtureSettingsRequests = 0; document.addEventListener('spellcast-open-settings', () => window.fixtureSettingsRequests++); });
+  await reader.locator('.canvas-reader-font-settings').click();
+  assert.equal(await page.evaluate(() => window.fixtureSettingsRequests), 1, 'The reader must expose the Settings shortcut.');
+  await readingText.hover();
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -120);
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => document.querySelector('.canvas-reader-text-size')?.textContent === '110%');
+  assert((await readingText.evaluate(node => parseFloat(getComputedStyle(node).fontSize))) > initialFont, 'Ctrl+wheel in the reader must enlarge readable text.');
+  assert.equal(await heading.evaluate(node => parseFloat(getComputedStyle(node).fontSize)), configuredHeading, 'Ctrl+wheel must not change heading size.');
+  assert.equal(await outlineButton.evaluate(node => parseFloat(getComputedStyle(node).fontSize)), configuredOutline, 'Ctrl+wheel must not change outline size.');
+  const textWidth = await reader.locator('.rb-block[data-block-id="first"] .rb-text').evaluate(node => ({ own: node.getBoundingClientRect().width, parent: node.parentElement.getBoundingClientRect().width }));
+  assert(textWidth.own >= textWidth.parent - 2, 'Expanded body text must use the available card width.');
+  await page.evaluate(async () => (await import('/src/canvas-typography.ts')).setCanvasFontPercent('body', 200));
+  await readingText.hover();
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -120);
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => document.querySelector('.canvas-reader-text-size')?.textContent === '210%');
+  if (process.env.SPELLCAST_TEST_TEXT_SHOT) await page.screenshot({ path: process.env.SPELLCAST_TEST_TEXT_SHOT, animations: 'disabled' });
+  await page.evaluate(async () => (await import('/src/canvas-typography.ts')).setCanvasFontPercent('body', 110));
+  await reader.locator('button[data-block-id="graph"]').click();
+  await reader.locator('.rb-graph-canvas').hover();
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -120);
+  await page.keyboard.up('Control');
+  assert.equal(await reader.locator('.canvas-reader-text-size').textContent(), '110%', 'Graph Ctrl+wheel must not change the reader font size.');
+  assert.deepEqual(await page.evaluate(() => [localStorage.getItem('spellcast.canvas-reading-title-percent'), localStorage.getItem('spellcast.canvas-reading-interface-percent')]), ['140', '130']);
+  await page.evaluate(async () => {
+    const typography = await import('/src/canvas-typography.ts');
+    typography.setCanvasFontPercent('title', 100);
+    typography.setCanvasFontPercent('interface', 100);
+  });
   if (process.env.SPELLCAST_TEST_SHOT) await page.screenshot({ path: process.env.SPELLCAST_TEST_SHOT, animations: "disabled" });
   assert.equal(await reader.locator(".canvas-reader-atoms button").count(), 6);
-  await reader.locator('button[data-block-id="graph"]').click();
   assert.equal(await reader.locator('.rb-block[data-block-id="graph"]').isVisible(), true);
   assert.equal(await reader.locator('.rb-block[data-block-id="first"]').isVisible(), false);
   await reader.locator('button[data-block-id="second"]').click();
@@ -130,6 +189,7 @@ try {
   const field = reader.locator('.rb-block[data-block-id="second"] .rb-area textarea');
   await field.waitFor({ state: "visible" });
   assert((await field.boundingBox()).width > 800, "The editor must have a wide text area.");
+  assert((await field.evaluate(node => parseFloat(getComputedStyle(node).fontSize))) > 14, 'The expanded editor must use the reading text size.');
   await field.fill("Edited in the expanded atom workspace.");
   await reader.locator('.rb-block[data-block-id="second"] .rb-form-actions button[type="submit"]').click();
   await page.waitForFunction(() => window.fixture.state().replies[0].revision === 2);
@@ -148,6 +208,17 @@ try {
   await page.locator('.canvas-tool-selection > .canvas-tool-primary:not(.canvas-selection-discuss)').click();
   await reader.waitFor({ state: 'visible' });
   await page.waitForFunction(() => document.querySelector('.canvas-reader-workspace > .canvas-frame-content').scrollTop === 240);
+  await page.evaluate(() => window.fixture.remount());
+  await reader.waitFor({ state: 'visible' });
+  await page.waitForFunction(() => document.querySelector('.canvas-reader-workspace > .canvas-frame-content')?.scrollTop === 240);
+  assert.equal(await reader.locator('.rb-block[data-block-id="third"]').isVisible(), true, 'Remount must restore the focused block.');
+  await reader.locator('.canvas-reader-close').click();
+  await reader.waitFor({state:'hidden'});
+  await page.evaluate(() => window.fixture.remount());
+  assert.equal(await reader.isVisible(), false, 'An explicitly closed reader must stay closed after remount.');
+  await page.evaluate(() => window.fixture.canvas.select('reply'));
+  await page.locator('.canvas-tool-selection > .canvas-tool-primary:not(.canvas-selection-discuss)').click();
+  await reader.waitFor({state:'visible'});
 
   // Hidden dirty blocks stay marked. Ctrl+S saves only the focused block and errors remain recoverable.
   await reader.locator('button[data-block-id="first"]').click();
@@ -196,6 +267,8 @@ try {
   await page.locator('.canvas-selection-compare').click();
   const multiReader = page.locator('.canvas-selection-reader');
   await multiReader.waitFor({state:'visible'});
+  await multiReader.locator('.canvas-reader-font-settings').click();
+  assert.equal(await page.evaluate(() => window.fixtureSettingsRequests), 2, 'Selected-content reading must expose the Settings shortcut.');
   assert.equal(await multiReader.locator('.canvas-selection-reader-card').count(), 2);
   const multiBox = await multiReader.boundingBox();
   assert(multiBox.width >= 1300 && multiBox.height >= 800, 'Multi-object reading must use most of the viewport.');
@@ -203,6 +276,17 @@ try {
   assert(wideCards[1].x > wideCards[0].x, 'Selected objects must appear side by side on wide screens.');
   assert(wideCards.every(card => card.height >= 600), 'Side-by-side cards must use the available reading height.');
   assert.match(await multiReader.locator('.canvas-selection-reader-card[data-object-id="object"]').innerText(), /Keyboard saved first block/);
+  const comparedText = multiReader.locator('.canvas-selection-reader-text').first();
+  const comparedFont = await comparedText.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+  await comparedText.hover();
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -120);
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => document.querySelector('.canvas-selection-reader .canvas-reader-text-size')?.textContent === '120%');
+  assert((await comparedText.evaluate(node => parseFloat(getComputedStyle(node).fontSize))) > comparedFont, 'Selected-content reading must share the text-size control.');
+  await multiReader.locator('.canvas-reader-text-size').click();
+  assert.equal(await multiReader.locator('.canvas-reader-text-size').textContent(), '100%');
+  assert.equal(await page.evaluate(() => localStorage.getItem('spellcast.canvas-reading-text-percent')), '100');
   if (process.env.SPELLCAST_TEST_COMPARE_SHOT) await page.screenshot({ path: process.env.SPELLCAST_TEST_COMPARE_SHOT, animations: 'disabled', timeout: 30000 });
   await page.setViewportSize({width:720,height:800});
   const narrowCards = await multiReader.locator('.canvas-selection-reader-card').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().toJSON()));
@@ -317,9 +401,24 @@ try {
   await reader.waitFor({state:'hidden'});
   await page.evaluate(() => window.fixture.removeBlock('third'));
   assert.equal(await page.evaluate(() => window.fixture.canvas.getSelection()), null, 'Removing a selected block remotely must not broaden discussion to the entire object.');
+  await page.evaluate(() => window.fixture.setGraph());
+  await page.locator('.canvas-reply-summary-atom[data-block-id="graph"]').click();
+  await reader.waitFor({state:'visible'});
+  const graphBounds = await reader.locator('.rb-block[data-block-id="graph"]').evaluate(node => ({
+    cardBottom: node.getBoundingClientRect().bottom,
+    detailsBottom: node.querySelector('.rb-graph-below').getBoundingClientRect().bottom,
+  }));
+  assert(graphBounds.detailsBottom <= graphBounds.cardBottom + 1, 'Graph details must stay inside the focused block border.');
+  await reader.locator('.canvas-reader-close').click();
+  await reader.waitFor({state:'hidden'});
+  await page.locator('.canvas-tool-camera > button:nth-child(4)').click();
+  const cameraScale = await page.locator('.canvas-tool-camera > .canvas-zoom-value').textContent();
+  await page.waitForFunction(() => Object.keys(localStorage).some(key => key.startsWith('spellcast.canvas-view:') && JSON.parse(localStorage.getItem(key)).scale > 0));
+  await page.evaluate(() => window.fixture.remount());
+  await page.waitForFunction(expected => document.querySelector('.canvas-tool-camera > .canvas-zoom-value')?.textContent === expected, cameraScale);
   assert.deepEqual(errors, []);
   assert.equal((await page.evaluate(() => window.fixtureErrors)).length, 1, 'Only the deliberately failed save should report an error.');
-  console.log("PASS: viewport, Shift/Ctrl and marquee selection, alignment/undo, block comparison/anchors, scroll restore, draft/error badges, Ctrl+S retry, remote removal, and preserved Canvas placement");
+  console.log("PASS: viewport, reader Ctrl+wheel text size, Shift/Ctrl and marquee selection, alignment/undo, block comparison/anchors, session scroll restore, graph bounds, draft/error badges, Ctrl+S retry, remote removal, and preserved Canvas placement");
 } finally {
   await browser.close();
 }

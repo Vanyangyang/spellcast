@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { PhysicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { emit, listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow } from "@tauri-apps/api/window";
+import { remainingRiseMs, riseSpeed } from "./bubble-flight";
 import { applyBubbleEl } from "./bubble-view";
 import { t } from "./i18n";
 import type { ThrownBubble } from "./types";
@@ -118,6 +119,8 @@ async function boot() {
   });
 
   const life = Math.max(8000, flight.item.linger_ms || 16000);
+  const pixelsPerMs = riseSpeed(geo.startY, geo.endY, life);
+  let flightMs = life;
   let elapsed = 0;
   let lastTick = performance.now();
   let gone = false;
@@ -139,6 +142,7 @@ async function boot() {
 
   const restartFlight = (y: number) => {
     geo = { ...geo, startY: y };
+    flightMs = remainingRiseMs(y, geo.endY, pixelsPerMs, life);
     progress = 0;
     elapsed = 0;
     lastTick = performance.now();
@@ -192,7 +196,7 @@ async function boot() {
       return;
     }
     elapsed += delta;
-    const t = Math.min(1, elapsed / life);
+    const t = flightMs <= 0 ? 1 : Math.min(1, elapsed / flightMs);
     const eased = t * t * (3 - 2 * t);
     progress = eased;
     const y = Math.round(geo.startY + (geo.endY - geo.startY) * eased);

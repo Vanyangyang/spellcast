@@ -1,6 +1,7 @@
 import "./completions.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { cursorPosition, getCurrentWindow, type PhysicalPosition } from "@tauri-apps/api/window";
 import { applyDom, currentLocale, onLocale, t } from "./i18n";
 
 type Completion = {
@@ -20,6 +21,50 @@ type VoiceSettings = { enabled: boolean; supported: boolean; volume: number; coo
 const voiceButton = document.querySelector<HTMLButtonElement>("#completion-voice")!;
 let voice: VoiceSettings | undefined;
 let items: Completion[] = [];
+const completionWindow = getCurrentWindow();
+let windowOrigin: PhysicalPosition | undefined;
+let windowScale = 1;
+let cursorProbePending = false;
+let ignoringCursorEvents = false;
+
+async function refreshWindowMetrics() {
+  [windowOrigin, windowScale] = await Promise.all([
+    completionWindow.innerPosition(),
+    completionWindow.scaleFactor(),
+  ]);
+}
+
+function capturesPointerAt(x: number, y: number) {
+  const target = document.elementFromPoint(x, y);
+  if (target?.closest(".completion-bubble, #completion-voice")) return true;
+  const list = target?.closest<HTMLElement>("#completions");
+  if (!list || list.scrollHeight <= list.clientHeight) return false;
+  const bounds = list.getBoundingClientRect();
+  return x >= bounds.right - 12 && x <= bounds.right;
+}
+
+async function routeCursorEvents() {
+  if (cursorProbePending || items.length === 0) return;
+  cursorProbePending = true;
+  try {
+    if (!windowOrigin) await refreshWindowMetrics();
+    const cursor = await cursorPosition();
+    const x = (cursor.x - windowOrigin!.x) / windowScale;
+    const y = (cursor.y - windowOrigin!.y) / windowScale;
+    const ignore = !capturesPointerAt(x, y);
+    if (ignore !== ignoringCursorEvents) {
+      await completionWindow.setIgnoreCursorEvents(ignore);
+      ignoringCursorEvents = ignore;
+      document.documentElement.dataset.cursorRouting = ignore ? "passthrough" : "capture";
+    }
+  } catch {
+    // Browser preview and platforms without cursor-event routing keep the ordinary window behavior.
+  } finally {
+    cursorProbePending = false;
+  }
+}
+
+window.setInterval(() => void routeCursorEvents(), 50);
 
 function paintChrome() {
   applyDom();
@@ -122,6 +167,8 @@ function render(next: Completion[]) {
     paintCard(card, item);
     if (root.children[index] !== card) root.insertBefore(card, root.children[index] ?? null);
   });
+  windowOrigin = undefined;
+  void routeCursorEvents();
 }
 
 async function syncLocale() {

@@ -50,7 +50,7 @@ Bubbles and asides are passive. There is no "spawn bubble" button; I left it out
 
 ## Where the preview stands
 
-- Published build is [0.4.10](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.10), a Windows x64 installer. See [0.4.10 notes](docs/releases/0.4.10.md).
+- Published build is [0.4.11](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.11), with desktop packages built by GitHub Actions. See [0.4.11 notes](docs/releases/0.4.11.md).
 - This preview has editable Canvas ideas, workspace/task organization, send-back to the original Codex Desktop task, and one-step Codex setup (MCP + Hooks + Skill). Grok Build setup comes later. The Settings button is visible but disabled. See [runtime acceptance](docs/reviews/2026-09-14-workbench-runtime-acceptance.md), [replies](docs/reviews/2026-09-15-replies-inbox.md), and [Codex-only setup](docs/reviews/2026-09-15-codex-only-entry.md).
 - Layout, copy, and the Skill are still moving around. Open an issue if you hit something. See [the next improvement brief](docs/next-improvement-prompt.md).
 
@@ -98,6 +98,8 @@ Integration details: [docs/codex-observer-hooks.md](docs/codex-observer-hooks.md
 The Spellcast app has to be running. Local MCP is `http://127.0.0.1:47194/mcp`. Setup currently supports Codex. Other hosts in Settings are visible but disabled. macOS and Linux CI packages are untested.
 
 ## Develop locally
+
+Windows Canvas data lives in `%USERPROFILE%\.spellcast\spellcast.sqlite3`, shared across launch methods. See [storage and old-data migration](docs/state-storage.md).
 
 ```sh
 git clone https://github.com/Vanyangyang/spellcast.git

@@ -46,6 +46,8 @@ pub struct CheckpointRequest {
 pub struct ObserverBrief {
     pub observer_id: String,
     pub source_id: String,
+    /// App-selected language for every user-visible thought field.
+    pub locale: String,
     pub snapshot: ProjectSnapshot,
     pub expires_at_ms: u64,
 }
@@ -90,6 +92,7 @@ pub struct ObserverStatus {
     pub allowed: bool,
     pub reason: &'static str,
     pub policy_revision: u64,
+    pub locale: String,
 }
 
 impl ObserverStatus {
@@ -98,6 +101,7 @@ impl ObserverStatus {
         paused: bool,
         board_focused: bool,
         policy_revision: u64,
+        locale: String,
     ) -> Self {
         let (allowed, reason) = if !enabled {
             (false, "disabled")
@@ -114,6 +118,7 @@ impl ObserverStatus {
             allowed,
             reason,
             policy_revision,
+            locale,
         }
     }
 }
@@ -123,6 +128,7 @@ struct Source {
     last_seen: u64,
     last_started: Option<u64>,
     last_snapshot: Option<ProjectSnapshot>,
+    last_locale: Option<String>,
     pending: Option<ObserverBrief>,
 }
 
@@ -146,6 +152,16 @@ impl Observers {
         req: CheckpointRequest,
         now: u64,
         allowed: bool,
+    ) -> Result<CheckpointResult, SpellcastError> {
+        self.checkpoint_for_locale(req, now, allowed, "en")
+    }
+
+    fn checkpoint_for_locale(
+        &mut self,
+        req: CheckpointRequest,
+        now: u64,
+        allowed: bool,
+        locale: &str,
     ) -> Result<CheckpointResult, SpellcastError> {
         text_limit(&req.source_id, 200, "source_id")?;
         self.sources
@@ -188,7 +204,9 @@ impl Observers {
         source.last_seen = now;
         // Invalidate old work even when the new checkpoint cannot launch another observer yet.
         if source.pending.as_ref().is_some_and(|brief| {
-            !brief.snapshot.same_context(&snapshot) || now >= brief.expires_at_ms
+            brief.locale != locale
+                || !brief.snapshot.same_context(&snapshot)
+                || now >= brief.expires_at_ms
         }) {
             source.pending = None;
         }
@@ -200,7 +218,8 @@ impl Observers {
             });
         }
         if source.last_snapshot.as_ref().is_some_and(|last| {
-            last.project == snapshot.project
+            source.last_locale.as_deref() == Some(locale)
+                && last.project == snapshot.project
                 && (last.checkpoint_id == snapshot.checkpoint_id || last.same_context(&snapshot))
         }) {
             return Ok(CheckpointResult {
@@ -220,10 +239,12 @@ impl Observers {
         let brief = ObserverBrief {
             observer_id: new_id(),
             source_id: req.source_id,
+            locale: locale.into(),
             snapshot: snapshot.clone(),
             expires_at_ms: now.saturating_add(LEASE_MS),
         };
         source.last_started = Some(now);
+        source.last_locale = Some(locale.into());
         source.last_snapshot = Some(snapshot);
         source.pending = Some(brief.clone());
         Ok(CheckpointResult {
@@ -265,7 +286,7 @@ impl Bridge {
                 brief: None,
             });
         }
-        observers.checkpoint(req, now, gate.allowed)
+        observers.checkpoint_for_locale(req, now, gate.allowed, &gate.locale)
     }
 
     pub fn complete_observation(
@@ -661,14 +682,57 @@ mod tests {
             let bridge = Bridge::open(rec.clone(), 0, &path).unwrap();
             assert!(!bridge.observer_status().enabled);
             bridge.set_observer_enabled(true).unwrap();
+            bridge.set_ui_locale("en").unwrap();
             assert!(bridge.observer_status().enabled);
+            assert_eq!(bridge.observer_status().locale, "en");
             assert!(bridge.observer_status().policy_revision > 0);
         }
         let restored = Bridge::open(rec, 0, &path).unwrap();
         let status = restored.observer_status();
         assert!(status.enabled);
+        assert_eq!(status.locale, "en");
         assert!(status.policy_revision > 0);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn app_locale_is_bound_to_brief_and_invalidates_old_ticket() {
+        let (bridge, _) = observing();
+        assert_eq!(bridge.observer_status().locale, "zh-CN");
+        let zh = bridge
+            .checkpoint(checkpoint("zh-task", "检查英文素材"))
+            .unwrap()
+            .brief
+            .unwrap();
+        assert_eq!(zh.locale, "zh-CN");
+
+        let revision = bridge.observer_status().policy_revision;
+        assert_eq!(bridge.set_ui_locale("en").unwrap(), "en");
+        let status = bridge.observer_status();
+        assert_eq!(status.locale, "en");
+        assert!(status.policy_revision > revision);
+        assert_eq!(
+            bridge
+                .complete_observation(ObserverCompletion {
+                    observer_id: zh.observer_id,
+                    thought: Some(ObserverThought {
+                        tease: "这条旧中文票不应落地".into(),
+                        body: String::new(),
+                        kind: None,
+                        shape: None,
+                    }),
+                })
+                .unwrap()
+                .status,
+            "stale"
+        );
+
+        let en = bridge
+            .checkpoint(checkpoint("en-task", "Review Chinese material"))
+            .unwrap()
+            .brief
+            .unwrap();
+        assert_eq!(en.locale, "en");
     }
 
     #[test]

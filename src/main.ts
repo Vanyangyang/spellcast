@@ -42,6 +42,7 @@ import { resolveNavObjectId, textLabel, type ContentNavTarget } from "./content-
 import "./canvas-studio.css";
 import "./theme.css";
 import { mountTheme } from "./theme";
+import { canvasTypography, onCanvasTypographyChange, resetCanvasTypography, setCanvasFontPercent, type CanvasFontKind, type CanvasTypography } from "./canvas-typography";
 import { ct } from "./i18n/canvas";
 import { replyDrafts, draftKey, contentKey, type DraftRecord } from "./reply-drafts";
 import { mountBoardTools } from "./board-tools";
@@ -95,6 +96,25 @@ const activityEmpty = document.querySelector<HTMLElement>("#activity-empty")!;
 const agentUrl = document.querySelector<HTMLInputElement>("#agent-mcp-url")!;
 const settings = document.querySelector<HTMLDialogElement>("#settings")!;
 const settingsUrl = document.querySelector<HTMLInputElement>("#settings-mcp-url")!;
+const canvasFontInputs = [...settings.querySelectorAll<HTMLInputElement>("[data-canvas-font]")];
+const canvasFontPreview = settings.querySelector<HTMLElement>(".settings-font-preview")!;
+function paintCanvasFontSettings(value: CanvasTypography) {
+  canvasFontPreview.style.setProperty("--canvas-reading-text-scale", String(value.body / 100));
+  canvasFontPreview.style.setProperty("--canvas-title-font-scale", String(value.title / 100));
+  canvasFontPreview.style.setProperty("--canvas-interface-font-scale", String(value.interface / 100));
+  for (const input of canvasFontInputs) {
+    const percent = value[input.dataset.canvasFont as CanvasFontKind];
+    input.value = String(percent);
+    const output = input.parentElement?.querySelector<HTMLOutputElement>("output");
+    if (output) output.value = `${percent}%`;
+  }
+}
+for (const input of canvasFontInputs) {
+  input.addEventListener("input", () => setCanvasFontPercent(input.dataset.canvasFont as CanvasFontKind, Number(input.value)));
+}
+settings.querySelector("#settings-font-reset")?.addEventListener("click", resetCanvasTypography);
+onCanvasTypographyChange(paintCanvasFontSettings);
+paintCanvasFontSettings(canvasTypography());
 const replyHost = document.querySelector<HTMLElement>("#reply-stage")!;
 const recipient = document.querySelector<HTMLSelectElement>("#recipient")!;
 const recipientNotice = document.createElement("p"); recipientNotice.className = "composer-recipient-status"; recipientNotice.id = "recipient-status"; recipientNotice.setAttribute("role", "status"); recipientNotice.hidden = true;
@@ -869,14 +889,44 @@ async function saveObserverEnabled(event: Event) {
   }
 }
 
-function openSettings() {
+const settingsTabs = [...settings.querySelectorAll<HTMLButtonElement>("[data-settings-tab]")];
+const settingsPanels = [...settings.querySelectorAll<HTMLElement>(".settings-panel")];
+function selectSettingsTab(id: string, focus = false) {
+  const selectedTab = settingsTabs.find(tab => tab.dataset.settingsTab === id);
+  if (!selectedTab) return;
+  for (const tab of settingsTabs) {
+    const selected = tab === selectedTab;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  for (const panel of settingsPanels) panel.hidden = panel.id !== selectedTab.getAttribute("aria-controls");
+  const scrollArea = settings.querySelector<HTMLElement>(".settings-panels");
+  if (scrollArea) scrollArea.scrollTop = 0;
+  if (focus) selectedTab.focus();
+}
+for (const [index, tab] of settingsTabs.entries()) {
+  tab.addEventListener("click", () => selectSettingsTab(tab.dataset.settingsTab!));
+  tab.addEventListener("keydown", event => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
+    const next = event.key === "ArrowRight" ? (index + 1) % settingsTabs.length
+      : event.key === "ArrowLeft" ? (index + settingsTabs.length - 1) % settingsTabs.length
+      : event.key === "Home" ? 0 : event.key === "End" ? settingsTabs.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    selectSettingsTab(settingsTabs[next].dataset.settingsTab!, true);
+  });
+}
+
+function openSettings(tab = "connection") {
   const active = document.activeElement as HTMLElement | null;
   settingsTrigger = active?.closest("button, summary") ?? active;
+  selectSettingsTab(tab);
   settings.hidden = false;
   if (!settings.open) settings.showModal();
   paintObserver();
   void previewClient(selectedClient as ConfigClient);
 }
+document.addEventListener("spellcast-open-settings", () => openSettings("appearance"));
 for (const box of observerToggles()) {
   box.addEventListener("change", event => void saveObserverEnabled(event));
 }
@@ -890,7 +940,7 @@ settings.addEventListener("close", () => {
   restoreSettingsTrigger();
 });
 function settingsTabStops() {
-  return [...settings.querySelectorAll<HTMLElement>("button, input, textarea, select, a[href], [tabindex]")]
+  return [...settings.querySelectorAll<HTMLElement>("button, input, textarea, select, summary, a[href], [tabindex]")]
     .filter(node => {
       if (node.tabIndex < 0) return false;
       if ("disabled" in node && Boolean((node as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).disabled)) return false;
