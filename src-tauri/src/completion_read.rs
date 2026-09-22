@@ -1,7 +1,7 @@
 //! Read Codex's persisted unread state without changing any Codex files.
-//! Absence alone is not a read receipt: require an unread observation for this turn.
+//! Reconcile read transitions and fresh post-completion snapshots without trusting stale absence.
 use std::{collections::{HashMap, HashSet}, fs::{self, File}, io::Read,
-    path::{Path, PathBuf}, time::{Duration, Instant, SystemTime}};
+    path::{Path, PathBuf}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use rusqlite::params;
 use serde::Deserialize;
 use crate::completion_hook::{self, Completion};
@@ -21,6 +21,12 @@ struct ReadState {
 
 const MAX_STATE_BYTES: u64 = 16 * 1024 * 1024;
 const RECHECK_AFTER: Duration = Duration::from_secs(30);
+// The notify hook can run before Codex publishes the turn's unread state.
+const READ_STATE_SETTLE_MS: u64 = 3_000;
+
+fn unix_ms(time: SystemTime) -> Option<u64> {
+    time.duration_since(UNIX_EPOCH).ok().map(|value| value.as_millis() as u64)
+}
 
 #[derive(PartialEq)]
 struct FileStamp { bytes: u64, modified: SystemTime }
@@ -37,6 +43,7 @@ struct Checked {
     stamp: FileStamp,
     turns: Vec<(String, String)>,
     at: Instant,
+    recheck_after: Duration,
 }
 
 /// Owned by the notification worker. Retains only file metadata and turn IDs.
@@ -49,7 +56,7 @@ impl ReadSync {
         let stamp = FileStamp::read(&path);
         if let (Some(stamp), Some(previous)) = (&stamp, &self.checked) {
             if previous.root == root && previous.home == home && previous.stamp == *stamp
-                && previous.at.elapsed() < RECHECK_AFTER && previous.turns.len() == items.len()
+                && previous.at.elapsed() < previous.recheck_after && previous.turns.len() == items.len()
                 && previous.turns.iter().zip(items).all(|((thread, turn), item)|
                     *thread == item.thread_id && *turn == item.turn_id) {
                 // Unchanged: no JSON read/parse, inbox connection, or SQL transaction.
@@ -57,14 +64,22 @@ impl ReadSync {
             }
         }
         let Some(state) = snapshot(home) else { self.checked = None; return Ok(false); };
-        let dismissed = synchronize_state(root, &state, items)?;
+        let after = FileStamp::read(&path);
+        let stable = matches!((&stamp, &after), (Some(before), Some(after)) if before == after);
+        let saved_at_ms = stable.then(|| stamp.as_ref().and_then(|stamp| unix_ms(stamp.modified))).flatten();
+        let now_ms = unix_ms(SystemTime::now()).unwrap_or(0);
+        let dismissed = synchronize_state(root, &state, items, saved_at_ms, now_ms)?;
         // Do not cache a read that overlapped a file replacement. Periodically
         // recheck even identical metadata for filesystems with coarse timestamps.
-        self.checked = match (stamp, FileStamp::read(&path)) {
+        self.checked = match (stamp, after) {
             (Some(before), Some(after)) if before == after => Some(Checked {
                 root: root.into(), home: home.into(), stamp: after,
                 turns: items.iter().map(|i| (i.thread_id.clone(), i.turn_id.clone())).collect(),
                 at: Instant::now(),
+                recheck_after: items.iter().filter_map(|item| {
+                    let due = item.completed_at_ms.saturating_add(READ_STATE_SETTLE_MS);
+                    (due > now_ms).then(|| Duration::from_millis(due - now_ms))
+                }).min().unwrap_or(RECHECK_AFTER).min(RECHECK_AFTER),
             }),
             _ => None,
         };
@@ -84,13 +99,21 @@ fn snapshot(home: &Path) -> Option<ReadState> {
     (state.read.version == 1).then_some(state.read)
 }
 
-fn synchronize_state(root: &Path, state: &ReadState, items: &[Completion]) -> Result<bool, String> {
+fn synchronize_state(root: &Path, state: &ReadState, items: &[Completion], saved_at_ms: Option<u64>, now_ms: u64) -> Result<bool, String> {
     let mut db = completion_hook::inbox(root)?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS completion_unread_observations (
         thread_id TEXT NOT NULL, turn_id TEXT NOT NULL,
-        identity_key TEXT NOT NULL, host_key TEXT NOT NULL,
+        identity_key TEXT NOT NULL, host_key TEXT NOT NULL, seen_unread INTEGER NOT NULL DEFAULT 1,
         PRIMARY KEY(thread_id, turn_id, identity_key, host_key));")
         .map_err(|e| e.to_string())?;
+    // Existing observations all came from an actual unread state.
+    let has_seen_unread: bool = db.query_row(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('completion_unread_observations') WHERE name='seen_unread'",
+        [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if !has_seen_unread {
+        db.execute("ALTER TABLE completion_unread_observations ADD COLUMN seen_unread INTEGER NOT NULL DEFAULT 1", [])
+            .map_err(|e| e.to_string())?;
+    }
     let tx = db.transaction().map_err(|e| e.to_string())?;
     let mut dismissed = false;
     for item in items {
@@ -100,22 +123,38 @@ fn synchronize_state(root: &Path, state: &ReadState, items: &[Completion]) -> Re
                 // Remote hosts have separate read state and cannot acknowledge a local hook.
                 if !host.starts_with("local:") || !threads.contains(&item.thread_id) { continue; }
                 unread = true;
-                tx.execute("INSERT OR IGNORE INTO completion_unread_observations
-                    (thread_id,turn_id,identity_key,host_key) VALUES (?1,?2,?3,?4)",
+                tx.execute("INSERT INTO completion_unread_observations
+                    (thread_id,turn_id,identity_key,host_key,seen_unread) VALUES (?1,?2,?3,?4,1)
+                    ON CONFLICT(thread_id,turn_id,identity_key,host_key) DO UPDATE SET seen_unread=1",
                     params![item.thread_id, item.turn_id, identity, host]).map_err(|e| e.to_string())?;
             }
         }
         if unread { continue; }
-        let observations = {
-            let mut query = tx.prepare("SELECT identity_key,host_key FROM completion_unread_observations
+        let mut observations = {
+            let mut query = tx.prepare("SELECT identity_key,host_key,seen_unread FROM completion_unread_observations
                 WHERE thread_id=?1 AND turn_id=?2").map_err(|e| e.to_string())?;
             let rows = query.query_map(params![item.thread_id, item.turn_id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?))).map_err(|e| e.to_string())?;
             rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
         };
+        if observations.is_empty() {
+            // Pin the known local identity/host even if the user read the turn before
+            // our first poll. Never replace these scopes after logout or a host change.
+            for (identity, hosts) in &state.identities {
+                for host in hosts.keys().filter(|host| host.starts_with("local:")) {
+                    tx.execute("INSERT OR IGNORE INTO completion_unread_observations
+                        (thread_id,turn_id,identity_key,host_key,seen_unread) VALUES (?1,?2,?3,?4,0)",
+                        params![item.thread_id, item.turn_id, identity, host]).map_err(|e| e.to_string())?;
+                    observations.push((identity.clone(), host.clone(), false));
+                }
+            }
+        }
+        let read_confirmed = observations.iter().any(|(_, _, seen)| *seen)
+            || (saved_at_ms.is_some_and(|saved| saved > item.completed_at_ms)
+                && now_ms >= item.completed_at_ms.saturating_add(READ_STATE_SETTLE_MS));
         // Logout or a changed host is unknown, not read. Persist observations so
         // opening a task while Spellcast is stopped can be reconciled on restart.
-        if !observations.is_empty() && observations.iter().all(|(identity, host)| {
+        if read_confirmed && !observations.is_empty() && observations.iter().all(|(identity, host, _)| {
             state.identities.get(identity).and_then(|hosts| hosts.get(host))
                 .is_some_and(|threads| !threads.contains(&item.thread_id))
         }) {
@@ -162,8 +201,88 @@ mod tests {
             synchronize(&self.0, &self.0, &completion_hook::pending(&self.0).unwrap()).unwrap();
             completion_hook::pending(&self.0).unwrap()
         }
+        fn sync_at(&self, saved_at_ms: Option<u64>, now_ms: u64) -> Vec<Completion> {
+            synchronize_state(&self.0, &snapshot(&self.0).unwrap(),
+                &completion_hook::pending(&self.0).unwrap(), saved_at_ms, now_ms).unwrap();
+            completion_hook::pending(&self.0).unwrap()
+        }
     }
     impl Drop for Fixture { fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); } }
+
+    #[test]
+    fn missed_unread_transition_uses_a_fresh_read_snapshot_after_settling() {
+        let f = Fixture::new(); f.capture(THREAD, "read-before-first-poll"); f.capture(OTHER, "unread");
+        let completed = completion_hook::pending(&f.0).unwrap().iter()
+            .find(|item| item.thread_id == THREAD).unwrap().completed_at_ms;
+        f.state(json!({"account":{"local:host":[OTHER]}}));
+        let original = fs::read(f.0.join(".codex-global-state.json")).unwrap();
+        assert_eq!(f.sync_at(Some(completed + 1), completed + READ_STATE_SETTLE_MS - 1).len(), 2);
+        // A new synchronizer also accepts the pinned scope after an app restart.
+        let remaining = f.sync_at(Some(completed + 1), completed + READ_STATE_SETTLE_MS);
+        assert_eq!(remaining.len(), 1); assert_eq!(remaining[0].thread_id, OTHER);
+        assert_eq!(fs::read(f.0.join(".codex-global-state.json")).unwrap(), original);
+    }
+
+    #[test]
+    fn absent_unread_in_an_old_or_unstable_snapshot_never_dismisses() {
+        let f = Fixture::new(); f.capture(THREAD, "new");
+        let completed = completion_hook::pending(&f.0).unwrap()[0].completed_at_ms;
+        f.state(json!({"account":{"local:host":[]}}));
+        for saved in [None, Some(completed - 1), Some(completed)] {
+            assert_eq!(f.sync_at(saved, completed + 60_000).len(), 1);
+        }
+        assert!(f.sync_at(Some(completed + 1), completed + 60_000).is_empty());
+    }
+
+    #[test]
+    fn missed_unread_observation_does_not_turn_logout_or_host_change_into_read() {
+        let f = Fixture::new(); f.capture(THREAD, "new");
+        let completed = completion_hook::pending(&f.0).unwrap()[0].completed_at_ms;
+        f.state(json!({"account":{"local:host":[]}}));
+        assert_eq!(f.sync_at(Some(completed + 1), completed).len(), 1);
+        for scopes in [json!({}), json!({"different-account":{"local:host":[]}}),
+            json!({"account":{"local:different":[]}}), json!({"account":{"ssh:remote":[]}})] {
+            f.state(scopes);
+            assert_eq!(f.sync_at(Some(completed + 2), completed + 60_000).len(), 1);
+        }
+        f.state(json!({"account":{"local:host":[]}}));
+        assert!(f.sync_at(Some(completed + 3), completed + 60_000).is_empty());
+    }
+
+    #[test]
+    fn unread_arriving_during_settling_is_preserved_until_read() {
+        let f = Fixture::new(); f.capture(THREAD, "new");
+        let completed = completion_hook::pending(&f.0).unwrap()[0].completed_at_ms;
+        f.state(json!({"account":{"local:host":[]}}));
+        assert_eq!(f.sync_at(Some(completed + 1), completed + 1).len(), 1);
+        f.state(json!({"account":{"local:host":[THREAD]}}));
+        assert_eq!(f.sync_at(Some(completed + 2), completed + 60_000).len(), 1);
+        f.state(json!({"account":{"local:host":[]}}));
+        assert!(f.sync_at(Some(completed + 3), completed + 60_000).is_empty());
+    }
+
+    #[test]
+    fn settling_snapshot_is_rechecked_without_waiting_for_the_long_cache() {
+        let f = Fixture::new(); f.capture(THREAD, "new");
+        f.state(json!({"account":{"local:host":[]}}));
+        let items = completion_hook::pending(&f.0).unwrap();
+        let mut sync = ReadSync::default();
+        assert!(!sync.synchronize(&f.0, &f.0, &items).unwrap());
+        assert!(sync.checked.as_ref().unwrap().recheck_after <= Duration::from_millis(READ_STATE_SETTLE_MS));
+    }
+
+    #[test]
+    fn legacy_unread_observations_keep_their_read_receipt_on_upgrade() {
+        let f = Fixture::new(); f.capture(THREAD, "old");
+        let db = completion_hook::inbox(&f.0).unwrap();
+        db.execute_batch("CREATE TABLE completion_unread_observations (
+            thread_id TEXT NOT NULL, turn_id TEXT NOT NULL, identity_key TEXT NOT NULL, host_key TEXT NOT NULL,
+            PRIMARY KEY(thread_id,turn_id,identity_key,host_key));").unwrap();
+        db.execute("INSERT INTO completion_unread_observations VALUES (?1,'old','account','local:host')", [THREAD]).unwrap();
+        drop(db);
+        f.state(json!({"account":{"local:host":[]}}));
+        assert!(f.sync().is_empty());
+    }
 
     #[test]
     fn read_transition_dismisses_only_matching_task_and_survives_restart() {

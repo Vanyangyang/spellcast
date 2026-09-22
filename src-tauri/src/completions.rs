@@ -121,19 +121,11 @@ fn ensure_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(windows)]
 fn show_without_focus(win: &tauri::WebviewWindow) -> Result<(), String> {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
-
-    let hwnd = win.hwnd().map_err(|err| err.to_string())?.0;
-    unsafe {
-        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn show_without_focus(win: &tauri::WebviewWindow) -> Result<(), String> {
+    // Keep Tao's visibility flag in sync with the native window. Calling Win32
+    // ShowWindow directly leaves that flag hidden, so the next cursor-pass-through
+    // change reapplies the hidden state. The builder's focused(false) keeps this
+    // managed show from activating the window on Windows.
     win.show().map_err(|err| err.to_string())
 }
 

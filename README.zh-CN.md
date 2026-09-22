@@ -50,7 +50,7 @@ Spellcast 是给 coding agent 用的本地桌面应用。Agent 继续干活。�
 
 ## 体验版到哪了
 
-- 已经发出去的包是 [0.4.11](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.11)，桌面安装包由 GitHub Actions 构建。说明在 [0.4.11](docs/releases/0.4.11.md)。
+- 已经发出去的包是 [0.4.12](https://github.com/Vanyangyang/spellcast/releases/tag/v0.4.12)，桌面安装包由 GitHub Actions 构建。说明在 [0.4.12](docs/releases/0.4.12.md)。
 - 这份预览里有可编辑的画布 Idea、按工作区和任务整理、回发原 Codex Desktop 任务、Codex 一键接入（MCP + Hooks + Skill）。Grok Build 接入还没做。设置里按钮还在，但点不了。背景材料：[运行验收](docs/reviews/2026-09-14-workbench-runtime-acceptance.md)、[回复面板](docs/reviews/2026-09-15-replies-inbox.md)、[仅 Codex 接入](docs/reviews/2026-09-15-codex-only-entry.md)。
 - 版式、文案和 Skill 都还在改。碰到问题就提 issue。下一步想改什么写在[这份提示词](docs/next-improvement-prompt.md)里。
 

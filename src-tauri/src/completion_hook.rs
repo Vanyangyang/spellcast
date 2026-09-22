@@ -244,25 +244,31 @@ pub fn visible(root: &Path, home: &Path, read_sync: &mut crate::completion_read:
     let candidates = pending(root)?;
     if candidates.is_empty() { return Ok(candidates); }
     // Grok Build completions carry their own metadata; Codex read state and thread DB do not apply.
-    let (mut shown, mut codex): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|c| c.client != CLIENT_CODEX);
+    let (mut shown, codex): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|c| c.client != CLIENT_CODEX);
     if !codex.is_empty() {
-        if read_sync.synchronize(root, home, &codex)? {
-            codex = pending(root)?.into_iter().filter(|c| c.client == CLIENT_CODEX).collect();
-        }
         // Unknown identities stay queued until Codex has persisted their metadata.
         if let Some(path) = thread_database(home) {
             let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(|e| e.to_string())?;
             db.busy_timeout(Duration::from_millis(250)).map_err(|e| e.to_string())?;
             let mut query = db.prepare("SELECT title,source FROM threads WHERE id=?1").map_err(|e| e.to_string())?;
+            let mut known = Vec::new();
             for mut item in codex {
                 let metadata: Option<(String,String)> = query.query_row([&item.thread_id], |r| Ok((r.get(0)?,r.get(1)?)))
                     .optional().map_err(|e| e.to_string())?;
                 let Some((title, source)) = metadata else { continue; };
                 if source.contains("subagent") { dismiss(root, &item.thread_id, &item.turn_id)?; continue; }
                 if !title.trim().is_empty() { item.title = short(&title, 100); }
-                shown.push(item);
+                known.push(item);
             }
+            // A missing thread in the read snapshot is meaningful only after the
+            // task itself is known. Metadata can lag behind the completion hook.
+            if read_sync.synchronize(root, home, &known)? {
+                let remaining = pending(root)?;
+                known.retain(|item| remaining.iter().any(|pending|
+                    pending.thread_id == item.thread_id && pending.turn_id == item.turn_id));
+            }
+            shown.extend(known);
         }
     }
     shown.sort_by(|a, b| b.completed_at_ms.cmp(&a.completed_at_ms));
@@ -552,6 +558,25 @@ mod tests {
         assert_eq!(visible(&root,&p,&mut read_sync).unwrap()[0].title,"真实标题");
         db.execute("UPDATE threads SET source=?1",[r#"{"subagent":{"other":"title"}}"#]).unwrap();
         assert!(visible(&root,&p,&mut read_sync).unwrap().is_empty()); drop(db); fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn fresh_read_snapshot_does_not_acknowledge_a_task_with_missing_metadata() {
+        let p=dir(); let root=p.join("inbox"); capture(&root,&event("one")).unwrap();
+        inbox(&root).unwrap().execute("UPDATE completions SET completed_at_ms=1", []).unwrap();
+        fs::write(p.join(".codex-global-state.json"), serde_json::json!({
+            "electron-thread-read-state-v1":{"version":1,"unreadByIdentity":{"account":{"local:host":[]}}}
+        }).to_string()).unwrap();
+        let mut read_sync = crate::completion_read::ReadSync::default();
+        assert!(visible(&root,&p,&mut read_sync).unwrap().is_empty());
+        assert_eq!(pending(&root).unwrap().len(),1);
+        let db=Connection::open(p.join("state_5.sqlite")).unwrap();
+        db.execute_batch("CREATE TABLE threads(id TEXT,title TEXT,source TEXT);").unwrap();
+        assert!(visible(&root,&p,&mut read_sync).unwrap().is_empty());
+        assert_eq!(pending(&root).unwrap().len(),1);
+        db.execute("INSERT INTO threads VALUES (?1,'Known task','vscode')", [THREAD]).unwrap();
+        assert!(visible(&root,&p,&mut read_sync).unwrap().is_empty());
+        assert!(pending(&root).unwrap().is_empty());
+        drop(db); fs::remove_dir_all(p).unwrap();
     }
     #[test]
     fn completion_install_preserves_config_and_original_notify_on_reinstall() {
