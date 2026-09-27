@@ -140,7 +140,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Client<S> {
     }
 
     async fn tool(&mut self, name: &str, args: Value, call_id: &str, writing: bool) -> Result<Value, CodexError> {
-        let value = self.request("tools/call", json!({"namespace":"codex_app","tool":name,"threadId":self.thread_id,
+        let value = self.request("tools/call", json!({"namespace":"codex_app","tool":name,"callerSource":"codex","threadId":self.thread_id,
             "turnId":format!("spellcast-ui-{call_id}"),"callId":call_id,"arguments":args}), writing).await?;
         let text = value["contentItems"].as_array().and_then(|items| items.iter().find(|item| item["type"] == "inputText"))
             .and_then(|item| item["text"].as_str()).unwrap_or_default();
@@ -212,6 +212,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let length = peer.read_u32_le().await.unwrap() as usize; let mut bytes = vec![0; length]; peer.read_exact(&mut bytes).await.unwrap();
             let request: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(request["params"]["callerSource"], "codex");
             assert_eq!(request["params"]["arguments"], json!({"threadId":"t","hostId":"local","prompt":"canvas request"}));
             assert_eq!(request["params"]["callId"], "spellcast-feedback-once");
             let response = serde_json::to_vec(&json!({"jsonrpc":"2.0","id":request["id"],"result":{"success":true,"contentItems":[{"type":"inputText","text":"{\"threadId\":\"t\"}"}]}})).unwrap();

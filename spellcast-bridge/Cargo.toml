@@ -8,7 +8,8 @@ description = "Shared Spellcast state with a local REST adapter for the desktop 
 [dependencies]
 spellcast-core = { path = "../spellcast-core" }
 serde.workspace = true
-serde_json.workspace = true
+# Saved trials are recomputed on the server; floats must parse exactly as the client serialized them.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "sync", "time", "net", "process", "io-util"] }
 axum = { version = "0.7.9", features = ["json", "query"] }
 tower-http = { version = "0.6.2", features = ["cors"] }

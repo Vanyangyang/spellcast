@@ -12,7 +12,7 @@ use spellcast_core::AgentEvent;
 const SCHEMA_VERSION: i64 = 4;
 
 pub struct Store {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 impl Store {
@@ -67,6 +67,11 @@ impl Store {
                 );",
             )
             .map_err(|err| format!("初始化不了状态库 {}：{err}", path.display()))?;
+        crate::project_record_store::init_project_schema(&connection)?;
+        crate::project_record_store::init_proposal_schema(&connection)?;
+        crate::project_workspace::init_access_schema(&connection)?;
+        crate::project_game::init_schema(&connection)?;
+        crate::project_goals::init_schema(&connection)?;
         Ok(Self { connection })
     }
 

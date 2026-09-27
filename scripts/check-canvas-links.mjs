@@ -89,6 +89,8 @@ const pose = async id => (await board()).canvas.items.find(item => item.item_id 
 const frame = id => page.locator('.canvas-frame[data-item-id="' + id + '"]');
 const toolbar = page.locator('.canvas-toolbar');
 async function clickToolbar(name) {
+  // The selection dock repaints on the next frame after a selection change.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const button = toolbar.getByRole('button', { name, exact: true });
   if (!(await button.isVisible())) {
     await toolbar.locator('.canvas-tool-more > summary').click();
@@ -111,10 +113,18 @@ function canonicalReplyObject(snapshot, replyId) {
   return result;
 }
 
-async function done() {
-  const button = toolbar.getByRole('button', { name: 'Back to canvas', exact: true });
-  if (await button.count()) await button.click();
+/** "Work inside" / "Back to canvas" sit on the selected card's head; the dock repeats them only while that head cannot be used. */
+async function modeButton(name, state) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const dock = toolbar.locator('.canvas-tool-selection > .canvas-selection-work');
+  if (await dock.isVisible()) { assert.equal(await dock.getAttribute('aria-label'), name); return dock; }
+  return page.locator('.canvas-frame.' + state + ' > .canvas-frame-head').getByRole('button', { name, exact: true });
 }
+async function done() {
+  if (await page.locator('.canvas-frame.is-active').count()) await (await modeButton('Back to canvas', 'is-active')).click();
+}
+/** Native text and image fields are edited in the object's own dialog; the card shows the saved text. */
+const nativeEditor = id => page.locator('dialog.canvas-native-editor[data-object-id="' + id + '"]');
 
 async function select(id) {
   await done();
@@ -143,6 +153,37 @@ async function artifactFrame(id) {
   assert(work, 'Missing artifact frame context for ' + id);
   return work;
 }
+
+/** A single work keeps Run/Stop, Restart, Ask and its versions in its Work settings dialog; the live
+ *  iframe stays in the card. */
+async function workSettings(id) {
+  const dialog = frame(id).locator('.artifact-management');
+  if (!(await dialog.evaluate(node => node.open))) await clickToolbar('Work settings');
+  await dialog.waitFor({ state: 'visible' });
+  return dialog;
+}
+async function workControl(id, name) {
+  const dialog = await workSettings(id);
+  const control = dialog.getByRole('button', { name, exact: true });
+  if (!(await control.isVisible())) await dialog.locator('.artifact-operations > summary').click();
+  await control.click();
+}
+async function closeWorkSettings(id) {
+  const dialog = frame(id).locator('.artifact-management');
+  if (await dialog.evaluate(node => node.open)) await dialog.locator(':scope > header').getByRole('button', { name: 'Close', exact: true }).click();
+}
+/** Since the direct feedback workflow, composer send-back needs a Codex task bound to the source
+ *  (canReturnCanvas). Binding is verified through the Codex app-server and delivery goes to a running
+ *  Codex desktop over its pipe, so an isolated run cannot provide one without reaching the user's own
+ *  Codex. The gate itself is checked; what depends on a delivered send is reported as blocked. */
+async function sendBackBlocked() {
+  const notice = page.locator('#recipient-status');
+  await until(async () => (await notice.isVisible()) || !(await page.locator('#send').isDisabled()), 'composer send state', 6000).catch(() => {});
+  if (!(await notice.isVisible()) || !(await notice.innerText()).includes('cannot receive Canvas send-back')) return false;
+  assert(await page.locator('#send').isDisabled(), 'An unbound host must not offer Send.');
+  return true;
+}
+const blocked = (step, reason) => { (result.blocked ??= []).push({ step, reason }); console.log('BLOCKED ' + step + ': ' + reason); };
 
 async function openWork(id) {
   await select(id);
@@ -426,8 +467,10 @@ try {
     })();
     await connections.getByRole('button', { name: 'Disconnect', exact: true }).click();
     await until(async () => (await object('value')).bindings?.length === 0, 'native binding disconnected');
-    assert.equal(await frame('value').locator('.canvas-native-text').isVisible(), true);
-    assert.equal(await frame('value').locator('.canvas-native-text').inputValue(), 'Preserved explanation');
+    const shownText = frame('value').locator('.canvas-native-formatted');
+    await until(() => shownText.isVisible(), 'saved text shown again');
+    assert.equal((await shownText.innerText()).trim(), 'Preserved explanation');
+    assert.equal(await nativeEditor('value').locator('.canvas-native-text').inputValue(), 'Preserved explanation');
     assert.equal((await object('value')).content.text, 'Preserved explanation');
 
     connections = await (async () => {
@@ -463,20 +506,21 @@ try {
     assert.deepEqual(await object('untouched'), unrelatedBefore);
     await select(producer.id);
     await page.keyboard.press('Enter');
-    await frame(producer.id).getByRole('button', { name: 'Restart', exact: true }).click();
+    await workControl(producer.id, 'Restart');
     parameter = await artifactFrame(producer.id);
     chart = await artifactFrame(chartObject.id);
     await waitForLinked(8, parameter, chart, 'value', 'restarted producer output');
     assert.equal(artifactBlock(await board(), parameterReplyId).state?.tide, 8);
     assert.equal(artifactBlock(await board(), chartReplyId).state?.selection?.id, 'harbor');
 
-    await frame(producer.id).getByRole('button', { name: 'Stop', exact: true }).click();
+    await workControl(producer.id, 'Stop');
     await waitForUnavailable(chart, 'value', 'stopped producer propagation');
-    await frame(producer.id).getByRole('button', { name: 'Run', exact: true }).click();
+    await workControl(producer.id, 'Run');
     parameter = await artifactFrame(producer.id);
     chart = await artifactFrame(chartObject.id);
     await waitForLinked(8, parameter, chart, 'value', 'run producer output');
     assert.equal(artifactBlock(await board(), parameterReplyId).state?.tide, 8);
+    await closeWorkSettings(producer.id);
     pass('DIAG_ONLY reported error and real Stop both invalidate linked values; Restart and Run recover saved tide and chart selection');
 
     await page.reload();
@@ -503,7 +547,8 @@ try {
     }
     await select(producer.id);
     await page.keyboard.press('Enter');
-    await frame(producer.id).getByRole('button', { name: 'Restart', exact: true }).click();
+    await workControl(producer.id, 'Restart');
+    await closeWorkSettings(producer.id);
     parameter = await artifactFrame(producer.id);
     chart = await artifactFrame(chartObject.id);
     await waitForLinked(8, parameter, chart, 'value', 'producer restart after resource abort');
@@ -515,10 +560,11 @@ try {
     await select(chartObject.id);
     await page.keyboard.press('Enter');
     const inlineAsk = 'INLINE_TIDE_CONTEXT_ASK';
-    const chartCard = frame(chartObject.id);
+    const chartCard = await workSettings(chartObject.id);
     await chartCard.getByRole('button', { name: 'Ask', exact: true }).click();
     const inlineInput = chartCard.getByRole('textbox', { name: 'Ask about this block', exact: true });
     await inlineInput.fill(inlineAsk);
+    await closeWorkSettings(chartObject.id);
 
     parameter = await openWork(producer.id);
     const levelAtNine = parameter.getByLabel('Tide level', { exact: true });
@@ -535,8 +581,9 @@ try {
 
     await select(chartObject.id);
     await page.keyboard.press('Enter');
-    assert.equal(await frame(chartObject.id).getByRole('textbox', { name: 'Ask about this block', exact: true }).inputValue(), inlineAsk);
-    await frame(chartObject.id).getByRole('button', { name: 'Send', exact: true }).click();
+    const reopened = await workSettings(chartObject.id);
+    assert.equal(await reopened.getByRole('textbox', { name: 'Ask about this block', exact: true }).inputValue(), inlineAsk);
+    await reopened.getByRole('button', { name: 'Send', exact: true }).click();
     const inlineEvent = await until(async () => (await api('/api/feedback')).pending.find(event => event.text === inlineAsk), 'inline Ask feedback');
     const inlineAnchor = inlineEvent.anchors.find(anchor => anchor.object_id === chartObject.id);
     assertChartAnchor(inlineAnchor, expectedNineSource, chartAtNine);
@@ -544,6 +591,7 @@ try {
     assert.deepEqual(inlineEvent.artifact_context?.state, chartAtNine.state);
     assert.deepEqual(inputPort(inlineAnchor, 'tide').sources, [expectedNineSource]);
     result.evidence = { inlineAskSeq: inlineEvent.seq, inlineTide: 9, inlineChartStateRevision: chartAtNine.state_revision };
+    await closeWorkSettings(chartObject.id);
     pass('a still-open inline Ask refreshes to tide 9, Harbor selection and exact saved state before Send');
 
     parameter = await openWork(producer.id);
@@ -556,9 +604,16 @@ try {
     assert.equal(artifactBlock(await board(), chartReplyId).state?.selection?.id, 'harbor');
 
     await chooseLayers([chartObject.id, 'value']);
-    await page.locator('#recipient').selectOption(source);
     const globalAsk = 'GLOBAL_TIDE_LINK_ASK';
     await page.locator('#input').fill(globalAsk);
+    if (await sendBackBlocked()) {
+      assert(!(await api('/api/feedback')).pending.some(event => event.text === globalAsk), 'Nothing may be sent to an unbound host.');
+      pass('composer send-back to an unbound host is refused visibly and nothing is sent');
+      blocked('global multi-select feedback, MCP listen, Canvas response and acknowledgement', 'needs a Codex task bound to the source; not available in isolation (see sendBackBlocked)');
+      await page.locator('#input').fill('');
+    } else {
+    if (!(await page.locator('#recipient').isVisible())) await page.locator('#recipient-change').click();
+    await page.locator('#recipient').selectOption(source);
     await page.locator('#send').click();
     const feedback = await until(async () => (await api('/api/feedback')).pending.find(event => event.text === globalAsk), 'global linked feedback');
     const feedbackBoard = await board();
@@ -592,6 +647,7 @@ try {
     const receipt = await until(async () => (await api('/api/feedback')).deliveries.find(item => item.event.seq === feedback.seq), 'handled response receipt');
     assert.equal(receipt.phase, 'handled');
     pass('deterministic MCP listen, Canvas response reads and acknowledgement record a handled receipt; this does not assert a native Agent loop');
+    }
 
     const draftMarker = 'UNSENT_LINKED_TIDE_DRAFT';
     await page.locator('#input').fill(draftMarker);

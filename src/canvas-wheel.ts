@@ -10,8 +10,8 @@ export function contentUsesWheel(target: Element, boundary: HTMLElement): boolea
 }
 
 /** Same stepped zoom at low scales for DOM content and sandbox wheel messages. */
-export function wheelScale(scale: number, deltaY: number) {
+export function wheelScale(scale: number, deltaY: number, bounds = { min: .01, max: 1.5 }) {
   const zoomIn = deltaY < 0;
   const next = scale <= .15 ? scale + (zoomIn ? .01 : -.01) : Math.round(scale * (zoomIn ? 1.2 : 1 / 1.2) * 20) / 20;
-  return Math.max(.01, Math.min(1.5, next));
+  return Math.max(bounds.min, Math.min(bounds.max, next));
 }

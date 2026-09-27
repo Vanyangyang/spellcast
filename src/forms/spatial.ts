@@ -212,17 +212,17 @@ function cardTexture(node: BoardNode, selected: boolean): THREE.CanvasTexture {
   ctx.fillStyle = tone;
   ctx.fillRect(18, 18, 476, 8);
 
-  ctx.font = "600 18px 'IBM Plex Sans', 'Noto Sans SC', sans-serif";
+  ctx.font = "600 18px 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif";
   ctx.fillStyle = tone;
   ctx.fillText(kindLabel(node.kind), 40, 58);
   ctx.fillStyle = "#c0cbd9";
   ctx.fillText(weightLabel(node.weight), 400, 58);
 
-  ctx.font = "600 32px 'IBM Plex Sans', 'Noto Sans SC', sans-serif";
+  ctx.font = "600 32px 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif";
   ctx.fillStyle = "#fffaf2";
   wrap(ctx, node.title, 40, 108, 430, 36, 1);
 
-  ctx.font = "400 20px 'IBM Plex Sans', 'Noto Sans SC', sans-serif";
+  ctx.font = "400 20px 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif";
   ctx.fillStyle = "#d8e0e9";
   wrap(ctx, node.body, 40, 168, 430, 28, 3);
 

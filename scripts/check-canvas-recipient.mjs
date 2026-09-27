@@ -11,7 +11,7 @@ const { chromium } = require(path.join(homedir(), '.cache/codex-runtimes/codex-p
 const root = path.resolve(import.meta.dirname, '..');
 const output = path.join(root, 'artifacts/workbench-20260914', `recipient-${Date.now()}`);
 fs.mkdirSync(output, { recursive: true });
-await build({ stdin: { contents: "export * from './src/canvas-recipient'; export {setLocale} from './src/i18n'; import './src/canvas-studio.css';", resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', external: ['/fonts/*'], outfile: path.join(output, 'harness.js') });
+await build({ stdin: { contents: "export * from './src/canvas-recipient'; export {setLocale} from './src/i18n'; import './src/fonts.css'; import './src/canvas-studio.css'; import './src/night-desk.css';", resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', external: ['/fonts/*'], outfile: path.join(output, 'harness.js') });
 const server = createServer((req, res) => {
   if (/^\/fonts\/[a-z0-9-]+\.woff2$/.test(req.url || '')) { res.setHeader('Content-Type', 'font/woff2'); res.end(fs.readFileSync(path.join(root, 'public', req.url.slice(1)))); return; }
   if (req.url === '/harness.js') { res.setHeader('Content-Type', 'text/javascript'); res.end(fs.readFileSync(path.join(output, 'harness.js'))); }

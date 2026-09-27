@@ -46,6 +46,7 @@ pub struct CheckpointRequest {
 pub struct ObserverBrief {
     pub observer_id: String,
     pub source_id: String,
+    pub provider: String,
     /// App-selected language for every user-visible thought field.
     pub locale: String,
     pub snapshot: ProjectSnapshot,
@@ -74,6 +75,9 @@ pub struct ObserverThought {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ObserverCompletion {
     pub observer_id: String,
+    /// Omitted by legacy Codex observers; Claude completions must identify their provider.
+    #[serde(default)]
+    pub provider: Option<String>,
     /// Null is a successful quiet decision. Do not invent a thought to fill a quota.
     pub thought: Option<ObserverThought>,
 }
@@ -88,6 +92,7 @@ pub struct ObserverResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct ObserverStatus {
     pub enabled: bool,
+    pub provider: String,
     pub paused: bool,
     pub allowed: bool,
     pub reason: &'static str,
@@ -98,6 +103,7 @@ pub struct ObserverStatus {
 impl ObserverStatus {
     pub(crate) fn from_flags(
         enabled: bool,
+        provider: String,
         paused: bool,
         board_focused: bool,
         policy_revision: u64,
@@ -114,6 +120,7 @@ impl ObserverStatus {
         };
         Self {
             enabled,
+            provider,
             paused,
             allowed,
             reason,
@@ -129,6 +136,7 @@ struct Source {
     last_started: Option<u64>,
     last_snapshot: Option<ProjectSnapshot>,
     last_locale: Option<String>,
+    last_provider: Option<String>,
     pending: Option<ObserverBrief>,
 }
 
@@ -153,7 +161,7 @@ impl Observers {
         now: u64,
         allowed: bool,
     ) -> Result<CheckpointResult, SpellcastError> {
-        self.checkpoint_for_locale(req, now, allowed, "en")
+        self.checkpoint_for_locale(req, now, allowed, "en", "codex")
     }
 
     fn checkpoint_for_locale(
@@ -162,6 +170,7 @@ impl Observers {
         now: u64,
         allowed: bool,
         locale: &str,
+        provider: &str,
     ) -> Result<CheckpointResult, SpellcastError> {
         text_limit(&req.source_id, 200, "source_id")?;
         self.sources
@@ -205,6 +214,7 @@ impl Observers {
         // Invalidate old work even when the new checkpoint cannot launch another observer yet.
         if source.pending.as_ref().is_some_and(|brief| {
             brief.locale != locale
+                || brief.provider != provider
                 || !brief.snapshot.same_context(&snapshot)
                 || now >= brief.expires_at_ms
         }) {
@@ -219,6 +229,7 @@ impl Observers {
         }
         if source.last_snapshot.as_ref().is_some_and(|last| {
             source.last_locale.as_deref() == Some(locale)
+                && source.last_provider.as_deref() == Some(provider)
                 && last.project == snapshot.project
                 && (last.checkpoint_id == snapshot.checkpoint_id || last.same_context(&snapshot))
         }) {
@@ -239,12 +250,14 @@ impl Observers {
         let brief = ObserverBrief {
             observer_id: new_id(),
             source_id: req.source_id,
+            provider: provider.into(),
             locale: locale.into(),
             snapshot: snapshot.clone(),
             expires_at_ms: now.saturating_add(LEASE_MS),
         };
         source.last_started = Some(now);
         source.last_locale = Some(locale.into());
+        source.last_provider = Some(provider.into());
         source.last_snapshot = Some(snapshot);
         source.pending = Some(brief.clone());
         Ok(CheckpointResult {
@@ -286,7 +299,7 @@ impl Bridge {
                 brief: None,
             });
         }
-        observers.checkpoint_for_locale(req, now, gate.allowed, &gate.locale)
+        observers.checkpoint_for_locale(req, now, gate.allowed, &gate.locale, &gate.provider)
     }
 
     pub fn complete_observation(
@@ -310,6 +323,12 @@ impl Bridge {
                     bubble_id: None,
                 });
             };
+            if req.provider.as_deref().unwrap_or("codex") != brief.provider {
+                return Ok(ObserverResult {
+                    status: "stale".into(),
+                    bubble_id: None,
+                });
+            }
             let Some(thought) = req.thought else {
                 return Ok(ObserverResult {
                     status: "silent".into(),
@@ -458,7 +477,7 @@ mod tests {
             .brief
             .unwrap();
         let result = bridge
-            .complete_observation(ObserverCompletion {
+            .complete_observation(ObserverCompletion { provider: None,
                 observer_id: brief.observer_id,
                 thought: None,
             })
@@ -472,7 +491,7 @@ mod tests {
             .unwrap();
         let id = brief.observer_id.clone();
         let result = bridge
-            .complete_observation(ObserverCompletion {
+            .complete_observation(ObserverCompletion { provider: None,
                 observer_id: id.clone(),
                 thought: Some(ObserverThought {
                     tease: "A free hour can stay free.".into(),
@@ -489,7 +508,7 @@ mod tests {
         );
         assert_eq!(
             bridge
-                .complete_observation(ObserverCompletion {
+                .complete_observation(ObserverCompletion { provider: None,
                     observer_id: id,
                     thought: None
                 })
@@ -509,7 +528,7 @@ mod tests {
             .unwrap();
         bridge.set_paused(true).unwrap();
         let result = bridge
-            .complete_observation(ObserverCompletion {
+            .complete_observation(ObserverCompletion { provider: None,
                 observer_id: brief.observer_id,
                 thought: Some(ObserverThought {
                     tease: "Leave the buffer open.".into(),
@@ -532,7 +551,7 @@ mod tests {
         assert_eq!(bridge.checkpoint(next).unwrap().status, "cooldown");
         assert_eq!(
             bridge
-                .complete_observation(ObserverCompletion {
+                .complete_observation(ObserverCompletion { provider: None,
                     observer_id: brief.observer_id,
                     thought: None
                 })
@@ -543,7 +562,7 @@ mod tests {
         let (restarted, _) = crate::tests::bridge();
         assert_eq!(
             restarted
-                .complete_observation(ObserverCompletion {
+                .complete_observation(ObserverCompletion { provider: None,
                     observer_id: "old-ticket".into(),
                     thought: None
                 })
@@ -581,7 +600,7 @@ mod tests {
         assert!(off.policy_revision > first_rev);
         assert_eq!(
             bridge
-                .complete_observation(ObserverCompletion {
+                .complete_observation(ObserverCompletion { provider: None,
                     observer_id: brief.observer_id.clone(),
                     thought: Some(ObserverThought {
                         tease: "A free hour can stay free.".into(),
@@ -597,7 +616,7 @@ mod tests {
         bridge.set_observer_enabled(true).unwrap();
         assert_eq!(
             bridge
-                .complete_observation(ObserverCompletion {
+                .complete_observation(ObserverCompletion { provider: None,
                     observer_id: brief.observer_id,
                     thought: None,
                 })
@@ -612,6 +631,44 @@ mod tests {
                 .status,
             "duplicate"
         );
+    }
+
+    #[test]
+    fn changing_provider_invalidates_old_ticket_and_reissues_after_cooldown() {
+        let (bridge, _) = observing();
+        let first = bridge.checkpoint(checkpoint("a", "Lunch resolved")).unwrap().brief.unwrap();
+        assert_eq!(first.provider, "codex");
+        let revised = bridge.set_observer_provider("claude").unwrap();
+        assert_eq!(revised.provider, "claude");
+        assert_eq!(bridge.complete_observation(ObserverCompletion { provider: None,
+            observer_id: first.observer_id,
+            thought: None,
+        }).unwrap().status, "stale");
+        assert!(bridge.set_observer_provider("auto").is_err());
+        let claude_brief = bridge.checkpoint(checkpoint("new-source", "Lunch resolved"))
+            .unwrap().brief.unwrap();
+        assert_eq!(claude_brief.provider, "claude");
+        assert_eq!(bridge.complete_observation(ObserverCompletion { provider: None,
+            observer_id: claude_brief.observer_id,
+            thought: None,
+        }).unwrap().status, "stale");
+        let claude_brief = bridge.checkpoint(checkpoint("another-source", "Lunch resolved"))
+            .unwrap().brief.unwrap();
+        assert_eq!(bridge.complete_observation(ObserverCompletion {
+            provider: Some("claude".into()),
+            observer_id: claude_brief.observer_id,
+            thought: None,
+        }).unwrap().status, "silent");
+
+        let mut gate = Observers::default();
+        let first = gate.checkpoint_for_locale(checkpoint("a", "Lunch resolved"), 0, true, "zh-CN", "codex")
+            .unwrap().brief.unwrap();
+        assert_eq!(gate.checkpoint_for_locale(checkpoint("a", "Lunch resolved"), 1, true, "zh-CN", "claude")
+            .unwrap().status, "cooldown");
+        assert!(gate.take(&first.observer_id, 2).is_none());
+        let next = gate.checkpoint_for_locale(checkpoint("a", "Lunch resolved"), COOLDOWN_MS, true, "zh-CN", "claude")
+            .unwrap().brief.unwrap();
+        assert_eq!(next.provider, "claude");
     }
 
     #[test]
@@ -635,7 +692,7 @@ mod tests {
         );
         assert_eq!(
             bridge
-                .complete_observation(ObserverCompletion {
+                .complete_observation(ObserverCompletion { provider: None,
                     observer_id: brief.observer_id,
                     thought: None,
                 })
@@ -713,7 +770,7 @@ mod tests {
         assert!(status.policy_revision > revision);
         assert_eq!(
             bridge
-                .complete_observation(ObserverCompletion {
+                .complete_observation(ObserverCompletion { provider: None,
                     observer_id: zh.observer_id,
                     thought: Some(ObserverThought {
                         tease: "这条旧中文票不应落地".into(),
@@ -756,7 +813,7 @@ mod tests {
         if let Some(brief) = issued.brief {
             assert_eq!(
                 bridge
-                    .complete_observation(ObserverCompletion {
+                    .complete_observation(ObserverCompletion { provider: None,
                         observer_id: brief.observer_id,
                         thought: None,
                     })
@@ -786,7 +843,7 @@ mod tests {
         let ready = start.clone();
         let complete = std::thread::spawn(move || {
             ready.wait();
-            b1.complete_observation(ObserverCompletion {
+            b1.complete_observation(ObserverCompletion { provider: None,
                 observer_id: id,
                 thought: Some(ObserverThought {
                     tease: "A free hour can stay free.".into(),
@@ -806,7 +863,7 @@ mod tests {
         assert!(finished.status == "stale" || finished.status == "accepted" || finished.status == "not_shown");
         assert_eq!(
             bridge
-                .complete_observation(ObserverCompletion {
+                .complete_observation(ObserverCompletion { provider: None,
                     observer_id: brief.observer_id.clone(),
                     thought: Some(ObserverThought {
                         tease: "A free hour can stay free.".into(),

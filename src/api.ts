@@ -250,6 +250,10 @@ export async function deleteCanvasItem(item_id: string, expected_revision: numbe
   return read(await post("/api/canvas", { item_id, expected_revision }, "DELETE"));
 }
 
+export async function setCanvasDeleteLock(current: CanvasRead[], locked: boolean): Promise<BoardSnapshot> {
+  return read(await post("/api/canvas/delete-lock", { current, locked }));
+}
+
 export async function restoreCanvasItem(item_id: string, expected_revision: number): Promise<BoardSnapshot> {
   return read(await post("/api/canvas/restore", { item_id, expected_revision }));
 }
@@ -341,4 +345,8 @@ export async function fetchObserverStatus(): Promise<ObserverStatus> {
 
 export async function setObserverEnabled(enabled: boolean): Promise<ObserverStatus> {
   return read(await post("/api/observer/settings", { enabled }));
+}
+
+export async function setObserverProvider(provider: ObserverStatus["provider"]): Promise<ObserverStatus> {
+  return read(await post("/api/observer/provider", { provider }));
 }

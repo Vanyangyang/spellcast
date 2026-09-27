@@ -365,6 +365,7 @@ function titleForObject(board: BoardSnapshot, objectId: string) {
     if (content.type === "node") return board.nodes.find((item) => item.id === contentId)?.title || "";
     return board.replies?.find((item) => item.id === contentId)?.title || "";
   }
+  if (content.type === "source_table") return content.table.title;
   if ("title" in content) return content.title || (content.type === "text" ? textLabel(content.text) : "");
   return "";
 }
@@ -515,6 +516,12 @@ export function overviewItemFromObject(
       origin,
       revision: reply?.revision ?? object.content_revision,
     };
+  }
+  if (object.content.type === "source_table") {
+    const table = object.content.table;
+    return { objectId: object.id, contentType: "source_table", title: table.title,
+      excerpt: excerpt(table.rows.map(row => row.join(" · ")).join("\n")), background: `${table.path} · sha ${table.hash.slice(0, 8)}`,
+      project: overviewProject(undefined, object.source_id, bindings), origin, revision: object.content_revision };
   }
   const title = "title" in object.content ? object.content.title : object.id;
   const text = "text" in object.content ? object.content.text : "";

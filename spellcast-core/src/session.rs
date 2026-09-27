@@ -31,8 +31,10 @@ impl Session {
             format!("你改成了{}。碎片还在，只是换了一种看的方式。", form.label());
     }
 
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self) -> Result<(), SpellcastError> {
+        self.ensure_canvas_clearable()?;
         self.board = BoardSnapshot::default();
+        Ok(())
     }
 
     pub fn add_node(&mut self, draft: NodeDraft) -> BoardNode {
@@ -147,6 +149,9 @@ impl Session {
     }
 
     pub fn remove_node(&mut self, id: &str) -> Result<(), SpellcastError> {
+        if let Some(object) = self.board.canvas.object_for(&crate::canvas::CanvasContent::Node { id: id.into() }) {
+            self.ensure_canvas_unlocked(&object.id)?;
+        }
         let before = self.board.nodes.len();
         self.board.nodes.retain(|n| n.id != id);
         if self.board.nodes.len() == before {
@@ -169,7 +174,7 @@ impl Session {
             ));
         }
         if payload.replace {
-            self.board = BoardSnapshot::default();
+            self.reset()?;
         }
         for node in &mut payload.nodes {
             if node.source_id.is_none() {

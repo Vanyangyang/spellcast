@@ -35,6 +35,7 @@ pub fn router(bridge: Shared) -> Router {
     let allowed_origins = TRUSTED_ORIGINS.map(HeaderValue::from_static);
     let mcp_service = mcp::service(bridge.clone());
     Router::new()
+        .merge(crate::project_api::router())
         .route("/api/health", get(health))
         .route("/api/forms", get(list_forms))
         .route("/api/board", get(board).delete(reset))
@@ -42,6 +43,7 @@ pub fn router(bridge: Shared) -> Router {
         .route("/api/canvas", post(patch_canvas).delete(delete_canvas_item))
         .route("/api/canvas/restore", post(restore_canvas_item))
         .route("/api/canvas/content", axum::routing::delete(delete_canvas_content))
+        .route("/api/canvas/delete-lock", post(set_canvas_delete_lock))
         // A fixed inline image can be up to 2 MB before base64 encoding and may
         // appear both as the source object and as its reference in one transaction.
         .route("/api/canvas/batch", post(canvas_batch).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
@@ -63,6 +65,7 @@ pub fn router(bridge: Shared) -> Router {
         .route("/api/paused", post(set_paused))
         .route("/api/observer/status", get(observer_status))
         .route("/api/observer/settings", post(set_observer_settings))
+        .route("/api/observer/provider", post(set_observer_provider))
         .route("/api/focus", post(focus))
         .route("/api/events", get(events))
         .route("/api/present", post(present))
@@ -251,6 +254,7 @@ async fn health(State(b): State<Shared>) -> Json<Value> {
         "sources": st.sources,
         "paused": st.paused,
         "observer_enabled": observer.enabled,
+        "observer_provider": observer.provider,
         "observer_policy_revision": observer.policy_revision,
         "observer_allowed": observer.allowed,
         "observer_reason": observer.reason,
@@ -262,6 +266,7 @@ fn observer_payload(b: &Bridge) -> Value {
     let observer = b.observer_status();
     json!({
         "enabled": observer.enabled,
+        "provider": observer.provider,
         "paused": observer.paused,
         "allowed": observer.allowed,
         "reason": observer.reason,
@@ -308,6 +313,16 @@ async fn restore_canvas_item(State(b): State<Shared>, Json(req): Json<CanvasDele
 
 async fn delete_canvas_content(State(b): State<Shared>, Json(req): Json<CanvasDelete>) -> Result<Json<BoardSnapshot>, Fail> {
     b.delete_canvas_content(&req.item_id, req.expected_revision, req.current).map(Json).map_err(bad)
+}
+
+#[derive(serde::Deserialize)]
+struct CanvasDeleteLock {
+    current: Vec<spellcast_core::CanvasRead>,
+    locked: bool,
+}
+
+async fn set_canvas_delete_lock(State(b): State<Shared>, Json(req): Json<CanvasDeleteLock>) -> Result<Json<BoardSnapshot>, Fail> {
+    b.set_canvas_delete_lock(req.current, req.locked).map(Json).map_err(bad)
 }
 
 async fn canvas_batch(State(b): State<Shared>, Json(req): Json<spellcast_core::CanvasBatchRequest>) -> Result<Json<crate::canvas::CanvasOutcome>, Fail> {
@@ -451,6 +466,20 @@ async fn set_observer_settings(
     Json(req): Json<ObserverSettingsRequest>,
 ) -> Result<Json<Value>, Fail> {
     b.set_observer_enabled(req.enabled)
+        .map(|status| Json(json!(status)))
+        .map_err(bad)
+}
+
+#[derive(Deserialize)]
+struct ObserverProviderRequest {
+    provider: String,
+}
+
+async fn set_observer_provider(
+    State(b): State<Shared>,
+    Json(req): Json<ObserverProviderRequest>,
+) -> Result<Json<Value>, Fail> {
+    b.set_observer_provider(&req.provider)
         .map(|status| Json(json!(status)))
         .map_err(bad)
 }
@@ -683,6 +712,38 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn delete_lock_blocks_http_and_native_mcp_removal() {
+        let bridge = Arc::new(Bridge::new(crate::Headless, 0));
+        let node = bridge.add_node(NodeDraft { title: "locked fixture".into(), ..Default::default() }).unwrap();
+        let snapshot = bridge.board();
+        let object = snapshot.canvas.object_for(&spellcast_core::CanvasContent::Node { id: node.id.clone() }).unwrap();
+        let id = object.id.clone();
+        let app = router(bridge.clone());
+        let res = app.clone().oneshot(Request::post("/api/canvas/delete-lock").header("content-type", "application/json")
+            .body(Body::from(json!({"current":[{"kind":"presentation","id":id,"revision":1}],"locked":true}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let locked: Value = serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(locked["canvas"]["items"][0]["delete_locked"], true);
+        let revision = locked["canvas"]["items"][0]["revision"].as_u64().unwrap();
+        for (url, body) in [
+            ("/api/canvas".to_string(), json!({"item_id":id,"expected_revision":revision})),
+            ("/api/canvas/content".into(), json!({"item_id":id,"expected_revision":0})),
+            (format!("/api/nodes/{}", node.id), json!({})),
+            ("/api/board".into(), json!({})),
+        ] {
+            let res = app.clone().oneshot(Request::delete(url).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+            let error: Value = serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+            assert!(error["error"].as_str().unwrap().contains("锁定"), "{error}");
+        }
+        rpc(&app, 1, "initialize", json!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"Codex","version":"test"}})).await;
+        let cleared = rpc(&app, 2, "tools/call", json!({"name":"spellcast_clear","arguments":{}})).await;
+        assert!(mcp_call_failed(&cleared), "{cleared}");
+        assert!(bridge.board().canvas.object(&id).is_some());
+        assert_eq!(bridge.board().nodes[0].id, node.id);
     }
 
     #[tokio::test]
@@ -1183,6 +1244,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(body["enabled"], false);
+        assert_eq!(body["provider"], "codex");
         assert_eq!(body["allowed"], false);
         assert_eq!(body["reason"], "disabled");
         assert_eq!(body["policy_revision"], 0);
@@ -1198,6 +1260,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(health_body["observer_enabled"], false);
+        assert_eq!(health_body["observer_provider"], "codex");
         assert_eq!(health_body["ui_locale"], "zh-CN");
 
         let bad = app
@@ -1216,6 +1279,23 @@ mod tests {
             bad.status()
         );
         assert!(!bridge.observer_status().enabled);
+
+        let provider = app.clone().oneshot(
+            Request::post("/api/observer/provider")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "provider": "claude" }).to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(provider.status(), StatusCode::OK);
+        assert_eq!(bridge.observer_status().provider, "claude");
+        let invalid_provider = app.clone().oneshot(
+            Request::post("/api/observer/provider")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "provider": "auto" }).to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        assert!(invalid_provider.status().is_client_error());
+        assert_eq!(bridge.observer_status().provider, "claude");
 
         let on = app
             .clone()

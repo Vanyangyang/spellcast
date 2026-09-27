@@ -23,6 +23,9 @@ Spellcast gives the user's existing Agent two surfaces: sparse desktop bubbles a
 - Atomic Canvas objects, versions, proposals, and selected source: [references/canvas.md](references/canvas.md)
 - Interactive works, artifacts, and dataflow: [references/works.md](references/works.md)
 - Binding, queued/read/replied/handled receipts, ack, and anchors: [references/feedback.md](references/feedback.md)
+- Project development records, immutable history, authorized task handoff and portable export: [references/project-records.md](references/project-records.md)
+- A delivered 游戏开发 goal (`project_context.kind` is `goal` or `proposal_return`): answer only with `put_proposal`, never direct planning writes; read [references/project-records.md](references/project-records.md) first.
+- A delivered document selection question (`project_context.kind` is `document_question`): answer with an attributed `put_record` review comment linked to the exact goal and source, then ack; read [references/project-records.md](references/project-records.md) first. Do not alter the source document or canonical planning design.
 
 ## Memory
 

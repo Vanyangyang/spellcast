@@ -15,6 +15,50 @@ pub enum CanvasShape {
     Ellipse,
 }
 
+/// A versioned, read-only table captured from a connected project source.
+/// The project/path/heading identify the source; hash identifies this snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct CanvasSourceTable {
+    pub title: String,
+    pub project_id: String,
+    pub root: String,
+    pub path: String,
+    pub heading: String,
+    pub line: usize,
+    pub hash: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+impl CanvasSourceTable {
+    pub fn same_source(&self, other: &Self) -> bool {
+        self.project_id == other.project_id && self.root == other.root && self.path == other.path && self.heading == other.heading
+    }
+
+    fn validate(&self) -> Result<(), SpellcastError> {
+        validate_id(&self.project_id)?;
+        check(!self.root.trim().is_empty() && self.root.len() <= 2048 && !self.root.chars().any(char::is_control), "表格来源仓库无效。")?;
+        chars_at_most(&self.title, 160, "表格标题最多 160 字。")?;
+        check(!self.title.trim().is_empty(), "表格需要标题。")?;
+        check(!self.path.is_empty() && self.path.len() <= 2048
+            && !self.path.starts_with('/') && !self.path.contains('\\')
+            && self.path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+            && !self.path.chars().any(char::is_control), "表格来源路径无效。")?;
+        chars_at_most(&self.heading, 160, "表格来源章节太长。")?;
+        check(!self.heading.trim().is_empty() && self.line > 0, "表格来源章节或行号无效。")?;
+        check(self.hash.len() == 64 && self.hash.bytes().all(|byte| byte.is_ascii_hexdigit()), "表格来源哈希无效。")?;
+        check(!self.columns.is_empty() && self.columns.len() <= 12 && !self.rows.is_empty() && self.rows.len() <= 100
+            && self.rows.iter().all(|row| row.len() == self.columns.len()), "表格行列无效。")?;
+        let cells = self.columns.iter().chain(self.rows.iter().flatten());
+        let mut total = 0usize;
+        for cell in cells {
+            chars_at_most(cell, 8_000, "表格单元格最多 8000 字。")?;
+            total += cell.chars().count();
+        }
+        check(total <= 64_000, "表格内容最多 64000 字。")
+    }
+}
+
 /// Legacy `node`/`reply` variants keep their body in the board; native variants carry it here.
 /// The wire form of legacy variants is unchanged: `{"type":"node","id":"…"}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -25,6 +69,15 @@ pub enum CanvasContent {
     },
     Reply {
         id: String,
+    },
+    /// A live reference to the canonical project record. Its fields are never cached here.
+    WorkRecord {
+        project_id: String,
+        record_id: String,
+    },
+    /// Source snapshot for reading and annotation. It is refreshed explicitly.
+    SourceTable {
+        table: CanvasSourceTable,
     },
     Text {
         #[serde(default)]
@@ -150,6 +203,8 @@ impl CanvasContent {
         match self {
             Self::Node { .. } => "node",
             Self::Reply { .. } => "reply",
+            Self::WorkRecord { .. } => "work_record",
+            Self::SourceTable { .. } => "source_table",
             Self::Text { .. } => "text",
             Self::Image { .. } => "image",
             Self::Shape { .. } => "shape",
@@ -172,6 +227,14 @@ impl CanvasContent {
         const TITLE: &str = "标题最多 160 字。";
         match self {
             Self::Node { id } | Self::Reply { id } => validate_id(id),
+            Self::WorkRecord {
+                project_id,
+                record_id,
+            } => {
+                validate_id(project_id)?;
+                validate_id(record_id)
+            }
+            Self::SourceTable { table } => table.validate(),
             Self::Text { title, text } => {
                 chars_at_most(title, 160, TITLE)?;
                 check(!text.trim().is_empty(), "文字对象需要有正文。")?;
@@ -196,6 +259,8 @@ impl CanvasContent {
     pub(crate) fn default_size(&self) -> (f64, f64) {
         match self {
             Self::Reply { .. } => (640.0, 560.0),
+            Self::WorkRecord { .. } => (480.0, 300.0),
+            Self::SourceTable { .. } => (760.0, 360.0),
             Self::Image { .. } => (480.0, 360.0),
             Self::Shape { .. } => (240.0, 160.0),
             Self::Node { .. } | Self::Text { .. } => (380.0, 300.0),
@@ -330,6 +395,9 @@ pub struct CanvasPlacement {
     pub z: i32,
     #[serde(default)]
     pub removed: bool,
+    /// User-controlled removal protection, changed only through the explicit lock entry point.
+    #[serde(default)]
+    pub delete_locked: bool,
     #[serde(default)]
     pub appearance: CanvasAppearance,
     pub x: f64,
@@ -617,6 +685,7 @@ impl CanvasLayout {
                 revision: 1,
                 z: self.next_z(),
                 removed: false,
+                delete_locked: false,
                 appearance: CanvasAppearance::Plain,
                 x: 48.0,
                 y: 48.0,
@@ -653,6 +722,65 @@ impl CanvasLayout {
 }
 
 impl Session {
+    pub fn canvas_delete_locked(&self, object_id: &str) -> bool {
+        self.board.canvas.resolve(object_id)
+            .and_then(|object| self.board.canvas.placement(&object.id))
+            .is_some_and(|item| item.delete_locked)
+    }
+
+    pub fn ensure_canvas_unlocked(&self, object_id: &str) -> Result<(), SpellcastError> {
+        check(!self.canvas_delete_locked(object_id), "此内容已锁定，请先明确解锁，再移除或删除。")
+    }
+
+    pub fn ensure_canvas_clearable(&self) -> Result<(), SpellcastError> {
+        check(!self.board.canvas.items.iter().any(|item| item.delete_locked),
+            "画布中有已锁定内容，请先解锁，再清空或替换画布。")
+    }
+
+    /// Last line of protection for legacy replacements and future bridge write paths.
+    /// Unlocking alone is allowed; unlocking and deleting in one transaction is not.
+    pub fn ensure_delete_locks_preserved(&self, next: &Session) -> Result<(), SpellcastError> {
+        for item in self.board.canvas.items.iter().filter(|item| item.delete_locked) {
+            let Some(object) = self.board.canvas.object(&item.item_id) else { continue };
+            let kept = next.board.canvas.object(&object.id)
+                .zip(next.board.canvas.placement(&object.id));
+            let Some((next_object, next_item)) = kept else {
+                return Err(SpellcastError::user("此内容已锁定，请先明确解锁，再移除或删除。"));
+            };
+            check(item.removed || !next_item.removed, "此内容已锁定，请先明确解锁，再移除或删除。")?;
+            if object.content.is_legacy() {
+                check(object.content == next_object.content, "已锁定对象的内容引用不能被替换；请先解锁。")?;
+            }
+            if let CanvasContent::Reply { id } = &object.content {
+                if let Some(reply) = self.board.replies.iter().find(|reply| &reply.id == id) {
+                    let next_reply = next.board.replies.iter().find(|reply| &reply.id == id);
+                    check(next_reply.is_some_and(|next| reply.blocks.iter().all(|block|
+                        next.blocks.iter().any(|candidate| candidate.id() == block.id()))),
+                        "这张回复卡已锁定，请先解锁，再移除其中的内容块。")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn set_canvas_delete_lock(&mut self, current: &[CanvasRead], locked: bool) -> Result<(), SpellcastError> {
+        check(!current.is_empty() && current.len() <= 64, "一次可锁定或解锁 1–64 个画布对象。")?;
+        let mut ids = HashSet::new();
+        for read in current {
+            check(read.kind == CanvasTargetKind::Presentation && ids.insert(read.id.clone()), "锁定需要不重复的对象呈现版本。")?;
+            let item = self.board.canvas.placement(&read.id).ok_or_else(|| SpellcastError::user("画布呈现不存在。"))?;
+            check(item.revision == read.revision, "对象已更新，请重新读取后再锁定或解锁。")?;
+        }
+        let mut changed = false;
+        for item in self.board.canvas.items.iter_mut().filter(|item| ids.contains(&item.item_id)) {
+            if item.delete_locked != locked {
+                item.delete_locked = locked; item.revision += 1; changed = true;
+            }
+        }
+        if changed { self.board.canvas.revision += 1; }
+        Ok(())
+    }
+
     /// Resolve a canonical object target and reject contradictory compatibility aliases.
     pub fn canvas_target(
         &self,
@@ -713,6 +841,7 @@ impl Session {
         expected_revision: u64,
         removed: bool,
     ) -> Result<(), SpellcastError> {
+        if removed { self.ensure_canvas_unlocked(item_id)?; }
         let object = self
             .board
             .canvas
@@ -754,6 +883,7 @@ impl Session {
         expected_revision: u64,
         current: &[CanvasRead],
     ) -> Result<(), SpellcastError> {
+        self.ensure_canvas_unlocked(object_id)?;
         let object = self
             .board
             .canvas
@@ -852,6 +982,8 @@ impl Session {
             }
             item.item_id = object.id.clone();
             // This entry point is the user's; a real change marks the presentation as theirs.
+            // Omitted/forged lock fields in an ordinary layout save never unlock content.
+            item.delete_locked = current.delete_locked;
             item.user_modified = current.user_modified;
             if &item != current {
                 item.revision += 1;

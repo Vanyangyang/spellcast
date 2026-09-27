@@ -1,6 +1,7 @@
 import "./styles.css";
 import "./board-workspace.css";
 import "./setup.css";
+import "./fonts.css";
 import {
   createNode,
   actOnCanvasBlock,
@@ -9,6 +10,7 @@ import {
 
   deleteNode,
   deleteCanvasItem,
+  setCanvasDeleteLock,
   restoreCanvasItem,
   completeSetupInstall,
   completeSetupStatus,
@@ -25,6 +27,7 @@ import {
   setForm as setFormApi,
   setSurface,
   setObserverEnabled,
+  setObserverProvider,
   fetchObserverStatus,
   unkeepBubble,
   patchBoardReply,
@@ -42,6 +45,8 @@ import { resolveNavObjectId, textLabel, type ContentNavTarget } from "./content-
 import "./canvas-studio.css";
 import "./theme.css";
 import { mountTheme } from "./theme";
+import { mountDisplayTarget } from "./display-target";
+import "./top-bar";
 import { canvasTypography, onCanvasTypographyChange, resetCanvasTypography, setCanvasFontPercent, type CanvasFontKind, type CanvasTypography } from "./canvas-typography";
 import { ct } from "./i18n/canvas";
 import { replyDrafts, draftKey, contentKey, type DraftRecord } from "./reply-drafts";
@@ -70,8 +75,41 @@ import type {
 } from "./types";
 import { FORMS, formLabel, formReason, kindLabel, KINDS, weightLabel, WEIGHTS } from "./types";
 import { createSetupController } from "./complete-setup-ui";
+import type { ProjectWorkspace } from "./project-workspace";
+import { ensureGameLoopOnCanvas } from "./project-game-canvas";
+import { pt } from "./i18n/projects";
+// Night Desk visual layer: last static stylesheet so it settles shared roles; remove to roll back.
+import "./night-desk.css";
 
 mountTheme();
+
+let projectWorkspace: Promise<ProjectWorkspace> | undefined;
+function gameWorkspace() {
+  projectWorkspace ??= import("./project-workspace")
+    .then(module => module.createProjectWorkspace({ onChanged: () => { void refreshBoard(); }, onOpenSourceTable: ensureGameLoopOnCanvas }))
+    .catch(error => { projectWorkspace = undefined; throw error; });
+  return projectWorkspace;
+}
+const projectsOpen = document.querySelector<HTMLButtonElement>("#projects-open")!;
+function paintProjectEntry() { projectsOpen.textContent = pt("gameDevelopment"); }
+paintProjectEntry();
+onLocale(paintProjectEntry);
+projectsOpen.addEventListener("click", () => { void (async () => { await setMode("focus"); await (await gameWorkspace()).open(); })().catch(error => flash(String(error))); });
+window.addEventListener("spellcast:open-project-record", event => {
+  const { projectId, recordId } = (event as CustomEvent<{projectId:string;recordId:string}>).detail;
+  void gameWorkspace().then(workspace => workspace.open(projectId, recordId)).catch(error => flash(String(error)));
+});
+window.addEventListener("spellcast:locate-project-record", event => {
+  const { projectId, recordId } = (event as CustomEvent<{projectId:string;recordId:string}>).detail;
+  void gameWorkspace().then(workspace => {
+    workspace.close();
+    return navigateContent({ objectId: `work-${projectId}-${recordId}` });
+  }).catch(error => flash(String(error)));
+});
+window.addEventListener("spellcast:locate-canvas-object", event => {
+  const { objectId } = (event as CustomEvent<{ objectId: string }>).detail;
+  void (async () => { await refreshBoard(); await navigateContent({ objectId }); })().catch(error => flash(String(error)));
+});
 
 const plane = document.querySelector<HTMLElement>("#plane")!;
 const spatial = document.querySelector<HTMLCanvasElement>("#spatial")!;
@@ -154,6 +192,7 @@ let sending = false;
 let bridgeStatus: BridgeStatus | null = null;
 let observerKnown: {
   enabled: boolean;
+  provider: "codex" | "claude";
   paused: boolean;
   allowed?: boolean;
   reason?: string;
@@ -222,6 +261,7 @@ const replyBoard = mountCanvas(replyHost, {
   },
   onCreate: () => createNode({ title: ct("newNote"), body: "", kind: "idea", weight: "note" }),
   onDelete: async (itemId, expectedRevision) => { board = await deleteCanvasItem(itemId, expectedRevision); return board; },
+  onDeleteLock: async (current, locked) => { board = await setCanvasDeleteLock(current, locked); return board; },
   onRestore: async (itemId, expectedRevision) => { board = await restoreCanvasItem(itemId, expectedRevision); return board; },
   onLayout: patchCanvas,
   onBatch: async request => {
@@ -578,6 +618,7 @@ function paintConnection() {
 function applyObserverSlice(
   slice: {
     enabled: boolean;
+    provider: "codex" | "claude";
     paused: boolean;
     allowed?: boolean;
     reason?: string;
@@ -589,6 +630,7 @@ function applyObserverSlice(
   if (observerKnown && rev < observerKnown.policy_revision) {
     if (bridgeStatus) {
       bridgeStatus.observer_enabled = observerKnown.enabled;
+      bridgeStatus.observer_provider = observerKnown.provider;
       bridgeStatus.observer_policy_revision = observerKnown.policy_revision;
       bridgeStatus.observer_allowed = observerKnown.allowed;
       bridgeStatus.observer_reason = observerKnown.reason;
@@ -606,12 +648,14 @@ function applyObserverSlice(
       calls: 0,
       paused: slice.paused,
       observer_enabled: slice.enabled,
+      observer_provider: slice.provider,
       observer_policy_revision: rev,
       observer_allowed: slice.allowed,
       observer_reason: slice.reason,
     };
   } else {
     bridgeStatus.observer_enabled = slice.enabled;
+    bridgeStatus.observer_provider = slice.provider;
     bridgeStatus.observer_policy_revision = rev;
     bridgeStatus.observer_allowed = slice.allowed;
     bridgeStatus.observer_reason = slice.reason;
@@ -628,6 +672,7 @@ async function refreshStatus() {
     bridgeStatus = health;
     applyObserverSlice({
       enabled: Boolean(health.observer_enabled),
+      provider: health.observer_provider === "claude" ? "claude" : "codex",
       paused: Boolean(health.paused),
       allowed: health.observer_allowed,
       reason: health.observer_reason,
@@ -749,6 +794,9 @@ async function boot() {
   const topMore = document.querySelector<HTMLDetailsElement>(".top-more");
   window.addEventListener("resize", syncTopMore);
   window.matchMedia("(max-width: 1100px)").addEventListener("change", syncTopMore);
+  // Labels change width without a resize: the project name, pause/resume, the reply count, web fonts.
+  const topWidths = new ResizeObserver(() => syncTopMore());
+  for (const node of document.querySelectorAll(".top .brand, #projects-open, .top-tools")) topWidths.observe(node);
   topMore?.addEventListener("toggle", () => {
     if (!topMore.classList.contains("is-compact") && !topMore.open) topMore.open = true;
   });
@@ -758,13 +806,46 @@ async function boot() {
     topMore.open = false;
     topMore.querySelector("summary")?.focus();
   });
+  // Keep the native details state in sync with its wide layout, so its content is also exposed
+  // to assistive technology. Remember a reader's narrow-window choice across width changes.
+  const observerDetails = document.querySelector<HTMLDetailsElement>("#agent-observer-details");
+  const observerSummary = observerDetails?.querySelector<HTMLElement>("summary");
+  const wideObserver = window.matchMedia("(min-width: 1101px)");
+  let narrowObserverOpen = false;
+  let observerSummaryFocused = false;
+  if (observerDetails) {
+    observerSummary?.addEventListener("focus", () => { observerSummaryFocused = true; });
+    observerSummary?.addEventListener("blur", () => {
+      // Hiding the summary at the wide breakpoint can blur it before the media-query callback.
+      if (!wideObserver.matches) observerSummaryFocused = false;
+    });
+    if (wideObserver.matches) observerDetails.open = true;
+    wideObserver.addEventListener("change", event => {
+      if (event.matches) {
+        narrowObserverOpen = observerDetails.open;
+        if (observerSummaryFocused || document.activeElement === observerSummary) document.querySelector<HTMLElement>("#agent-observer-enabled")?.focus();
+        observerSummaryFocused = false;
+        observerDetails.open = true;
+      } else {
+        observerDetails.open = narrowObserverOpen;
+      }
+    });
+  }
+  // A folded menu closes like other menus: a click elsewhere, or keyboard focus moving past it.
+  document.addEventListener("pointerdown", event => {
+    if (topMore?.classList.contains("is-compact") && topMore.open && !topMore.contains(event.target as Node)) topMore.open = false;
+  });
+  topMore?.addEventListener("focusout", event => {
+    const next = event.relatedTarget as Node | null;
+    if (next && topMore.classList.contains("is-compact") && topMore.open && !topMore.contains(next)) topMore.open = false;
+  });
   for (const id of ["settings-open", "memory-open", "feedback-open"]) {
     document.querySelector("#" + id)?.addEventListener("click", () => {
       if (topMore?.classList.contains("is-compact")) topMore.open = false;
     });
   }
   syncTopMore();
-  window.addEventListener("beforeunload", () => { chrome.disconnect(); replyBoard.destroy(); }, { once: true });
+  window.addEventListener("beforeunload", () => { chrome.disconnect(); topWidths.disconnect(); replyBoard.destroy(); }, { once: true });
 }
 
 document.querySelectorAll<HTMLButtonElement>("[data-client]").forEach((button) => {
@@ -826,7 +907,7 @@ function hideObserverErrors() {
   }
 }
 
-function showObserverError(trigger: HTMLInputElement, message: string) {
+function showObserverError(trigger: HTMLElement, message: string) {
   const error = trigger.closest(".agent-observer, .settings-observer")?.querySelector<HTMLElement>(".has-warning");
   if (!error) return;
   error.hidden = false;
@@ -843,6 +924,9 @@ function paintObserver() {
     if (!observerSaveInflight) box.checked = enabled;
     syncObserverControl(box);
   }
+  const provider = observerKnown?.provider ?? bridgeStatus?.observer_provider ?? "codex";
+  const selector = document.querySelector<HTMLSelectElement>("#settings-observer-provider");
+  if (selector && !observerSaveInflight) selector.value = provider;
 }
 
 async function saveObserverEnabled(event: Event) {
@@ -863,6 +947,7 @@ async function saveObserverEnabled(event: Event) {
     const status = await setObserverEnabled(next);
     applyObserverSlice({
       enabled: status.enabled,
+      provider: status.provider,
       paused: status.paused,
       allowed: status.allowed,
       reason: status.reason,
@@ -874,6 +959,7 @@ async function saveObserverEnabled(event: Event) {
       const real = await fetchObserverStatus();
       applyObserverSlice({
         enabled: real.enabled,
+        provider: real.provider,
         paused: real.paused,
         allowed: real.allowed,
         reason: real.reason,
@@ -889,8 +975,29 @@ async function saveObserverEnabled(event: Event) {
   }
 }
 
+async function saveObserverProvider(event: Event) {
+  const selector = event.currentTarget as HTMLSelectElement;
+  if (observerSaveInflight) { paintObserver(); return; }
+  observerSaveInflight = true;
+  selector.disabled = true;
+  hideObserverErrors();
+  try {
+    const status = await setObserverProvider(selector.value as "codex" | "claude");
+    applyObserverSlice({ ...status }, "save");
+  } catch (err) {
+    showObserverError(selector, err instanceof Error ? err.message : t("observer.error"));
+    try { applyObserverSlice(await fetchObserverStatus(), "refetch"); }
+    catch { /* keep observerKnown */ }
+  } finally {
+    observerSaveInflight = false;
+    selector.disabled = false;
+    paintObserver();
+  }
+}
+
 const settingsTabs = [...settings.querySelectorAll<HTMLButtonElement>("[data-settings-tab]")];
 const settingsPanels = [...settings.querySelectorAll<HTMLElement>(".settings-panel")];
+const displayTarget = mountDisplayTarget(settings.querySelector<HTMLElement>("#settings-panel-display")!);
 function selectSettingsTab(id: string, focus = false) {
   const selectedTab = settingsTabs.find(tab => tab.dataset.settingsTab === id);
   if (!selectedTab) return;
@@ -903,6 +1010,7 @@ function selectSettingsTab(id: string, focus = false) {
   const scrollArea = settings.querySelector<HTMLElement>(".settings-panels");
   if (scrollArea) scrollArea.scrollTop = 0;
   if (focus) selectedTab.focus();
+  if (id === "display") void displayTarget.refresh();
 }
 for (const [index, tab] of settingsTabs.entries()) {
   tab.addEventListener("click", () => selectSettingsTab(tab.dataset.settingsTab!));
@@ -920,6 +1028,7 @@ for (const [index, tab] of settingsTabs.entries()) {
 function openSettings(tab = "connection") {
   const active = document.activeElement as HTMLElement | null;
   settingsTrigger = active?.closest("button, summary") ?? active;
+  displayTarget.reset();
   selectSettingsTab(tab);
   settings.hidden = false;
   if (!settings.open) settings.showModal();
@@ -930,6 +1039,7 @@ document.addEventListener("spellcast-open-settings", () => openSettings("appeara
 for (const box of observerToggles()) {
   box.addEventListener("change", event => void saveObserverEnabled(event));
 }
+document.querySelector("#settings-observer-provider")?.addEventListener("change", event => void saveObserverProvider(event));
 document.querySelector("#settings-open")?.addEventListener("click", () => openSettings());
 document.querySelector("#settings-close")?.addEventListener("click", () => closeSettings());
 settings.addEventListener("click", (event) => {
@@ -1069,13 +1179,33 @@ function paintForms() {
 function syncTopMore() {
   const more = document.querySelector<HTMLDetailsElement>(".top-more");
   if (!more) return;
-  const compact = document.body.classList.contains("mode-focus")
-    && document.body.classList.contains("view-replies")
-    && window.matchMedia("(max-width: 1100px)").matches;
   const wasCompact = more.classList.contains("is-compact");
+  const canvas = document.body.classList.contains("mode-focus") && document.body.classList.contains("view-replies");
+  // Idea layouts keep their entries inline: that bar gives its form choices a row of their own.
+  const ideas = document.body.classList.contains("mode-focus") && !canvas;
+  const compact = (canvas && window.matchMedia("(max-width: 1100px)").matches) || (!ideas && topToolsWrap(more));
   more.classList.toggle("is-compact", compact);
   if (!compact) more.open = true;
   else if (!wasCompact) more.open = false;
+}
+
+/** Whether the top-bar controls would drop below the brand's row with Settings, Memory and Replies
+ *  laid out inline (longer languages, a long project name). Always measured in the inline layout,
+ *  within one task so nothing paints in between, so the answer never depends on the previous one. */
+function topToolsWrap(more: HTMLDetailsElement) {
+  const brand = document.querySelector<HTMLElement>(".top .brand");
+  if (!brand?.getClientRects().length) return false;
+  const wasCompact = more.classList.contains("is-compact");
+  const wasOpen = more.open;
+  more.classList.remove("is-compact");
+  more.open = true;
+  const row = brand.getBoundingClientRect();
+  const wraps = [...document.querySelectorAll<HTMLElement>(".top-tools > *, .top-more-menu > *")]
+    .map(item => item.getBoundingClientRect())
+    .some(box => box.height > 0 && box.top >= row.bottom);
+  more.classList.toggle("is-compact", wasCompact);
+  more.open = wasOpen;
+  return wraps;
 }
 
 function paint() {
@@ -1116,6 +1246,8 @@ function paintComposerContext() {
     if (!object) return "";
     const content = object.content;
     if (content.type === "block") return targetLabel(content.block, anchor.target) || content.block.title || (content.block.type === "text" ? textLabel(content.block.text) : "") || ct("untitledBlock");
+    if (content.type === "work_record") return content.record_id;
+    if (content.type === "source_table") return content.table.title;
     if ("title" in content) return content.title || (content.type === "text" ? textLabel(content.text) : "") || ct("untitledBlock");
     if (content.type === "reply") {
       const reply = board.replies?.find(reply => reply.id === content.id);

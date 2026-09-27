@@ -1,0 +1,53 @@
+.gh-source-view.gh-document-review { inset: 0; width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; box-sizing: border-box; overflow: hidden; }
+.gh-source-view.gh-document-review[open] { gap: 0; }
+.gh-document-review .gh-review-head { flex: none; min-width: 0; gap: 16px; min-height: 64px; padding: 12px 24px; border-bottom: 1px solid var(--line-strong); background: var(--project-control); }
+.gh-document-review .gh-review-head h3 { min-width: 0; overflow-wrap: anywhere; font-size: 18px; line-height: 1.4; }
+.gh-document-review .gh-review-head button { flex: none; }
+.gh-review-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.gh-document-review > .gh-review-toolbar { flex: none; padding: 10px 24px; border-bottom: 1px solid var(--line); background: var(--project-panel); }
+.gh-review-toolbar label { color: var(--mute); font-size: 13px; }
+.gh-review-toolbar select { min-height: 34px; min-width: 120px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--paper); background: var(--project-input); }
+.gh-document-review > .gh-muted { flex: none; min-width: 0; padding: 7px 24px; border-bottom: 1px solid var(--line); background: var(--project-panel); overflow-wrap: anywhere; font-size: 12px; line-height: 1.4; }
+.gh-review-layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(320px, 26vw, 480px); flex: 1; min-height: 0; min-width: 0; gap: 0; }
+.gh-review-reading, .gh-review-aside { min-width: 0; min-height: 0; overflow: auto; }
+.gh-review-reading { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 24px; background: var(--project-panel); }
+.gh-review-reading > button { align-self: flex-start; flex: none; }
+.gh-document-review pre.gh-review-source { display: block; flex: none; width: min(100%, 1200px); min-height: 100%; margin: 0 auto; padding: 28px 32px; border: 1px solid var(--line-strong); border-radius: 12px; box-sizing: border-box; overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; color: var(--paper); background: var(--project-input); box-shadow: 0 8px 28px #0002; font: 16px/1.75 ui-monospace, Consolas, monospace; }
+.gh-document-line { display: inline; scroll-margin-block: 60px; }
+.gh-document-line::before { content: attr(data-gh-document-line); display: inline-block; width: 4ch; margin-right: 1.5ch; color: var(--mute); text-align: right; user-select: none; }
+.gh-document-line-active { background: color-mix(in srgb, var(--mint) 30%, transparent); }
+.gh-document-discarded { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--mute); background: color-mix(in srgb, var(--warn) 12%, transparent); cursor: pointer; }
+::highlight(gh-temp-selection) { background: color-mix(in srgb, var(--mint) 45%, transparent); color: var(--paper); }
+.gh-selection-toolbar { position: absolute; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: min(390px, calc(100% - 16px)); box-sizing: border-box; padding: 7px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--project-panel); box-shadow: 0 8px 24px #0005; }
+.gh-selection-toolbar[hidden] { display: none; }
+.gh-selection-toolbar button, .gh-question-panel button { min-height: 30px; }
+.gh-selection-toolbar [aria-pressed="true"] { border-color: var(--mint); color: var(--mint); }
+.gh-selection-list { flex-basis: 100%; max-height: 110px; overflow: auto; }
+.gh-selection-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.gh-selection-row small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gh-question-panel select { min-height: 34px; min-width: 0; width: 100%; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--paper); background: var(--project-input); }
+.gh-question-results { display: grid; gap: 8px; }
+.gh-document-answer { padding: 8px; border-left: 2px solid var(--mint); white-space: pre-wrap; }
+.gh-review-aside { display: flex; flex-direction: column; gap: 12px; border-left: 1px solid var(--line-strong); padding: 20px; background: var(--project-base); font-size: 14px; line-height: 1.55; }
+.gh-review-aside h4 { margin: 0; }
+.gh-review-comments { display: grid; gap: 8px; }
+.gh-review-comment { display: grid; gap: 6px; min-width: 0; margin-left: calc(var(--gh-review-depth) * 12px); padding: 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--project-input); overflow-wrap: anywhere; }
+.gh-review-comment p, .gh-review-comment blockquote { margin: 0; white-space: pre-wrap; }
+.gh-review-comment blockquote, .gh-review-editor blockquote { padding: 6px 8px; border-left: 2px solid var(--mint); color: var(--mute); max-height: 120px; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
+.gh-review-evidence > summary { cursor: pointer; color: var(--mute); }
+.gh-review-evidence-row { display: grid; gap: 3px; min-width: 0; padding: 7px 0; border-top: 1px solid var(--line); }
+.gh-review-evidence-row code { overflow-wrap: anywhere; white-space: normal; }
+.gh-review-editor { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--project-input); }
+.gh-review-editor textarea { box-sizing: border-box; width: 100%; min-height: 96px; max-height: 35vh; resize: vertical; padding: 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--paper); background: var(--project-input); font: 13px/1.5 var(--font); }
+.gh-review-notice { flex: none; margin: 0; color: var(--warn); }
+.gh-review-notice:not(:empty) { padding: 8px 24px; border-top: 1px solid var(--line); background: var(--project-panel); }
+.gh-review-notice:empty { display: none; }
+@media (max-width: 900px) {
+  .gh-document-review .gh-review-head { min-height: 0; padding: 10px 16px; }
+  .gh-document-review > .gh-review-toolbar { padding: 8px 16px; }
+  .gh-document-review > .gh-muted { padding: 6px 16px; }
+  .gh-review-layout { display: block; overflow: auto; }
+  .gh-review-reading { height: max(300px, 55vh); min-height: 0; padding: 16px; box-sizing: border-box; }
+  .gh-document-review pre.gh-review-source { min-height: 100%; padding: 20px 16px; }
+  .gh-review-aside { min-height: 360px; overflow: visible; border-left: 0; border-top: 1px solid var(--line-strong); padding: 16px; }
+}

@@ -48,14 +48,32 @@ const pose = async id => (await board()).canvas.items.find(item => item.item_id 
 const frame = id => page.locator('.canvas-frame[data-item-id="' + id + '"]');
 const toolbar = page.locator('.canvas-toolbar');
 async function clickToolbar(name) {
+  // The selection dock repaints on the next frame after a selection change.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const button = toolbar.getByRole('button', { name, exact: true });
   if (!(await button.isVisible())) {
     await toolbar.locator('.canvas-tool-more > summary').click();
-    await button.waitFor({ state: 'visible' });
+    await button.waitFor({ state: 'visible' }).catch(async error => {
+      const seen = await page.evaluate(label => [...document.querySelectorAll('.canvas-toolbar button')].filter(b => b.textContent.trim() === label || b.getAttribute('aria-label') === label)
+        .map(b => ({ text: b.textContent.trim(), aria: b.getAttribute('aria-label'), hidden: b.hidden, display: getComputedStyle(b).display, rect: b.getBoundingClientRect().toJSON(), parent: b.parentElement.className })), name);
+      throw new Error(error.message + '\nCandidates: ' + JSON.stringify(seen));
+    });
   }
   await button.click();
 }
-async function done() { const button = toolbar.getByRole('button', { name: 'Back to canvas', exact: true }); if (await button.count()) await button.click(); }
+/** "Work inside" / "Back to canvas" sit on the selected card's head; the dock repeats them only while that head cannot be used. */
+async function modeButton(name, state) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const dock = toolbar.locator('.canvas-tool-selection > .canvas-selection-work');
+  if (await dock.isVisible()) { assert.equal(await dock.getAttribute('aria-label'), name); return dock; }
+  return page.locator('.canvas-frame.' + state + ' > .canvas-frame-head').getByRole('button', { name, exact: true });
+}
+const workInside = async () => (await modeButton('Work inside', 'is-selected')).click();
+/** Native text, image and shape fields are edited in their own dialog, opened from the active card's Edit. */
+const nativeEditor = id => page.locator('dialog.canvas-native-editor[data-object-id="' + id + '"]');
+async function editNative(id) { await frame(id).getByRole('button', { name: /^Edit/ }).click(); await nativeEditor(id).waitFor(); return nativeEditor(id); }
+async function closeNative(id) { await nativeEditor(id).getByRole('button', { name: 'Back to content', exact: true }).click(); await nativeEditor(id).waitFor({ state: 'hidden' }); }
+async function done() { if (await page.locator('.canvas-frame.is-active').count()) await (await modeButton('Back to canvas', 'is-active')).click(); }
 async function select(id) {
   await done();
   await clickToolbar('All items');
@@ -95,6 +113,24 @@ async function workClick(work, selector) {
 }
 const result = { native: true, modelDriver: 'deterministic direct MCP fixture; native host registration and actual task wakeup not asserted', faults: ['DIAG_ONLY network abort', 'DIAG_ONLY corrupt native draft storage'], checks: [] };
 const pass = text => { result.checks.push(text); console.log('PASS ' + text); };
+const blocked = (step, reason) => { (result.blocked ??= []).push({ step, reason }); console.log('BLOCKED ' + step + ': ' + reason); };
+/** Since the direct feedback workflow, composer send-back needs a Codex task bound to the source
+ *  (canReturnCanvas). Binding is verified through the Codex app-server and delivery goes to a running
+ *  Codex desktop over its pipe, so an isolated run cannot provide one without reaching the user's own
+ *  Codex. The gate itself is checked; what depends on a delivered send is reported as blocked. */
+async function sendBackBlocked() {
+  const notice = page.locator('#recipient-status');
+  await until(async () => (await notice.isVisible()) || !(await page.locator('#send').isDisabled()), 'composer send state', 6000).catch(() => {});
+  if (!(await notice.isVisible()) || !(await notice.innerText()).includes('cannot receive Canvas send-back')) return false;
+  assert(await page.locator('#send').isDisabled(), 'An unbound host must not offer Send.');
+  return true;
+}
+async function chooseRecipient(sourceId) {
+  if (!(await page.locator('#recipient').isVisible())) await page.locator('#recipient-change').click();
+  await page.locator('#recipient').selectOption(sourceId);
+  const confirm = page.getByRole('alertdialog');
+  if (await confirm.waitFor({ timeout: 1500 }).then(() => true, () => false)) await confirm.getByRole('button', { name: 'Switch task', exact: true }).click();
+}
 const story = 'phase2-story-source', visual = 'phase2-visual-source';
 const batch = (id, operations, reads = [], source_id = story, feedback_sequences = []) => call('spellcast_canvas_batch', { source_id, request_id: id, operations, reads, feedback_sequences });
 const textObject = (id, title, text, x) => ({ op: 'create', id, content: { type: 'text', title, text }, placement: { x, y: 30, width: 380, height: 300 } });
@@ -143,11 +179,13 @@ try {
     await until(() => frame('harbor').count(), 'native objects');
     assert.equal(initial.result.status, 'applied');
     await select('harbor'); await page.keyboard.press('Enter');
-    await frame('harbor').locator('.canvas-native-title').fill('留名之港');
-    await frame('harbor').locator('.canvas-native-title').press('End');
-    await frame('harbor').locator('.canvas-native-title').press('Delete');
+    const harborEditor = await editNative('harbor');
+    await harborEditor.locator('.canvas-native-title').fill('留名之港');
+    await harborEditor.locator('.canvas-native-title').press('End');
+    await harborEditor.locator('.canvas-native-title').press('Delete');
     assert(!(await pose('harbor')).removed);
-    await frame('harbor').getByRole('button', { name: 'Save', exact: true }).click();
+    await harborEditor.getByRole('button', { name: 'Save', exact: true }).click();
+    await harborEditor.waitFor({ state: 'hidden' });
     await until(async () => (await object('harbor')).content.title === '留名之港', 'native title edit');
     assert.equal((await object('harbor')).content.text, '雾港每夜失去一个名字。');
     await done(); assert.equal(await frame('harbor').locator('.canvas-native-heading').textContent(), '留名之港');
@@ -206,12 +244,17 @@ try {
     await until(async () => !(await board()).canvas.compositions.some(group => group.id === 'inner'), 'nested ungroup');
     assert.deepEqual((await board()).canvas.compositions.find(group => group.id === 'outer').members, ['harbor', 'tower', 'letter']);
     await chooseLayers(['cover', 'signal-cover']); await clickToolbar('Group');
+    // Grouping now names the idea first; Save keeps every member where it is.
+    const idea = page.locator('dialog.canvas-idea[open]'); await idea.waitFor();
+    await idea.locator('input[name="title"]').fill('两种灯光');
+    await idea.getByRole('button', { name: 'Save', exact: true }).click();
+    await idea.waitFor({ state: 'hidden' });
     const visualGroup = await until(async () => (await board()).canvas.compositions.find(group => group.members.includes('cover') && group.members.includes('signal-cover')), 'user composition');
     result.visualGroup = visualGroup.id; pass('host grouping and nested ungroup persist stable memberships');
 
     await select('cover'); await clickToolbar('Zoom out');
     await clickToolbar('Zoom out');
-    await clickToolbar('Work inside');
+    await workInside();
     const image = frame('cover').locator('.canvas-native-image');
     await until(() => image.evaluate(image => image.naturalWidth > 0), 'native image resource');
     const rect = await image.evaluate(image => { const r = image.getBoundingClientRect(), ratio = image.naturalWidth / image.naturalHeight;
@@ -222,9 +265,19 @@ try {
     const highlight = await frame('cover').locator('.canvas-native-region').boundingBox(); assert(highlight);
     assert(Math.abs(highlight.width - rect.width * .45) < 3, 'Selection highlight uses the same scale as the image.');
     await chooseLayers(['cover', 'harbor']);
-    await page.locator('#recipient').selectOption(story);
     const ask = '合并雾港和灯塔方向，保留留名之港这个标题，让框选灯光更温暖。';
     await page.locator('#input').fill(ask); await page.locator('#input').press('Delete');
+    assert(!(await pose('cover')).removed && !(await pose('harbor')).removed, 'Typing in the composer cannot remove the anchors.');
+    if (await sendBackBlocked()) {
+      assert(!(await api('/api/feedback')).pending.some(event => event.text === ask), 'Nothing may be sent to an unbound host.');
+      pass('composer send-back to an unbound host is refused visibly; the image region and both anchors stay selected');
+      blocked('scaled image region and content versions reaching one source; MCP response/ack linkage', 'needs a Codex task bound to the source; not available in isolation (see sendBackBlocked)');
+      await page.locator('#input').fill('');
+      // Later steps read the answer object; without a delivered request it is a plain fixture.
+      await batch('combined-fixture', [{ ...textObject('combined', '留名之港：灯塔的最后一封信', '暖光逐个唤回港口遗失的名字。守塔人发现，最后一个名字属于自己。', 930), placement: { x: 930, y: 900, width: 680, height: 420 } }]);
+      await until(() => frame('combined').count(), 'combined fixture');
+    } else {
+    await chooseRecipient(story);
     await page.locator('#send').click();
     const feedback = await until(async () => (await api('/api/feedback')).pending.find(event => event.text === ask), 'multi-anchor feedback');
     assert.equal(feedback.source_id, story); assert.equal(feedback.anchors.length, 2);
@@ -240,6 +293,7 @@ try {
     assert.equal(receipt.phase, 'responded'); assert(receipt.response_object_ids.includes('combined'));
     await call('spellcast_ack', { source_id: story, sequences: [feedback.seq] });
     pass('scaled image region and multiple content versions reach one source; MCP response/ack preserve linkage');
+    }
 
     await select('color'); assert.equal(await frame('color').locator('.canvas-native-shape').count(), 1);
     await select('cover'); const hiddenPose = await pose('cover'); await page.keyboard.press('Delete');
@@ -249,25 +303,26 @@ try {
     assert((await board()).canvas.compositions.find(group => group.id === visualGroup.id).members.includes('cover'));
     pass('overlapping shape and image can be selected independently; remove/restore retains image and composition');
 
-    await select('letter'); await page.keyboard.press('Enter'); await frame('letter').locator('.canvas-native-text').fill('保留这一份离线草稿。');
+    await select('letter'); await page.keyboard.press('Enter'); await (await editNative('letter')).locator('.canvas-native-text').fill('保留这一份离线草稿。');
     const nativeKey = 'spellcast.canvas-native-drafts.v1', savedDrafts = await page.evaluate(key => localStorage.getItem(key), nativeKey); assert(savedDrafts.includes('离线草稿'));
     await page.reload(); await toolbar.waitFor(); await select('letter'); await page.keyboard.press('Enter');
-    assert.equal(await frame('letter').locator('.canvas-native-text').inputValue(), '保留这一份离线草稿。');
+    assert.equal(await (await editNative('letter')).locator('.canvas-native-text').inputValue(), '保留这一份离线草稿。');
     await page.evaluate(key => localStorage.setItem(key, '{invalid'), nativeKey); await page.reload(); await toolbar.waitFor(); await select('letter'); await page.keyboard.press('Enter');
-    await frame('letter').locator('.canvas-native-text').fill('仍在窗口内的内容。');
+    await (await editNative('letter')).locator('.canvas-native-text').fill('仍在窗口内的内容。');
     assert.equal(await page.evaluate(key => localStorage.getItem(key), nativeKey), '{invalid');
-    assert(await frame('letter').locator('.canvas-native-notice').textContent());
-    await done(); await frame('letter').locator('.canvas-card-drag').click(); await page.keyboard.press('Delete');
+    assert(await nativeEditor('letter').locator('.canvas-native-notice').textContent());
+    await closeNative('letter'); await done(); await frame('letter').locator('.canvas-card-drag').click(); await page.keyboard.press('Delete');
     assert(!(await pose('letter')).removed, 'Cannot destroy an unpersisted native draft by removing its frame.');
     await page.evaluate(({ key, value }) => localStorage.setItem(key, value), { key: nativeKey, value: savedDrafts });
     await page.reload(); await toolbar.waitFor(); await select('letter'); await page.keyboard.press('Enter');
-    assert.equal(await frame('letter').locator('.canvas-native-text').inputValue(), '保留这一份离线草稿。');
-    await frame('letter').getByRole('button', { name: 'Save', exact: true }).click();
+    const letterEditor = await editNative('letter');
+    assert.equal(await letterEditor.locator('.canvas-native-text').inputValue(), '保留这一份离线草稿。');
+    await letterEditor.getByRole('button', { name: 'Save', exact: true }).click();
     await until(async () => (await object('letter')).content.text === '保留这一份离线草稿。', 'recovered draft save');
     pass('native drafts reopen; corrupt storage is retained and unsafe removal is blocked');
 
     await select(workId); await page.keyboard.press('Enter');
-    await toolbar.getByRole('button', { name: 'Back to canvas', exact: true }).waitFor({ state: 'visible' });
+    await (await modeButton('Back to canvas', 'is-active')).waitFor({ state: 'visible' });
     const work = await (await frame(workId).locator('iframe').elementHandle()).contentFrame(); assert(work);
     await work.locator('#signal').waitFor({ state: 'visible' });
     await work.evaluate(async () => { if (window.spellcast?.ready) await window.spellcast.ready; });
@@ -283,15 +338,26 @@ try {
     await until(async () => (await work.locator('#count').textContent())?.trim() === '1', 'artifact count became 1 after Send signal');
     await workClick(work, '#lamp');
     result.workAfter = { count: await work.locator('#count').textContent(), selection: await frame(workId).locator('.artifact-selection').textContent() };
-    await done(); await chooseLayers([workId, 'signal-cover']); await page.locator('#recipient').selectOption(visual);
+    await done(); await chooseLayers([workId, 'signal-cover']);
     const stateAsk = '保留当前灯光状态，并比较这张候选图。';
-    await page.locator('#input').fill(stateAsk); await page.locator('#send').click();
+    await page.locator('#input').fill(stateAsk);
+    if (await sendBackBlocked()) {
+      const savedWork = (await board()).replies.find(reply => reply.id === workReply.id).blocks[0];
+      await until(async () => { const state = (await board()).replies.find(reply => reply.id === workReply.id).blocks[0].state; return state?.count === 1 && state.selection?.label === 'Lighthouse lamp'; }, 'saved work state and selection');
+      assert(savedWork.state_revision >= 1);
+      pass('declared work state (count 1) and its selection (Lighthouse lamp) are saved with the work');
+      blocked('feedback anchor capturing that exact saved state', 'needs a Codex task bound to the source; not available in isolation (see sendBackBlocked)');
+      await page.locator('#input').fill('');
+    } else {
+    await chooseRecipient(visual);
+    await page.locator('#send').click();
     const workFeedback = await until(async () => (await api('/api/feedback')).pending.find(event => event.text === stateAsk), 'artifact multi-anchor feedback');
     const artifactAnchor = workFeedback.anchors.find(anchor => anchor.object_id === workId).artifact;
     assert.equal(artifactAnchor.state.count, 1); assert.equal(artifactAnchor.state.selection.label, 'Lighthouse lamp');
     const persistedWork = (await board()).replies.find(reply => reply.id === workReply.id).blocks[0];
     assert.equal(artifactAnchor.state_revision, persistedWork.state_revision); assert.deepEqual(artifactAnchor.state, persistedWork.state);
     pass('global multi-object feedback flushes declared work state and captures its exact saved selection');
+    }
 
     result.draftMarker = '未发送：记住雾港的回声';
     await select('combined'); await page.locator('#input').fill(result.draftMarker);

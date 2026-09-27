@@ -14,6 +14,7 @@ import { canvasIdea, type IdeaMember } from "./canvas-idea";
 import { arrangementPreview, arrangementText as at } from "./canvas-arrangement";
 import { replyDrafts, draftKey, draftText, contentKey, type DraftRecord } from "./reply-drafts";
 import { isNativeCanvasContent, NativeCanvasContent } from "./canvas-native";
+import { mountSourceTable } from "./canvas-source-table";
 import { ct } from "./i18n/canvas";
 import { onLocale } from "./i18n";
 import { apiBase } from "./api";
@@ -24,6 +25,8 @@ import { savedViewIsPlausible, viewShouldRecover, viewportIsUsable } from "./can
 import { scaledPresentation } from "./canvas-scale";
 import { contentUsesWheel, wheelScale } from "./canvas-wheel";
 import { canvasTypography, onCanvasTypographyChange, setCanvasFontPercent } from "./canvas-typography";
+import { fetchProjectRecord, type WorkRecord } from "./project-record-api";
+import { pt } from "./i18n/projects";
 import "./canvas.css";
 
 /** object_id is the canonical canvas identity; reply/block/node ids stay for existing callers. */
@@ -40,6 +43,7 @@ type Handlers = Omit<ReplyBoardHandlers, "onSelect"> & {
   onCreate(): Promise<BoardNode>;
   /** Removes one presentation: itemId is the object ID, expectedRevision its presentation revision. Content is kept. */
   onDelete(itemId: string, expectedRevision: number): Promise<BoardSnapshot>;
+  onDeleteLock(current: CanvasRead[], locked: boolean): Promise<BoardSnapshot>;
   /** Puts a removed presentation back at its recorded position and size. */
   onRestore(itemId: string, expectedRevision: number): Promise<BoardSnapshot>;
   /** New callers pass undefined; each placement carries its own revision. */
@@ -55,12 +59,12 @@ type Entry = { object: CanvasObject; placement: CanvasPlacement; reply?: BoardRe
 type Frame = {
   object: CanvasObject; root: HTMLElement; head: HTMLElement; title: HTMLElement; source: HTMLElement; provenance: HTMLElement; content: HTMLElement;
   activateButton: HTMLButtonElement; openButton: HTMLButtonElement; cell: Node; editor?: ReplyBoardHandle; native?: NativeCanvasContent;
-  reply?: BoardReply; placement: CanvasPlacement; note?: BoardNode; summary?: HTMLElement;
+  workRecord?: WorkRecordCard; sourceTable?: ReturnType<typeof mountSourceTable>; reply?: BoardReply; placement: CanvasPlacement; note?: BoardNode; summary?: HTMLElement;
 };
 const MIN_SIZE = 48, MAX_SIZE = 2400, EDGE_Z = -2_000_000;
 const isLegacyContent = (content: Content): content is LegacyContent => content.type === "node" || content.type === "reply";
 const legacyKey = (content: Content) => isLegacyContent(content) ? `${content.type}:${content.id}` : content.type;
-const titleFor = (object: CanvasObject, reply?: BoardReply) => reply?.title || (isNativeCanvasContent(object.content) ? object.content.title || (object.content.type === "text" ? textLabel(object.content.text) : "") : object.content.type === "block" && object.content.block.type === "text" ? textLabel(object.content.block.text) : "") || ct("untitledBlock");
+const titleFor = (object: CanvasObject, reply?: BoardReply) => object.content.type === "work_record" ? pt("title") : object.content.type === "source_table" ? object.content.table.title : reply?.title || (isNativeCanvasContent(object.content) ? object.content.title || (object.content.type === "text" ? textLabel(object.content.text) : "") : object.content.type === "block" && object.content.block.type === "text" ? textLabel(object.content.block.text) : "") || ct("untitledBlock");
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = "") {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
@@ -68,6 +72,82 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", 
 function button(text: string, action: (event: MouseEvent) => void, title = text) {
   const node = element("button", "ghost", text); node.type = "button"; node.title = title;
   node.setAttribute("aria-label", title); node.addEventListener("click", action); return node;
+}
+
+type WorkRecordReference = Extract<CanvasContent, { type: "work_record" }>;
+type WorkRecordCard = { refresh(): void; refreshLabels(): void; destroy(): void };
+
+function openProjectRecord(reference: WorkRecordReference) {
+  window.dispatchEvent(new CustomEvent("spellcast:open-project-record", {
+    detail: { projectId: reference.project_id, recordId: reference.record_id },
+  }));
+}
+
+function mountWorkRecordCard(host: HTMLElement, reference: WorkRecordReference, onTitle: (title: string) => void): WorkRecordCard {
+  const root = element("section", "canvas-work-record"); root.setAttribute("aria-live", "polite");
+  const kind = element("small", "canvas-work-record-kind");
+  const title = element("h3", "canvas-work-record-title");
+  const status = element("span", "canvas-work-record-status");
+  const meta = element("small", "canvas-work-record-meta");
+  const resultLabel = element("strong");
+  const result = element("p", "canvas-work-record-value", "—");
+  const boundariesLabel = element("strong");
+  const boundaries = element("p", "canvas-work-record-value", "—");
+  const state = element("p", "canvas-work-record-state");
+  root.append(kind, title, status, meta, resultLabel, result, boundariesLabel, boundaries, state); host.append(root);
+  let phase: "loading" | "ready" | "unavailable" = "loading";
+  let record: Partial<WorkRecord> | null = null, loading = false, queued = false, destroyed = false;
+  const statusLabel = (value: string) => {
+    switch (value) {
+      case "planned": return pt("statusPlanned");
+      case "active": return pt("statusActive");
+      case "blocked": return pt("statusBlocked");
+      case "done": return pt("statusDone");
+      case "cancelled": return pt("statusCancelled");
+      default: return pt("status");
+    }
+  };
+  const refreshLabels = () => {
+    kind.textContent = pt("title"); resultLabel.textContent = pt("result"); boundariesLabel.textContent = pt("boundaries");
+    root.dataset.state = phase;
+    if (phase === "ready" && record) {
+      title.textContent = record.title ?? ""; status.textContent = statusLabel(record.status ?? "");
+      meta.textContent = `${record.archived ? pt("archived") : pt("current")} · ${pt("revision")} ${record.revision}`;
+      result.textContent = record.result?.trim() || "—"; boundaries.textContent = record.boundaries?.trim() || "—";
+      state.textContent = pt("current"); onTitle(record.title ?? pt("title")); return;
+    }
+    meta.textContent = ""; result.textContent = "—"; boundaries.textContent = "—";
+    if (phase === "unavailable") {
+      title.textContent = pt("recordUnavailable"); status.textContent = pt("error"); state.textContent = pt("recordUnavailable");
+      onTitle(pt("recordUnavailable")); return;
+    }
+    title.textContent = pt("loading"); status.textContent = pt("loading"); state.textContent = pt("loading"); onTitle(pt("loading"));
+  };
+  const unavailable = () => {
+    if (destroyed) return;
+    record = null; phase = "unavailable"; refreshLabels();
+  };
+  const refresh = () => {
+    if (destroyed) return;
+    if (loading) { queued = true; return; }
+    loading = true;
+    if (phase !== "ready") { phase = "loading"; refreshLabels(); }
+    void (async () => {
+      const value = await fetchProjectRecord(reference.project_id, reference.record_id) as Partial<WorkRecord> | null;
+      if (!value || value.id !== reference.record_id || value.project_id !== reference.project_id
+        || typeof value.title !== "string" || !value.title.trim()
+        || typeof value.status !== "string" || !["planned", "active", "blocked", "done", "cancelled"].includes(value.status)
+        || typeof value.result !== "string" || typeof value.boundaries !== "string"
+        || typeof value.revision !== "number" || typeof value.archived !== "boolean") throw new Error("invalid project record response");
+      if (destroyed) return;
+      record = value; phase = "ready"; refreshLabels();
+    })().catch(() => unavailable()).finally(() => {
+      loading = false;
+      if (!destroyed && queued) { queued = false; refresh(); }
+    });
+  };
+  refreshLabels(); refresh();
+  return { refresh, refreshLabels, destroy() { destroyed = true; queued = false; root.remove(); } };
 }
 function noteReply(note: BoardNode, object_id: string): BoardReply {
   return { id: `node:${note.id}`, object_id, source_id: `node:${note.id}`, source_label: "", title: note.title,
@@ -96,6 +176,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   scopeBar.append(workspaceSelect, taskSelect);
   let scopeWorkspace = "", scopeTask = "all";
   try { const saved = JSON.parse(localStorage.getItem("spellcast.canvas-scope") ?? "null"); if (typeof saved?.workspace === "string") { scopeWorkspace = saved.workspace; scopeTask = typeof saved.task === "string" ? saved.task : "all"; } } catch { /* A missing preference does not change content. */ }
+  const startupScope = { workspace: scopeWorkspace, task: scopeTask };
   const visibleFrames = new Set<string>();
   const viewport = element("div", "canvas-viewport");
   const graphHost = element("div", "canvas-graph"); graphHost.tabIndex = 0; viewport.append(graphHost);
@@ -349,6 +430,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const readerSource = element("small", "canvas-frame-source");
   const closeReader = () => { rememberReaderPosition(); reader.close(); };
   const readerClose = button(ct("close"), closeReader);
+  const readerLock = button(ct("deleteLock"), () => { if (readingKey) void toggleDeleteLock([readingKey]); });
+  readerLock.classList.add("canvas-reader-lock");
   readerClose.classList.add("canvas-reader-close");
   const readerTextSize = button("100%", () => setReadingTextPercent(100), ct("readerTextSizeHint"));
   readerTextSize.classList.add("canvas-reader-text-size");
@@ -420,7 +503,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   readerBatch.append(readerCount, readerCompare, readerCopy, readerDiscuss, readerClear);
   readerOutline.append(readerOutlineTitle, readerAll, readerPickAll, readerWidth, readerAtoms, readerEdit);
   readerWorkspace.append(readerOutline);
-  readerHead.append(readerTitle, readerSource, readerToggle, readerTextSize, readerFontSettings, readerClose);
+  readerHead.append(readerTitle, readerSource, readerToggle, readerTextSize, readerFontSettings, readerLock, readerClose);
   reader.append(readerHead, readerBatch, readerWorkspace); document.body.append(reader);
   function readerPositionKey() {
     return JSON.stringify([readingKey, readerComparing ? [...(blockSelections.get(readingKey!) ?? [])].sort() : readerBlockId]);
@@ -568,12 +651,20 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     paintReaderOutline(); reader.showModal(); restoreReaderPosition(); if (!restored) queueReaderSession();
   }
   function restoreSavedReaderSession() {
-    if (readerSessionRestored || !initialView || !savedReaderSession) return;
+    if (destroyed || reader.open || readerSessionRestored || !initialView || !savedReaderSession) return;
     const saved = savedReaderSession;
-    if (saved.workspace !== scopeWorkspace || saved.task !== scopeTask) { readerSessionRestored = true; return; }
+    if (locateIntent.kind !== "auto" || saved.workspace !== startupScope.workspace || saved.task !== startupScope.task) { readerSessionRestored = true; return; }
     const frame = frames.get(saved.objectId);
-    if (!frame || !visibleFrames.has(saved.objectId)) return;
+    if (!frame || !board) return;
+    // Legacy replies acquire their workspace from asynchronously loaded task
+    // bindings. An interim "unsorted" scope is not a user navigation decision.
+    if (!originMatches(originForObject(frame.object, board, overviewMeta.bindings), saved.workspace, saved.task)) return;
+    if (scopeWorkspace !== saved.workspace || scopeTask !== saved.task) {
+      scopeWorkspace = saved.workspace; scopeTask = saved.task; applyScope();
+    }
+    if (!visibleFrames.has(saved.objectId)) return;
     readerSessionRestored = true;
+    restoreView();
     const valid = new Set(frame.reply?.blocks.map(block => block.id) ?? []);
     const selected = saved.selectedIds.filter(id => valid.has(id));
     if (selected.length) blockSelections.set(saved.objectId, new Set(selected));
@@ -609,6 +700,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
         }).join("\n\n────────\n\n");
         if (blocks.length === 1 && blocks[0].type === "artifact" && blocks[0].state_preview) image = blocks[0].state_preview;
       } else if (content.type === "text" || content.type === "shape") body = content.text;
+      else if (content.type === "source_table") body = [content.table.columns.join(" · "), ...content.table.rows.map(row => row.join(" · ")), `${content.table.path} · sha ${content.table.hash.slice(0, 8)}`].join("\n");
       else if (content.type === "image") { body = content.alt; image = { src: content.src, alt: content.alt || title }; }
       return [{ anchor, title, source, body, image, draft }];
     });
@@ -698,8 +790,19 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (!Number.isFinite(x1)) return null;
     return { x: x1, y: y1, width: Math.max(1, x2 - x1), height: Math.max(1, y2 - y1) };
   }
+  /** Fit and focus also keep content clear of the tool rail as rendered (its labels vary by language)
+   *  and above the bottom tool row (selection and camera). */
+  function fitBox() {
+    const box = usableBox(), host = graphHost.getBoundingClientRect();
+    const rect = (selector: string) => [...toolbar.querySelectorAll<HTMLElement>(selector)].map(tool => tool.getBoundingClientRect()).filter(r => r.height);
+    const rail = rect(".canvas-tool-rail")[0];
+    const left = Math.max(box.left, rail ? Math.ceil(rail.right - host.left) + 8 : 0);
+    const tops = rect(".canvas-tool-selection:not([hidden]), .canvas-tool-camera").map(r => r.top - host.top);
+    const bottom = tops.length ? Math.max(0, Math.ceil(host.height - Math.min(...tops)) + 8 - FIT_PAD) : 0;
+    return { ...box, left, usableWidth: Math.max(1, box.width - left), usableHeight: Math.max(1, box.usableHeight - bottom) };
+  }
   function showWorld(area: { x: number; y: number; width: number; height: number }, minScale: number, maxScale: number) {
-    const box = usableBox();
+    const box = fitBox();
     graph.resize(box.width, box.height);
     const scale = Math.max(minScale, Math.min(maxScale, (box.usableWidth - FIT_PAD * 2) / area.width, (box.usableHeight - FIT_PAD * 2) / area.height));
     graph.zoomTo(scale);
@@ -784,6 +887,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
 
   /* ---------- selection vs. activation ---------- */
   function choose(key: string | null, additive = false, fromUser = false) {
+    if (fromUser) readerSessionRestored = true;
     if (fromUser || !key) blockSelections.clear();
     if (fromUser || !key) selectedAnnotationId = null;
     if (key && isComposition(key) && compositionMembers(key).some(id => frames.has(id) && !visibleFrames.has(id))) {
@@ -875,6 +979,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   /** Activation hands input to the content in place; the host keeps selection and the way back. */
   function workInside(key: string) {
     const frame = frames.get(key);
+    if (frame?.object.content.type === "work_record") { openProjectRecord(frame.object.content); return; }
     if (frame?.reply && frame.reply.blocks.length > 1) openReader(key);
     else activate(key);
   }
@@ -902,11 +1007,11 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   function paintMode() {
     root.classList.toggle("has-active", Boolean(active));
     const chosen = primaryFrame();
-    const modeLabel = ct(active ? "done" : chosen?.reply && chosen.reply.blocks.length > 1 ? "open" : "activate");
+    const modeLabel = chosen?.workRecord ? pt("editRecord") : ct(active ? "done" : chosen?.reply && chosen.reply.blocks.length > 1 ? "open" : "activate");
     workButton.textContent = modeLabel; workButton.title = modeLabel; workButton.setAttribute("aria-label", modeLabel);
     workButton.setAttribute("aria-pressed", String(Boolean(active))); workButton.disabled = !primaryFrame();
     for (const [id, frame] of frames) {
-      const on = id === active; const label = ct(on ? "done" : frame.reply && frame.reply.blocks.length > 1 ? "open" : "activate");
+      const on = id === active; const label = frame.workRecord ? pt("editRecord") : ct(on ? "done" : frame.reply && frame.reply.blocks.length > 1 ? "open" : "activate");
       frame.activateButton.textContent = label; frame.activateButton.title = label; frame.activateButton.setAttribute("aria-label", label);
       frame.activateButton.setAttribute("aria-pressed", String(on));
     }
@@ -984,7 +1089,10 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   async function removeSelection() {
     const frame = primaryFrame(), key = frame?.object.id ?? null;
     if (!key || !frame || deleting || active === key) return;
-    const ids = selectedObjectIds();
+    const selectedIds = selectedObjectIds();
+    const ids = selectedIds.filter(id => !frames.get(id)?.placement.delete_locked);
+    const protectedCount = selectedIds.length - ids.length;
+    if (!ids.length) { handlers.onFocusNotice?.(ct("deleteLockedNotice", { n: protectedCount })); return; }
     deleting = true;
     try {
       if (ids.some(id => frames.get(id)?.native?.hasUnpersistedDraft)) throw new Error(ct("draftUnsafe"));
@@ -992,12 +1100,29 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
         await flushLayout();
         if (ids.some(id => dirty.has(id) || groupLocal.has(id))) throw new Error(ct("layoutFailed"));
       }
-      const held = frames.get(key); if (!held) return;
-      if (ids.length === 1 && !compositionDependencies().length) update(await handlers.onDelete(key, held.placement.revision));
+      const held = frames.get(ids[0]); if (!held) return;
+      if (ids.length === 1 && !compositionDependencies().length) update(await handlers.onDelete(ids[0], held.placement.revision));
       else update(await handlers.onBatch({ request_id: crypto.randomUUID(), reads: compositionDependencies().map(id => currentRead("composition", id)!).filter(Boolean),
         operations: ids.map(id => ({ op: "place", id, expected_revision: frames.get(id)!.placement.revision, fields: { removed: true } })) }));
+      if (protectedCount) handlers.onFocusNotice?.(ct("deleteLockedSkipped", { n: protectedCount }));
     } catch (error) { try { update(await handlers.onReload()); } catch { /* Keep the presentation when removal cannot be confirmed. */ } fail(error); }
     finally { deleting = false; paintStatus(); }
+  }
+  let changingDeleteLock = false;
+  async function toggleDeleteLock(ids = selectedObjectIds()) {
+    if (changingDeleteLock || !ids.length) return;
+    const locked = !ids.every(id => frames.get(id)?.placement.delete_locked);
+    changingDeleteLock = true; paintSelectionTools();
+    try {
+      await flushLayout();
+      if (ids.some(id => dirty.has(id) || groupLocal.has(id))) throw new Error(ct("layoutFailed"));
+      for (let offset = 0; offset < ids.length; offset += 64) {
+        const current = ids.slice(offset, offset + 64).map(id => currentRead("presentation", id)).filter((read): read is CanvasRead => Boolean(read));
+        if (current.length) update(await handlers.onDeleteLock(current, locked));
+      }
+      handlers.onFocusNotice?.(ct(locked ? "deleteLockSaved" : "deleteUnlockSaved", { n: ids.length }));
+    } catch (error) { try { update(await handlers.onReload()); } catch { /* Keep the last confirmed state. */ } fail(error); }
+    finally { changingDeleteLock = false; paintSelectionTools(); }
   }
   async function restoreItem(key: string): Promise<boolean> {
     const entry = removedEntries.find(item => item.object.id === key);
@@ -1059,8 +1184,11 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const zoomOut = button("−", () => graph.zoom(-0.15), ct("zoomOut"));
   const zoomIn = button("+", () => graph.zoom(0.15), ct("zoomIn"));
   const actual = button("100%", () => { graph.zoomTo(1); rememberView(); }, ct("actualSize"));
-  graph.on("scale", ({ sx }) => { actual.textContent = `${Math.round(sx * 100)}%`; rememberView(); });
-  graph.on("translate", rememberView);
+  let dockSyncFrame = 0;
+  graph.on("scale", ({ sx }) => { actual.textContent = `${Math.round(sx * 100)}%`; rememberView(); scheduleDockSync(); });
+  graph.on("translate", () => { rememberView(); scheduleDockSync(); });
+  graph.on("node:change:position", () => scheduleDockSync());
+  graph.on("node:change:size", () => scheduleDockSync());
   const fitButton = button(ct("fit"), fit);
   const overviewButton = button(ct("overview"), () => { paintOverview(); overview.showModal(); });
   const tidyButton = button(ct("arrange"), tidy);
@@ -1152,6 +1280,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       operations: [{ op: "ungroup", id, expected_revision: composition.revision }] });
   }
   const groupButton = button(ct("group"), () => { void composeSelected(); }, ct("groupHint"));
+  // The visible word stays the accessible name (voice control, "Label in Name"); the hint is the description.
+  groupButton.setAttribute("aria-label", ct("group"));
   const ungroupButton = button(ct("ungroup"), () => { void ungroupSelected(); });
   const selectionDiscussButton = button(ct("readerDiscuss"), () => discussSelection());
   selectionDiscussButton.classList.add("canvas-selection-discuss", "canvas-tool-primary");
@@ -1161,6 +1291,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   selectionCopyButton.classList.add("canvas-selection-copy");
   const clearButton = button(ct("clearSelection"), () => choose(null, false, true));
   const removeButton = button(ct("removeSelected"), () => { void removeSelection(); });
+  const lockButton = button(ct("deleteLock"), () => { void toggleDeleteLock(); });
+  lockButton.classList.add("canvas-delete-lock");
   const alignButton = button(ct("alignLeft"), () => arrangeSelection(false), ct("alignLeftHint"));
   const rowButton = button(ct("arrangeRow"), () => arrangeSelection(true));
   alignButton.classList.add("canvas-align-left"); rowButton.classList.add("canvas-arrange-row");
@@ -1244,6 +1376,16 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   function paintSelectionTools() {
     const frame = primaryFrame();
     const count = selectedObjectIds().length;
+    const lockedCount = selectedObjectIds().filter(id => frames.get(id)?.placement.delete_locked).length;
+    const allLocked = count > 0 && lockedCount === count;
+    lockButton.textContent = ct(allLocked ? "deleteUnlock" : lockedCount ? "deleteLockAll" : "deleteLock");
+    lockButton.title = ct("deleteLockHint"); lockButton.setAttribute("aria-label", lockButton.textContent);
+    lockButton.setAttribute("aria-pressed", String(allLocked)); lockButton.disabled = !count || changingDeleteLock;
+    const readingLocked = Boolean(readingKey && frames.get(readingKey)?.placement.delete_locked);
+    readerLock.textContent = ct(readingLocked ? "deleteUnlock" : "deleteLock");
+    readerLock.title = ct("deleteLockHint"); readerLock.setAttribute("aria-pressed", String(readingLocked)); readerLock.disabled = changingDeleteLock;
+    removeButton.disabled = allLocked;
+    removeButton.title = allLocked ? ct("deleteLockedNotice", { n: lockedCount }) : ct("removeSelected");
     const picked = count === 1 ? blockSelections.get(frame?.object.id ?? "")?.size ?? 0 : 0;
     const multi = count > 1 || picked > 1;
     for (const node of [frontButton, backButton, cardButton]) node.disabled = !frame || count !== 1;
@@ -1421,11 +1563,11 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   };
   window.addEventListener("pointerdown", closeMore, true);
   actual.classList.add("canvas-zoom-value");
-  workButton.classList.add("canvas-tool-primary");
+  workButton.classList.add("canvas-tool-primary", "canvas-selection-work");
   const rail = toolGroup(add, multiButton, overviewButton, layersButton, handButton, more);
   rail.classList.add("canvas-tool-rail");
   const selectionTitle = element("span", "canvas-tool-selection-title");
-  const selectionDock = toolGroup(selectionTitle, selectionDiscussButton, selectionCompareButton, groupButton, ideaButton, workButton, workSettingsButton, annotationsButton, connectionsButton, focusButton, selectionMore, clearButton);
+  const selectionDock = toolGroup(selectionTitle, selectionDiscussButton, selectionCompareButton, groupButton, ideaButton, workButton, lockButton, workSettingsButton, annotationsButton, connectionsButton, focusButton, selectionMore, clearButton);
   selectionDock.classList.add("canvas-tool-selection");
   const camera = toolGroup(fitButton, zoomOut, actual, zoomIn);
   camera.classList.add("canvas-tool-camera");
@@ -1438,6 +1580,25 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     selectionTitle.textContent = blocks > 1 ? ct("selectedBlocks", { n: blocks }) : ids.length > 1 ? ct("selectedItems", { n: ids.length }) : composition?.title
       || frame?.title.textContent
       || (ids.length > 1 ? String(ids.length) : "");
+    scheduleDockSync();
+  }
+  /** A single selected card's own head carries its title and "Work inside". The dock repeats both only
+   *  while that head cannot take a click: off screen, under other tools, or too small after zooming out. */
+  function headUsable(frame: Frame) {
+    const box = frame.activateButton.getBoundingClientRect();
+    if (box.width < 20 || box.height < 20) return false;
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return Boolean(hit && frame.activateButton.contains(hit));
+  }
+  function syncDockDuplicates() {
+    dockSyncFrame = 0;
+    if (destroyed) return;
+    const ids = selectedObjectIds(), frame = primaryFrame();
+    const single = ids.length === 1 && !(selection && isComposition(selection)) && (blockSelections.get(ids[0])?.size ?? 0) <= 1;
+    selectionDock.classList.toggle("has-card-head", Boolean(single && frame && headUsable(frame)));
+  }
+  function scheduleDockSync() {
+    if (!dockSyncFrame && !destroyed) dockSyncFrame = requestAnimationFrame(syncDockDuplicates);
   }
   const icon = (path: string) => `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">${path}</svg>`;
   const iconButtons = new Map<HTMLElement, string>([
@@ -1588,6 +1749,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     try { localStorage.setItem("spellcast.canvas-scope", JSON.stringify({ workspace: scopeWorkspace, task: scopeTask })); } catch { /* View selection remains usable. */ }
   }
   function changeScope(workspace: string, task: string, navigate = true) {
+    readerSessionRestored = true;
     persistView(); scopeWorkspace = workspace; scopeTask = task;
     deactivate(false); choose(null); applyScope();
     if (navigate && !restoreView()) fit();
@@ -1611,6 +1773,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       }
     }
     applyScope();
+    if (!readerSessionRestored) requestAnimationFrame(restoreSavedReaderSession);
     if (overview.open) paintOverview();
   }
   function paintOverview() {
@@ -1983,14 +2146,16 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const key = object.id;
     const frame = element("article", "canvas-frame"); frame.dataset.itemId = key; frame.dataset.contentId = legacyKey(object.content);
     if (object.content.type === "node") frame.classList.add("is-idea-note");
+    if (object.content.type === "work_record") frame.classList.add("is-work-record");
     // The head is a selection-time handle: static title bar for cards, floating handle for plain presentations.
     const label = titleFor(object, reply);
     const head = element("header", "canvas-frame-head"); head.tabIndex = 0; head.setAttribute("aria-label", label);
     const title = element("strong", "", label);
     const source = element("small", "canvas-frame-source");
     const provenance = element("small", "canvas-origin");
-    const activateButton = button(ct("activate"), () => { if (active === key) deactivate(); else workInside(key); });
-    const openButton = button(ct("open"), () => openReader(key), ct("open"));
+    const recordReference = object.content.type === "work_record" ? object.content : null;
+    const activateButton = button(recordReference ? pt("editRecord") : ct("activate"), () => { if (recordReference) openProjectRecord(recordReference); else if (active === key) deactivate(); else workInside(key); });
+    const openButton = button(recordReference ? pt("editRecord") : ct("open"), () => { if (recordReference) openProjectRecord(recordReference); else openReader(key); }, recordReference ? pt("editRecord") : ct("open"));
     const annotationBadge = button(annotationLabel(), () => { choose(key, false, true); void annotationsPanel.show(key); });
     annotationBadge.classList.add("canvas-annotation-badge"); annotationBadge.hidden = true;
     for (const name of ["pointerdown", "mousedown", "click", "dblclick"]) annotationBadge.addEventListener(name, event => event.stopPropagation());
@@ -2015,6 +2180,14 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     frame.append(head, provenance, content, drag, annotationBadge);
     let editor: ReplyBoardHandle | undefined;
     let native: NativeCanvasContent | undefined;
+    let workRecord: WorkRecordCard | undefined;
+    let sourceTable: ReturnType<typeof mountSourceTable> | undefined;
+    if (recordReference) {
+      workRecord = mountWorkRecordCard(content, recordReference, value => {
+        title.textContent = value; head.setAttribute("aria-label", value);
+      });
+    }
+    if (object.content.type === "source_table") sourceTable = mountSourceTable(content, object.content.table);
     if (isNativeCanvasContent(object.content)) {
       native = new NativeCanvasContent(content, object, {
         getSourceTitle: source => {
@@ -2100,7 +2273,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     mountHtml(cell, frame, native);
     queueMicrotask(() => { if (!destroyed && html.get(key) === frame) mountHtml(cell, frame, native); });
     requestAnimationFrame(() => { if (!destroyed && html.get(key) === frame) mountHtml(cell, frame, native); });
-    const held: Frame = { object, root: frame, head, title, source, provenance, content, activateButton, openButton, cell, editor, native, reply, placement: p, note };
+    const held: Frame = { object, root: frame, head, title, source, provenance, content, activateButton, openButton, cell, editor, native, workRecord, sourceTable, reply, placement: p, note };
     frames.set(key, held); applyAppearance(held, p); if (editor && reply) editor.update([reply]);
     paintReplySummary(held);
     frame.classList.toggle("is-selected", selectedObjectIds().includes(key));
@@ -2162,7 +2335,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const shown: Entry[] = [], hidden: Entry[] = [];
     for (const object of savedLayout.objects) {
       const p = savedLayout.items.find(item => item.item_id === object.id); if (!p) continue;
-      if (isNativeCanvasContent(object.content)) (p.removed ? hidden : shown).push({ object, placement: p });
+      if (isNativeCanvasContent(object.content) || object.content.type === "work_record" || object.content.type === "source_table") (p.removed ? hidden : shown).push({ object, placement: p });
       else if (object.content.type === "block") (p.removed ? hidden : shown).push({ object, placement: p, reply: blockReply(object) });
       else {
         const note = object.content.type === "node" ? nodes.get(object.content.id) : undefined;
@@ -2184,15 +2357,15 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     for (const [key, frame] of frames) if (!keys.has(key)) {
       if (readingKey === key) { rememberReaderPosition(); reader.close(); }
       if (active === key) deactivate(false);
-      frame.editor?.destroy(); frame.native?.destroy();
+      frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); frame.sourceTable?.destroy();
       frame.root.remove();
       graph.removeCell(frame.cell, { remote: true }); frames.delete(key); html.delete(key); dirty.delete(key); groupLocal.delete(key); nativeRequestIds.delete(key); history.clean();
     }
     for (const { object, placement: p, reply, note } of shown) {
       const key = object.id; const frame = frames.get(key);
       if (!frame) { addFrame(object, p, reply, note); continue; }
-      if (Boolean(frame.native) !== isNativeCanvasContent(object.content)) {
-        frame.editor?.destroy(); frame.native?.destroy(); frame.root.remove(); graph.removeCell(frame.cell, { remote: true }); frames.delete(key); html.delete(key);
+      if (Boolean(frame.native) !== isNativeCanvasContent(object.content) || Boolean(frame.workRecord) !== (object.content.type === "work_record") || Boolean(frame.sourceTable) !== (object.content.type === "source_table")) {
+        frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); frame.sourceTable?.destroy(); frame.root.remove(); graph.removeCell(frame.cell, { remote: true }); frames.delete(key); html.delete(key);
         addFrame(object, p, reply, note); continue;
       }
       frame.object = object; frame.note = note; frame.reply = reply; frame.placement = p;
@@ -2204,8 +2377,9 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
           if (selection === key) selection = [...selectedUnits].at(-1) ?? null;
         }
       }
-      frame.native?.update(object);
-      const label = frame.native?.title() ?? titleFor(object, reply);
+      frame.native?.update(object); frame.workRecord?.refresh();
+      if (object.content.type === "source_table") frame.sourceTable?.update(object.content.table);
+      const label = frame.workRecord ? frame.title.textContent || titleFor(object, reply) : frame.native?.title() ?? titleFor(object, reply);
       frame.title.textContent = label; frame.source.textContent = reply?.source_label ?? object.source_id ?? ""; frame.head.setAttribute("aria-label", label);
       if (frame.editor && reply) frame.editor.update([reply]);
       paintReplySummary(frame);
@@ -2228,6 +2402,12 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     applyScope();
     if (selectedAnnotationId && !savedLayout.annotations?.some(note => note.id === selectedAnnotationId && !note.removed)) selectedAnnotationId = null;
     for (const frame of frames.values()) {
+      frame.root.classList.toggle("is-delete-locked", Boolean(frame.placement.delete_locked));
+      frame.root.setAttribute("data-delete-locked", String(Boolean(frame.placement.delete_locked)));
+      let lockBadge = frame.root.querySelector<HTMLElement>(":scope > .canvas-frame-lock");
+      if (!lockBadge) { lockBadge = element("span", "canvas-frame-lock", "🔒"); frame.root.append(lockBadge); }
+      lockBadge.hidden = !frame.placement.delete_locked;
+      lockBadge.title = ct("deleteLockHint"); lockBadge.setAttribute("aria-label", ct("deleteLockedState"));
       frame.native?.setAnnotations(savedLayout.annotations ?? []);
       const count = savedLayout.annotations?.filter(note => !note.removed && note.anchor.object_id === frame.object.id).length ?? 0;
       const badge = frame.root.querySelector<HTMLButtonElement>(".canvas-annotation-badge");
@@ -2279,7 +2459,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     paintLegacyEdges();
     for (const [node, key] of [[fitButton, "fit"], [undo, "undo"], [redo, "redo"], [retry, "retry"], [proposalsButton, "proposals"], [tidyButton, "arrange"], [overviewClose, "close"], [layersClose, "close"], [proposalsClose, "close"], [proposalRefresh, "proposalRefresh"], [frontButton, "toFront"], [backButton, "toBack"], [cardButton, "cardStyle"], [groupButton, "group"], [ungroupButton, "ungroup"]] as const) { node.textContent = ct(key); node.title = ct(key); node.setAttribute("aria-label", ct(key)); }
     alignButton.title = ct("alignLeftHint"); alignButton.setAttribute("aria-label", ct("alignLeftHint"));
-    groupButton.title = ct("groupHint"); groupButton.setAttribute("aria-label", ct("groupHint"));
+    groupButton.title = ct("groupHint"); groupButton.setAttribute("aria-label", ct("group"));
     undo.title = `${ct("undo")} (Ctrl+Z)`;
     redo.title = `${ct("redo")} (Ctrl+Shift+Z / Ctrl+Y)`;
     for (const [node, key] of [[add, "addComponent"], [overviewButton, "overview"], [layersButton, "layers"], [handButton, "pan"], [zoomIn, "zoomIn"], [zoomOut, "zoomOut"]] as const) { node.title = ct(key); node.setAttribute("aria-label", ct(key)); }
@@ -2290,7 +2470,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (readingKey) paintReaderOutline(true);
     actual.title = ct("actualSize"); actual.setAttribute("aria-label", ct("actualSize"));
     jump.setAttribute("aria-label", ct("openItem")); if (jump.options[0]) jump.options[0].textContent = ct("openItem");
-    for (const frame of frames.values()) { frame.openButton.textContent = ct("open"); frame.openButton.title = ct("open"); frame.openButton.setAttribute("aria-label", ct("open")); frame.native?.refreshLabels(); paintReplySummary(frame); }
+    for (const frame of frames.values()) { const label = frame.workRecord ? pt("editRecord") : ct("open"); frame.openButton.textContent = label; frame.openButton.title = label; frame.openButton.setAttribute("aria-label", label); frame.native?.refreshLabels(); frame.workRecord?.refreshLabels(); paintReplySummary(frame); }
     emptyTitle.textContent = ct("emptyCanvas"); emptyHelp.textContent = ct("emptyHelp"); paintStatus(); paintDrafts(); paintRemovedButton(); paintProposals(); paintSelectionTools();
     if (removedDialog.open) paintRemovedList();
   }
@@ -2345,6 +2525,6 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       locateIntent = { kind: "object", id: object.id };
       reveal(object);
     },
-    destroy() { persistWorkspaceSession(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.clearTimeout(readerSaveTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistWorkspaceSession); window.removeEventListener("beforeunload", persistWorkspaceSession); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); selectionController.abort(); unsubscribeLocale(); unsubscribeTypography(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); } graph.dispose(); reader.remove(); selectionReader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
+    destroy() { persistWorkspaceSession(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.clearTimeout(readerSaveTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistWorkspaceSession); window.removeEventListener("beforeunload", persistWorkspaceSession); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); selectionController.abort(); unsubscribeLocale(); unsubscribeTypography(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); } graph.dispose(); reader.remove(); selectionReader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
   };
 }

@@ -1,6 +1,6 @@
 use crate::{
     completion_hook::{self, Completion},
-    completion_speech, desktop,
+    completion_speech, desktop, display_target,
 };
 use std::sync::{Arc, Mutex};
 use tauri::{
@@ -129,6 +129,27 @@ fn show_without_focus(win: &tauri::WebviewWindow) -> Result<(), String> {
     win.show().map_err(|err| err.to_string())
 }
 
+/// Restore the completion window's topmost Z order without activating it or changing
+/// Tao's managed visibility state. Other desktop windows can cover it later.
+pub(crate) fn keep_in_front(app: &AppHandle) -> Result<(), String> {
+    let Some(win) = app.get_webview_window(LABEL) else { return Ok(()); };
+    if !win.is_visible().map_err(|err| err.to_string())? { return Ok(()); }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
+        let hwnd = win.hwnd().map_err(|err| err.to_string())?.0;
+        if unsafe { SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE) } == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    #[cfg(not(windows))]
+    win.set_always_on_top(true).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 fn present(app: &AppHandle, items: &[Completion]) -> Result<(), String> {
     if items.is_empty() {
         if let Some(win) = app.get_webview_window(LABEL) {
@@ -138,15 +159,15 @@ fn present(app: &AppHandle, items: &[Completion]) -> Result<(), String> {
         return Ok(());
     }
     let root = completion_hook::root()?;
-    // The screen holding the foreground window is where the user is looking. A completion is
-    // re-anchored there every time the list changes, so a card never lands on a screen chosen
-    // hours earlier when the window was first created.
+    // By default the screen holding the foreground window is where the user is looking. A
+    // completion is re-anchored to the chosen display every time the list changes, so a card
+    // never lands on a screen chosen hours earlier when the window was first created.
     let screens = desktop::list_screens(app)?;
-    let screen = screens
-        .iter()
-        .find(|s| s.is_active)
-        .or_else(|| screens.first())
-        .ok_or_else(|| completion_speech::copy(&root, "没有显示器。", "No display found."))?;
+    if screens.is_empty() {
+        return Err(completion_speech::copy(&root, "没有显示器。", "No display found."));
+    }
+    let placed = display_target::resolve(&display_target::current(app), &screens);
+    let screen = placed.screen;
     let width = 340.0_f64.min(screen.work_w - 32.0).max(180.0);
     let win = ensure_window(app)?;
     let height = (items.len() as f64 * 140.0 + 68.0)
@@ -164,7 +185,50 @@ fn present(app: &AppHandle, items: &[Completion]) -> Result<(), String> {
     // Set visibility in the native lifecycle, like ordinary bubbles; the page
     // fetches its initial snapshot independently of window creation.
     show_without_focus(&win)?;
+    if let Ok(mut on_fixed) = PLACED_ON_FIXED.lock() {
+        *on_fixed = placed.on_fixed;
+    }
+    if let Err(err) = keep_in_front(app) {
+        eprintln!("Completion window Z order: {err}");
+    }
     Ok(())
+}
+
+/// Whether the visible card sits on the remembered fixed display (`Some(false)`: fallback).
+static PLACED_ON_FIXED: Mutex<Option<bool>> = Mutex::new(None);
+
+fn card_visible(app: &AppHandle) -> bool {
+    app.get_webview_window(LABEL)
+        .is_some_and(|win| win.is_visible().unwrap_or(false))
+}
+
+/// Re-anchor a visible card after the display target changes. Main thread only.
+pub fn reposition(app: &AppHandle) {
+    let items = app
+        .try_state::<Arc<CompletionState>>()
+        .and_then(|state| state.0.lock().ok().map(|items| items.clone()))
+        .unwrap_or_default();
+    if items.is_empty() || !card_visible(app) {
+        return;
+    }
+    if let Err(err) = present(app, &items) {
+        eprintln!("Completion window: {err}");
+    }
+}
+
+/// Move a visible card when its fixed display disconnects or comes back. Main thread only.
+pub fn follow_fixed(app: &AppHandle) {
+    if !card_visible(app) {
+        return;
+    }
+    let Ok(screens) = desktop::list_screens(app) else {
+        return;
+    };
+    let now = display_target::resolve(&display_target::current(app), &screens).on_fixed;
+    let placed = PLACED_ON_FIXED.lock().map(|on_fixed| *on_fixed).unwrap_or(now);
+    if now != placed {
+        reposition(app);
+    }
 }
 
 pub fn start(app: AppHandle) {
@@ -214,6 +278,19 @@ pub fn start(app: AppHandle) {
                         }
                         if let Ok(Err(err)) = rx.recv() {
                             eprintln!("Completion window: {err}");
+                        }
+                    } else if !items.is_empty() {
+                        // Reassert while a notice is pending: another desktop window can
+                        // cover a previously shown topmost window without changing the inbox.
+                        let ui_app = app.clone();
+                        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                        if app.run_on_main_thread(move || {
+                            let _ = tx.send(keep_in_front(&ui_app));
+                        }).is_err() {
+                            break;
+                        }
+                        if let Ok(Err(err)) = rx.recv() {
+                            eprintln!("Completion window Z order: {err}");
                         }
                     }
                     if let Err(err) = speech.tick(&root, &items) {

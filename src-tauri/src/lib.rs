@@ -3,11 +3,13 @@ mod complete_setup;
 mod instance;
 mod configure;
 mod desktop;
+mod display_target;
 mod completion_hook;
 mod completion_read;
 mod completions;
 mod completion_speech;
 mod state_path;
+mod project_api_key;
 
 /// Headless notification mode runs before Tauri, so completed tasks never launch the board.
 pub fn handle_completion_command() -> bool {
@@ -190,6 +192,20 @@ fn err_string(err: impl ToString) -> String {
 #[tauri::command]
 fn get_board(state: State<'_, AppState>) -> BoardSnapshot {
     state.bridge.board()
+}
+
+#[tauri::command]
+fn project_window_key(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<String, String> {
+    if window.label() != "main" { return Err("项目管理仅限主窗口。".into()); }
+    Ok(state.bridge.project_window_key())
+}
+
+#[tauri::command]
+fn open_project_game_source(window:tauri::WebviewWindow,state:State<'_,AppState>,project_id:String,path:String)->Result<(),String>{
+    use tauri_plugin_opener::OpenerExt;
+    if window.label()!="main" {return Err("仅限主窗口打开已连接项目的来源文件。".into());}
+    let source=state.bridge.game_source_path(&project_id,&path).map_err(err_string)?;
+    window.app_handle().opener().open_path(source.to_string_lossy().to_string(),None::<&str>).map_err(|e|e.to_string())
 }
 
 #[tauri::command]
@@ -407,6 +423,11 @@ pub fn run() {
     let result = builder
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
+            if window.label().starts_with("bubble-") && matches!(event, tauri::WindowEvent::Focused(true)) {
+                if let Err(err) = completions::keep_in_front(window.app_handle()) {
+                    eprintln!("Completion window Z order: {err}");
+                }
+            }
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Focused(true)) {
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
                     if state.bridge.board_in_focus() {
@@ -420,16 +441,20 @@ pub fn run() {
             // Shared bridge state keeps board, feedback, and explicit memory in one transaction.
             let data_path = state_path::resolve(|| app.path().app_data_dir().map_err(|e| e.to_string()))
                 .map_err(std::io::Error::other)?;
-            let bridge = Arc::new(
-                Bridge::open(
+            let local_project_key=project_api_key::load_or_create(&data_path);
+            let mut bridge = Bridge::open(
                     Desktop {
                         app: handle.clone(),
                     },
                     port,
                     data_path,
                 )
-                .map_err(|err| std::io::Error::other(format!("Spellcast 状态恢复失败：{err}")))?,
-            );
+                .map_err(|err| std::io::Error::other(format!("Spellcast 状态恢复失败：{err}")))?;
+            match local_project_key {
+                Ok(key) => { bridge=bridge.with_project_local_key(key).map_err(std::io::Error::other)?; }
+                Err(error) => { eprintln!("本机项目 API 未启用：{error}"); }
+            }
+            let bridge=Arc::new(bridge);
             app.manage(AppState {
                 bridge: bridge.clone(),
             });
@@ -460,12 +485,15 @@ pub fn run() {
                 }
             });
 
+            display_target::start(handle.clone());
             completions::start(handle.clone());
             serve(bridge, port);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_board,
+            project_window_key,
+            open_project_game_source,
             reset_board,
             set_form,
             list_forms,
@@ -492,6 +520,8 @@ pub fn run() {
             completions::get_completion_voice,
             completions::set_completion_voice,
             completions::set_ui_locale,
+            display_target::display_target_report,
+            display_target::set_display_target,
             close_bubbles
         ])
         .run(tauri::generate_context!());

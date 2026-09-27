@@ -29,7 +29,7 @@ function startBackend() {
   return until(async () => { if (backend.exitCode !== null) throw Error('backend exited'); const value = await board(); return value; }, 'Isolated backend did not start');
 }
 async function stopBackend() { if (backend && backend.exitCode === null) { const exited = once(backend, 'exit'); backend.kill(); await exited; } }
-await build({ stdin: { contents: "import './src/styles.css'; import './src/board-workspace.css'; export { mountCanvas } from './src/canvas.ts'; export * as api from './src/api.ts'; export {setLocale} from './src/i18n'; import './src/canvas-studio.css';", resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', outfile: path.join(output, 'harness.js'), define: { 'import.meta.env': JSON.stringify({ VITE_API_URL: origin }) }, external: ['/fonts/*'] });
+await build({ stdin: { contents: "import './src/styles.css'; import './src/fonts.css'; import './src/board-workspace.css'; export { mountCanvas } from './src/canvas.ts'; export * as api from './src/api.ts'; export {setLocale} from './src/i18n'; import './src/canvas-studio.css';", resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', outfile: path.join(output, 'harness.js'), define: { 'import.meta.env': JSON.stringify({ VITE_API_URL: origin }) }, external: ['/fonts/*'] });
 const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/harness.css"><style>body{margin:0}#host{height:100vh}.canvas-workspace{position:relative}</style></head><body class="mode-focus view-replies"><div id="host"></div><script type="module">
 import {mountCanvas,api,setLocale} from '/harness.js'; setLocale('zh-CN');
 window.api=api;window.selection=null;window.errors=[];
@@ -71,6 +71,13 @@ try {
   const toolbar = page.locator('.canvas-toolbar'); const dialog = page.locator('.canvas-insert');
   const workspace = page.locator('#canvas-workspace-select');
   assert.equal(await workspace.inputValue(), 'workspace:g:/fixtures/workbench');
+  /** "进入内容" / "返回画布" sit on the selected card's head; the dock repeats them only while that head cannot be used. */
+  async function modeButton(name, state) {
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const dock = toolbar.locator('.canvas-tool-selection > .canvas-selection-work');
+    if (await dock.isVisible()) return dock;
+    return page.locator('.canvas-frame.' + state + ' > .canvas-frame-head').getByRole('button', { name, exact: true });
+  }
   async function insert(kind, title, body = '') {
     await toolbar.getByRole('button', { name: '添加组件', exact: true }).click();
     await dialog.locator(`label[data-kind="${kind}"]`).click(); await dialog.locator('[name=title]').fill(title);
@@ -100,11 +107,13 @@ try {
   await comparisonFrame.locator('.rb-pick').last().click();
   await until(async () => (await board()).canvas.objects.find(o => o.id === comparison.id).content.block.selected_id, 'Comparison choice was not persisted');
   const localFeedback = await request('/api/feedback'); assert.deepEqual(localFeedback.pending, []); assert.deepEqual(localFeedback.deliveries, []);
+  // Edit continues in the reader (the card's content moves into it); options are now labelled 对象名称.
   await comparisonFrame.getByRole('button', { name: '编辑', exact: true }).click();
-  await comparisonFrame.getByLabel('方案名', { exact: true }).first().fill('经画布修改的方案 A');
-  await comparisonFrame.getByRole('button', { name: '保存', exact: true }).click();
+  const reader = page.locator('.canvas-reader[open]'); await reader.waitFor();
+  await reader.getByLabel('对象名称', { exact: true }).first().fill('经画布修改的方案 A');
+  await reader.getByRole('button', { name: '保存', exact: true }).click();
   await until(async () => (await board()).canvas.objects.find(o => o.id === comparison.id).content.block.options[0].title === '经画布修改的方案 A', 'Independent comparison edit was not stored');
-  await toolbar.getByRole('button', { name: '返回画布', exact: true }).click();
+  await reader.locator(':scope > header').getByRole('button', { name: '关闭', exact: true }).click(); await reader.waitFor({ state: 'hidden' });
   pass('Independent comparison supports native editor and a persisted option choice');
   let saved = await board(); const graph = saved.canvas.objects.find(o => o.content.block?.type === 'graph');
   assert.deepEqual(graph.content.block.edges, []); assert.equal(saved.edges.length, 0);
@@ -119,8 +128,8 @@ try {
   await ideaDialog.getByRole('button', { name: '关闭', exact: true }).click();
   await toolbar.locator('.canvas-tool-more summary').click(); await toolbar.getByRole('button', { name: '组合', exact: true }).click();
   assert.equal(await ideaDialog.locator('[name=description]').inputValue(), '比较说明取舍，关系图表达依赖，步骤承接执行。');
-  await ideaDialog.locator('li').last().getByRole('button', { name: '上移', exact: true }).click();
-  const order = await ideaDialog.locator('li').evaluateAll(nodes => nodes.map(n => n.dataset.memberId));
+  await ideaDialog.locator('li[data-member-id]').last().getByRole('button', { name: '上移', exact: true }).click();
+  const order = await ideaDialog.locator('li[data-member-id]').evaluateAll(nodes => nodes.map(n => n.dataset.memberId));
   await ideaDialog.getByRole('button', { name: '保存', exact: true }).click(); await ideaDialog.waitFor({ state: 'hidden' });
   saved = await board(); let idea = saved.canvas.compositions[0]; assert.deepEqual(idea.members, order); assert(idea.user_modified);
   const selection = await page.evaluate(() => window.selection); assert.equal(selection.composition_id, idea.id);
@@ -144,7 +153,7 @@ try {
   idea = (await board()).canvas.compositions[0]; assert.equal(idea.description, '保留尚未提交的整体说明'); assert.deepEqual(idea.members, order);
   pass('Idea draft survives page reload; stale writes are rejected; explicit review applies the retained draft');
   await toolbar.getByRole('button', { name: '编辑想法', exact: true }).click();
-  await ideaDialog.locator('li').last().getByRole('button', { name: '移出组合', exact: true }).click();
+  await ideaDialog.locator('li[data-member-id]').last().getByRole('button', { name: '移出组合', exact: true }).click();
   const beforeDetach = await board();
   await ideaDialog.getByRole('button', { name: '保存', exact: true }).click(); await ideaDialog.waitFor({ state: 'hidden' });
   saved = await board(); assert.equal(saved.canvas.objects.length, 4); assert.equal(saved.canvas.compositions[0].members.length, 3);
@@ -157,13 +166,13 @@ try {
   const workObject = (await board()).canvas.objects.find(o => o.content.type === 'reply' && o.content.id === 'fixture-work');
   await toolbar.getByRole('button', { name: '层级', exact: true }).click(); await page.locator(`.canvas-layer-row[data-composition-id="${idea.id}"] button`).click();
   await page.locator('.canvas-layers').getByRole('button', { name: '关闭', exact: true }).click(); await toolbar.getByRole('button', { name: '编辑想法', exact: true }).click();
-  await ideaDialog.locator('select').selectOption(workObject.id); await ideaDialog.getByRole('button', { name: '保存', exact: true }).click(); await ideaDialog.waitFor({ state: 'hidden' });
+  await ideaDialog.locator('select:not([name=arrangement])').selectOption(workObject.id); await ideaDialog.getByRole('button', { name: '保存', exact: true }).click(); await ideaDialog.waitFor({ state: 'hidden' });
   assert((await board()).canvas.compositions[0].members.includes(workObject.id));
-  await page.evaluate(id => window.canvas.selectObject(id), workObject.id); await toolbar.getByRole('button', { name: '进入内容', exact: true }).click();
+  await page.evaluate(id => window.canvas.selectObject(id), workObject.id); await (await modeButton('进入内容', 'is-selected')).click();
   const workFrame = await (await page.locator(`.canvas-frame[data-item-id="${workObject.id}"] iframe`).elementHandle()).contentFrame();
   await workFrame.getByRole('textbox', { name: 'Work note', exact: true }).fill('同一个 idea 内的作品参数'); await workFrame.locator('#increment').click();
   await until(async () => { const state = (await board()).replies.find(r => r.id === 'fixture-work').blocks[0].state; return state.note === '同一个 idea 内的作品参数' && state.count === 1; }, 'Mixed artifact state was not saved');
-  await toolbar.getByRole('button', { name: '返回画布', exact: true }).click();
+  await (await modeButton('返回画布', 'is-active')).click();
   saved = await board();
   pass('Existing interactive artifact joins the same idea and preserves independently edited work state');
   const snapshot = structuredClone(saved);

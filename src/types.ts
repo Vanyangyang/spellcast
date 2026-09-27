@@ -54,7 +54,10 @@ export type BoardSnapshot = {
   canvas?: CanvasLayout;
 };
 
+export type CanvasSourceTable = { title: string; project_id: string; root: string; path: string; heading: string; line: number; hash: string; columns: string[]; rows: string[][] };
 export type CanvasContent = { type: "node" | "reply"; id: string }
+  | { type: "work_record"; project_id: string; record_id: string }
+  | { type: "source_table"; table: CanvasSourceTable }
   | { type: "block"; block: Exclude<import("./reply-types").ReplyBlock, { type: "artifact" }> }
   | { type: "text"; title: string; text: string }
   | { type: "image"; title: string; src: string; alt: string }
@@ -63,12 +66,12 @@ export type CanvasOrigin = { cwd: string; thread_id?: string | null; source_id?:
 export type TaskTarget = { source_id: string; thread_id?: string | null; cwd?: string | null; label: string };
 export type TaskTargetStatus = { source_id: string; thread_id?: string | null; label: string; status: "available" | "deleted" | "unlinked" | "changed" | "unknown"; message: string; checked_at_ms: number };
 export type CanvasObject = { id: string; content: CanvasContent; content_revision: number; origin?: CanvasOrigin | null; source_id?: string | null; user_edited?: boolean; bindings?: import("./canvas-data-types").CanvasBinding[] };
-export type CanvasPlacement = { item_id: string; revision: number; z: number; removed: boolean; appearance: "plain" | "card"; x: number; y: number; width: number; height: number; content_scale?: number; user_modified?: boolean };
+export type CanvasPlacement = { item_id: string; revision: number; z: number; removed: boolean; delete_locked?: boolean; appearance: "plain" | "card"; x: number; y: number; width: number; height: number; content_scale?: number; user_modified?: boolean };
 export type CanvasArrangement = "free" | "side_by_side" | "figure_caption" | "sequence";
 export type CanvasComposition = { id: string; revision: number; title: string; description?: string; arrangement?: CanvasArrangement; members: string[]; source_id?: string | null; user_modified?: boolean };
 export type CanvasRead = { kind: "content" | "presentation" | "composition" | "annotation"; id: string; revision: number };
 export type CanvasAnnotation = { id: string; revision: number; anchor: CanvasAnchor; snapshot: unknown; text: string; origin?: CanvasOrigin | null; source_id?: string | null; removed: boolean };
-export type CanvasContentFields = { title?: string; text?: string; src?: string; alt?: string; fill?: string };
+export type CanvasContentFields = { title?: string; text?: string; src?: string; alt?: string; fill?: string; source_table?: CanvasSourceTable };
 export type CanvasPlacementFields = Partial<Pick<CanvasPlacement, "x" | "y" | "width" | "height" | "content_scale" | "z" | "appearance" | "removed">>;
 export type CanvasOperation = { op: "create"; id: string; content: CanvasContent; origin?: CanvasOrigin; placement: CanvasPlacementFields; bindings?: import("./canvas-data-types").CanvasBinding[] }
   | { op: "patch_content"; id: string; expected_revision: number; fields: CanvasContentFields }
@@ -167,6 +170,7 @@ export type BridgeStatus = {
   sources?: { id: string; label: string; last_call_ms: number }[];
   paused?: boolean;
   observer_enabled?: boolean;
+  observer_provider?: "codex" | "claude";
   observer_policy_revision?: number;
   observer_allowed?: boolean;
   observer_reason?: string;
@@ -174,6 +178,7 @@ export type BridgeStatus = {
 
 export type ObserverStatus = {
   enabled: boolean;
+  provider: "codex" | "claude";
   paused: boolean;
   allowed: boolean;
   reason: string;
@@ -238,7 +243,8 @@ export type SetupReport = {
   complete_supported: boolean;
   installed: boolean;
   hook_trust?: "trusted" | "untrusted" | "modified" | "disabled" | "unknown" | null;
-  components?: { mcp: boolean; skill: boolean; hooks: boolean } | null;
+  /** `skill` means a Skill is present; `skill_current: false` means it differs from this build. */
+  components?: { mcp: boolean; skill: boolean; skill_current?: boolean; hooks: boolean } | null;
   note: string;
   done: string[];
   not_done: string[];

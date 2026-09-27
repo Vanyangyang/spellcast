@@ -144,6 +144,9 @@ pub struct AgentEvent {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_context: Option<serde_json::Value>,
+    /// Exact project object/source versions attached to an explicit user request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_context: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -211,6 +214,7 @@ impl AgentEvent {
             title: None,
             text: None,
             artifact_context: None,
+            project_context: None,
         }
     }
 

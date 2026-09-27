@@ -149,7 +149,16 @@ function mainHintKey(report: SetupReport): MessageKey {
   if (report.kind === "not_installed" && report.complete_supported && !report.source_path && !report.mcp_url) {
     return "setup.hint.desktopPreview";
   }
+  // Trust still comes first; otherwise say the existing Skill differs rather than calling it missing.
+  if (report.installed && report.kind !== "installed_pending_trust" && skillDiffers(report)) {
+    return "setup.hint.skillDiffers";
+  }
   return SETUP_KIND_HINT[report.kind] ?? "setup.hint.failed";
+}
+
+/** A Skill is present but is not this build's text: older, newer, or edited locally. */
+function skillDiffers(report: SetupReport) {
+  return report.components?.skill === true && report.components.skill_current === false;
 }
 
 function setText(id: string, text: string) {
@@ -202,6 +211,9 @@ export function paintSetupView(report: SetupReport, t: Translate) {
     if (component === "hooks" && grok) {
       key = "setup.component.unknown";
       tone = "quiet";
+    } else if (component === "skill" && skillDiffers(report)) {
+      key = "setup.component.differs";
+      tone = "attention";
     } else if (component === "hooks" && installed) {
       const trust = report.hook_trust || "unknown";
       key = `setup.hooks.${trust}` as MessageKey;
@@ -210,7 +222,7 @@ export function paintSetupView(report: SetupReport, t: Translate) {
     element.textContent = t(key); element.dataset.tone = tone;
   });
   document.querySelectorAll<HTMLElement>(".setup-summary").forEach(element => {
-    element.dataset.tone = report.kind === "verified" ? "done" : "quiet";
+    element.dataset.tone = report.kind === "verified" && !skillDiffers(report) ? "done" : "quiet";
   });
   const paths = reportDetailLines(report);
   const details = [

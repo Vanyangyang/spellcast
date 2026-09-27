@@ -112,6 +112,7 @@ await page.setContent(`<!doctype html>
   <button data-setup-refresh></button>
   <div id="home-checks"><span data-setup-component="mcp"></span><span data-setup-component="skill"></span><span data-setup-component="hooks"></span></div>
   <div id="settings-checks"><span data-setup-component="mcp"></span><span data-setup-component="skill"></span><span data-setup-component="hooks"></span></div>
+  <div class="setup-summary"></div>
   <p id="agent-setup-status"></p>
   <p id="agent-setup-hint"></p>
   <details class="setup-details" hidden><summary>安装详情</summary><pre id="agent-setup-details-body"></pre></details>
@@ -150,6 +151,8 @@ const result = await page.evaluate(async () => {
     "setup.component.installed": "已安装",
     "setup.component.missing": "未安装",
     "setup.component.unknown": "未核验",
+    "setup.component.differs": "已安装 · 与本版不同",
+    "setup.hint.skillDiffers": "画布用法已安装，但与这一版内置的不同（可能较旧，或被改过）。需要时点“更新”，会先备份现有文件再替换。",
     "setup.update": "更新 Hooks + Skill",
     "setup.install": "安装 Hooks + Skill（必需）",
     "setup.title": "Codex 接入",
@@ -235,6 +238,32 @@ const result = await page.evaluate(async () => {
   check([...document.querySelectorAll('[data-setup-component="mcp"]')].every((el) => el.textContent === "已安装"), "partial MCP is reported accurately in both views");
   check([...document.querySelectorAll('[data-setup-component="skill"]')].every((el) => el.textContent === "未安装"), "partial Skill is reported accurately in both views");
   check([...document.querySelectorAll('[data-setup-component="hooks"]')].every((el) => el.textContent === "待信任"), "partial Hooks trust is reported accurately in both views");
+
+  // Reported machine: MCP and trusted hooks are installed; the existing Skill differs from this build.
+  const skillRows = () => [...document.querySelectorAll('[data-setup-component="skill"]')];
+  const differing = { mcp: true, skill: true, skill_current: false, hooks: true };
+  paintSetupView(base({ kind: "verified", installed: true, hook_trust: "trusted", components: differing,
+    mcp_url: "http://127.0.0.1:47194/mcp", source_path: "C:/Users/x/.codex/hooks.json" }), t);
+  snap = view();
+  check(skillRows().every((el) => el.textContent === "已安装 · 与本版不同" && el.dataset.tone === "attention"), "a differing Skill is installed, not missing, in both views");
+  check([...document.querySelectorAll('[data-setup-component="mcp"]')].every((el) => el.textContent === "已安装"), "differing Skill keeps MCP installed");
+  check(document.querySelector('[data-setup-component="hooks"]').textContent === "已信任", "differing Skill keeps hooks trusted");
+  check(snap.status === "已安装 · Hooks 已信任", `differing Skill status ${snap.status}`);
+  check(snap.hint.startsWith("画布用法已安装，但与这一版内置的不同"), `differing Skill hint ${snap.hint}`);
+  check(!/未安装/.test(snap.status + snap.hint + skillRows().map((el) => el.textContent).join("")), "a present Skill is never called not installed");
+  check(document.querySelector(".setup-summary").dataset.tone === "quiet", "a differing Skill is not shown as all done");
+  check(document.querySelector("#settings-complete-setup").textContent === "更新 Hooks + Skill", "a differing Skill offers an explicit update");
+  paintSetupView(base({ kind: "installed_pending_trust", installed: true, hook_trust: "untrusted", components: differing,
+    mcp_url: "http://127.0.0.1:47194/mcp", source_path: "C:/Users/x/.codex/hooks.json" }), t);
+  check(view().hint.includes("/hooks 中信任"), "hook trust still comes before a Skill update");
+  check(skillRows().every((el) => el.textContent === "已安装 · 与本版不同"), "pending trust keeps the differing Skill row");
+  paintSetupView(base({ kind: "not_installed", components: { ...differing, mcp: false }, hook_trust: "trusted",
+    mcp_url: "http://127.0.0.1:47194/mcp", source_path: "C:/Users/x/.codex/hooks.json" }), t);
+  check(view().hint === "可一次安装 MCP、hooks 与 Skill。", "a missing MCP keeps the not-installed hint");
+  check(document.querySelector('[data-setup-component="mcp"]').textContent === "未安装", "missing MCP stays not installed");
+  check(skillRows().every((el) => el.textContent === "已安装 · 与本版不同"), "a missing MCP does not relabel the present Skill");
+  paintSetupView(base({ kind: "verified", installed: true, hook_trust: "trusted", components: { mcp: true, skill: true, hooks: true } }), t);
+  check(skillRows().every((el) => el.textContent === "已安装") && document.querySelector(".setup-summary").dataset.tone === "done", "reports without skill_current keep the installed Skill");
 
   paintSetupView(base({
     client: "grok",

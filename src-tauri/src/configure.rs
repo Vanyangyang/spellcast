@@ -322,21 +322,52 @@ fn spellcast_toml_ready(doc: &DocumentMut, url: &str) -> bool {
     enabled && found && !residue
 }
 
-/// True when `skills/spellcast` already has the bundled Skill files, so install can skip a rewrite.
-pub(crate) fn spellcast_skill_is_current(skill_md: &Path) -> bool {
-    let Some(dir) = skill_md.parent() else {
-        return false;
+/// How an installed Spellcast Skill compares with the one bundled in this build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkillState {
+    /// No `SKILL.md`, so the host has no Spellcast Skill to load.
+    Missing,
+    /// `SKILL.md` and every bundled reference have this build's text.
+    Current,
+    /// `SKILL.md` exists, but it or a bundled reference differs or is absent: an older,
+    /// newer or locally edited copy. Only an explicit update replaces it.
+    Differs,
+}
+
+/// Same text regardless of line endings: the bundled files carry whatever the build checkout
+/// had (CRLF under Windows autocrlf, LF otherwise), installed copies vary too, and hosts read both alike.
+fn same_text(bytes: &[u8], bundled: &str) -> bool {
+    let lf = |bytes: &[u8]| {
+        let mut out = Vec::with_capacity(bytes.len());
+        for (i, &b) in bytes.iter().enumerate() {
+            if !(b == b'\r' && bytes.get(i + 1) == Some(&b'\n')) {
+                out.push(b);
+            }
+        }
+        out
     };
-    match fs::read(skill_md) {
-        Ok(bytes) if bytes == SPELLCAST_SKILL.as_bytes() => {}
-        _ => return false,
+    lf(bytes) == lf(bundled.as_bytes())
+}
+
+/// Read-only comparison of `skills/spellcast` with the bundled Skill files.
+pub(crate) fn spellcast_skill_state(skill_md: &Path) -> SkillState {
+    let Some(dir) = skill_md.parent() else {
+        return SkillState::Missing;
+    };
+    if !skill_md.is_file() {
+        return SkillState::Missing;
     }
-    skill_reference_files().iter().all(|(relative, contents)| {
-        fs::read(dir.join(Path::new(relative)))
-            .ok()
-            .as_deref()
-            == Some(contents.as_bytes())
-    })
+    let same = |path: &Path, bundled: &str| fs::read(path).is_ok_and(|bytes| same_text(&bytes, bundled));
+    let current = same(skill_md, SPELLCAST_SKILL)
+        && skill_reference_files()
+            .iter()
+            .all(|(relative, contents)| same(&dir.join(Path::new(relative)), contents));
+    if current { SkillState::Current } else { SkillState::Differs }
+}
+
+/// True when `skills/spellcast` already has the bundled Skill text, so install can skip a rewrite.
+pub(crate) fn spellcast_skill_is_current(skill_md: &Path) -> bool {
+    spellcast_skill_state(skill_md) == SkillState::Current
 }
 
 fn merge_codex_toml(path: &Path, url: &str) -> Result<String, String> {
@@ -386,14 +417,18 @@ pub(crate) fn install_skill_files(skill_md: &Path) -> Result<Option<PathBuf>, St
         .parent()
         .ok_or_else(|| format!("Skill 路径没有父目录：{}", skill_md.display()))?;
     let mut backup = None;
-    for (relative, contents) in skill_reference_files() {
-        let dest = dir.join(Path::new(relative));
+    // Files that already have this text (in either line ending) are left as they are.
+    let files = skill_reference_files()
+        .iter()
+        .map(|(relative, contents)| (dir.join(Path::new(relative)), *contents))
+        .chain(std::iter::once((skill_md.to_path_buf(), SPELLCAST_SKILL)));
+    for (dest, contents) in files {
+        if fs::read(&dest).is_ok_and(|bytes| same_text(&bytes, contents)) {
+            continue;
+        }
         if let Some(path) = commit_with_backup(&dest, contents.as_bytes())? {
             backup = Some(path);
         }
-    }
-    if let Some(path) = commit_with_backup(skill_md, SPELLCAST_SKILL.as_bytes())? {
-        backup = Some(path);
     }
     Ok(backup)
 }
@@ -934,6 +969,44 @@ enabled = ["cursor-bridge"]
                 *contents
             );
         }
+    }
+
+    #[test]
+    fn skill_state_separates_missing_current_and_differing_copies() {
+        let dir = test_dir("skill-state");
+        let skill_md = dir.join("skills").join("spellcast").join("SKILL.md");
+        let skill_dir = skill_md.parent().unwrap().to_path_buf();
+        assert_eq!(spellcast_skill_state(&skill_md), SkillState::Missing);
+        install_skill_files(&skill_md).unwrap();
+        fs::remove_file(&skill_md).unwrap();
+        assert_eq!(spellcast_skill_state(&skill_md), SkillState::Missing, "references alone give the host nothing to load");
+
+        install_skill_files(&skill_md).unwrap();
+        assert_eq!(spellcast_skill_state(&skill_md), SkillState::Current);
+        // The same text with LF or CRLF is the same Skill, whichever form this build embedded.
+        let files: Vec<PathBuf> = std::iter::once(skill_md.clone())
+            .chain(skill_reference_files().iter().map(|(relative, _)| skill_dir.join(Path::new(relative))))
+            .collect();
+        for crlf in [false, true] {
+            for path in &files {
+                let lf = fs::read_to_string(path).unwrap().replace("\r\n", "\n");
+                fs::write(path, if crlf { lf.replace('\n', "\r\n") } else { lf }).unwrap();
+            }
+            assert_eq!(spellcast_skill_state(&skill_md), SkillState::Current, "crlf={crlf}");
+            assert!(spellcast_skill_is_current(&skill_md), "install must not rewrite a line-ending-only copy");
+        }
+
+        // An older, newer or edited copy is installed but not current; so is one missing a reference.
+        let canvas = skill_dir.join("references").join("canvas.md");
+        fs::write(&canvas, "# an older canvas guide\n").unwrap();
+        assert_eq!(spellcast_skill_state(&skill_md), SkillState::Differs);
+        fs::remove_file(&canvas).unwrap();
+        assert_eq!(spellcast_skill_state(&skill_md), SkillState::Differs);
+        install_skill_files(&skill_md).unwrap();
+        fs::write(&skill_md, "---\nname: spellcast\n---\nEdited locally.\n").unwrap();
+        assert_eq!(spellcast_skill_state(&skill_md), SkillState::Differs);
+        assert!(!spellcast_skill_is_current(&skill_md));
+        let _ = fs::remove_dir_all(dir);
     }
 
     fn test_dir(label: &str) -> PathBuf {

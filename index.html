@@ -4,12 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Spellcast</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;1,500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Fonts ship with the app (src/fonts.css) so online and offline render the same. -->
   </head>
   <body class="mode-ambient">
     <div id="desktop" class="desktop" aria-hidden="true"></div>
@@ -37,6 +32,7 @@
           <button type="button" id="view-replies" class="ghost" data-board-text="replies"></button>
           <button type="button" id="view-ideas" class="ghost" data-board-text="ideas"></button>
         </nav>
+        <button type="button" id="projects-open" class="ghost"></button>
         <nav id="forms" class="forms chrome-focus" data-i18n-aria="forms.aria"></nav>
         <p id="topic" class="topic chrome-focus"></p>
         <div class="top-tools">
@@ -108,18 +104,9 @@
       <h1 data-i18n="agent.title"></h1>
       <p class="agent-body" data-i18n="agent.body"></p>
 
-      <div class="agent-status">
-        <span id="agent-dot" class="agent-dot"></span>
-        <span id="agent-seen" data-i18n="agent.none"></span>
-      </div>
-
-      <div class="agent-url">
-        <label for="agent-mcp-url" data-i18n="agent.url"></label>
-        <div class="config-line">
-          <input id="agent-mcp-url" value="http://127.0.0.1:47194/mcp" spellcheck="false" />
-          <button type="button" id="agent-copy-url" class="ghost" data-i18n="agent.copy"></button>
-        </div>
-      </div>
+      <!-- Left: choose the app, install, verify. Right: live connection, asides, recent activity. -->
+      <div class="agent-connect">
+      <p class="hint agent-connect-lead" data-i18n="settings.body" data-setup-body></p>
 
       <div id="agent-clients" class="agent-clients" data-i18n-aria="agent.connect">
         <button type="button" data-client="cursor">Cursor</button>
@@ -131,9 +118,12 @@
       </div>
 
       <div id="agent-result" class="agent-result" hidden>
-        <p class="hint" data-i18n="settings.body" data-setup-body></p>
         <p id="agent-setup-status" class="setup-status"></p>
         <p id="agent-setup-hint" class="hint"></p>
+        <div class="config-actions">
+          <button type="button" id="agent-complete-setup" class="primary" data-i18n="setup.install"></button>
+          <button type="button" data-setup-refresh class="ghost" data-i18n="setup.check"></button>
+        </div>
         <div class="agent-setup-checks">
           <p class="agent-setup-checks-title" data-i18n="setup.checks"></p>
           <ul class="setup-components setup-components-home">
@@ -142,15 +132,29 @@
             <li><span data-i18n="setup.hooksName"></span><span data-setup-component="hooks" class="setup-component-status">—</span></li>
           </ul>
           <p class="agent-setup-checks-note" data-i18n="setup.checksScope"></p>
+          <!-- Opened from the checks heading; the text it reveals follows the checks. -->
+          <details class="setup-details" hidden>
+            <summary data-i18n="setup.details"></summary>
+            <pre id="agent-setup-details-body" class="setup-details-body"></pre>
+          </details>
         </div>
-        <div class="config-actions">
-          <button type="button" id="agent-complete-setup" class="primary" data-i18n="setup.install"></button>
-          <button type="button" data-setup-refresh class="ghost" data-i18n="setup.check"></button>
+      </div>
+      </div>
+
+      <div class="agent-side">
+      <div class="agent-live">
+        <div class="agent-status">
+          <span id="agent-dot" class="agent-dot"></span>
+          <span id="agent-seen" data-i18n="agent.none"></span>
         </div>
-        <details class="setup-details" hidden>
-          <summary data-i18n="setup.details"></summary>
-          <pre id="agent-setup-details-body" class="setup-details-body"></pre>
-        </details>
+
+        <div class="agent-url">
+          <label for="agent-mcp-url" data-i18n="agent.url"></label>
+          <div class="config-line">
+            <input id="agent-mcp-url" value="http://127.0.0.1:47194/mcp" spellcheck="false" />
+            <button type="button" id="agent-copy-url" class="ghost" data-i18n="agent.copy"></button>
+          </div>
+        </div>
       </div>
 
       <div class="agent-observer">
@@ -166,11 +170,15 @@
           </span>
         </label>
         <p class="agent-observer-hint" data-i18n="observer.lead"></p>
-        <ul class="observer-points">
-          <li data-i18n="observer.onMeans"></li>
-          <li data-i18n="observer.offMeans"></li>
-        </ul>
-        <p class="agent-observer-hint" data-i18n="observer.body"></p>
+        <!-- The rest repeats Settings. Narrow windows fold it here; wide windows show it without the toggle. -->
+        <details id="agent-observer-details" class="observer-details">
+          <summary data-i18n="observer.details"></summary>
+          <ul class="observer-points">
+            <li data-i18n="observer.onMeans"></li>
+            <li data-i18n="observer.offMeans"></li>
+          </ul>
+          <p class="agent-observer-hint" data-i18n="observer.body"></p>
+        </details>
         <p id="agent-observer-error" class="hint has-warning" role="alert" hidden></p>
       </div>
 
@@ -178,6 +186,7 @@
         <span class="eyebrow" data-i18n="agent.activity"></span>
         <ol id="activity"></ol>
         <p id="activity-empty" class="hint" data-i18n="agent.quiet"></p>
+      </div>
       </div>
     </section>
 
@@ -190,11 +199,76 @@
 
         <div class="settings-tabs" role="tablist" data-i18n-aria="settings.sections">
           <button type="button" role="tab" id="settings-tab-connection" aria-controls="settings-panel-connection" aria-selected="true" data-settings-tab="connection" data-i18n="settings.tabConnection"></button>
+          <button type="button" role="tab" id="settings-tab-display" aria-controls="settings-panel-display" aria-selected="false" tabindex="-1" data-settings-tab="display" data-i18n="settings.tabDisplay"></button>
           <button type="button" role="tab" id="settings-tab-appearance" aria-controls="settings-panel-appearance" aria-selected="false" tabindex="-1" data-settings-tab="appearance" data-i18n="settings.tabAppearance"></button>
           <button type="button" role="tab" id="settings-tab-shortcuts" aria-controls="settings-panel-shortcuts" aria-selected="false" tabindex="-1" data-settings-tab="shortcuts" data-i18n="settings.tabShortcuts"></button>
         </div>
 
         <div class="settings-panels">
+        <section class="settings-panel" id="settings-panel-display" role="tabpanel" aria-labelledby="settings-tab-display" tabindex="0" hidden>
+        <section class="settings-display" aria-labelledby="settings-display-title">
+          <div class="settings-display-head">
+            <div class="settings-display-title">
+              <h3 id="settings-display-title" data-i18n="display.title"></h3>
+              <span id="display-status" class="display-status" role="status"></span>
+            </div>
+            <p id="display-help" class="hint" data-i18n="display.help"></p>
+            <p id="display-unsupported" class="hint has-warning" data-i18n="display.desktopOnly" hidden></p>
+          </div>
+          <!-- One physical display: nothing to choose, so only say where notices go. -->
+          <div id="display-single" class="display-single" hidden>
+            <div class="display-single-screen">
+              <span class="display-single-mark" aria-hidden="true"></span>
+              <strong id="display-single-name"></strong>
+            </div>
+            <p class="hint" data-i18n="display.singleNote"></p>
+            <div id="display-single-missing" class="display-single-missing" role="status" hidden>
+              <p id="display-single-missing-text"></p>
+              <button type="button" id="display-follow-active" class="primary" data-i18n="display.followOnly"></button>
+            </div>
+          </div>
+          <div id="display-multi" class="display-multi">
+          <fieldset class="display-modes">
+            <legend class="visually-hidden" data-i18n="display.modeLegend"></legend>
+            <div class="display-option">
+              <label class="display-mode">
+                <input type="radio" name="display-mode" value="active" />
+                <span><strong data-i18n="display.modeActive"></strong><small data-i18n="display.modeActiveHelp"></small></span>
+              </label>
+            </div>
+            <div class="display-option">
+              <label class="display-mode">
+                <input type="radio" name="display-mode" value="fixed" />
+                <span><strong data-i18n="display.modeFixed"></strong><small data-i18n="display.modeFixedHelp"></small></span>
+              </label>
+              <div class="display-fixed">
+                <label for="display-fixed-screen" data-i18n="display.fixedLabel"></label>
+                <select id="display-fixed-screen"></select>
+              </div>
+            </div>
+          </fieldset>
+          <p id="display-missing" class="hint has-warning" role="status" hidden></p>
+          <div class="display-identify">
+            <div class="display-map-area">
+              <div id="display-map" class="display-map" role="img" data-i18n-aria="display.mapLabel" hidden></div>
+              <ul class="display-legend" aria-hidden="true">
+                <li class="is-target" data-i18n="display.target"></li>
+                <li class="is-window" data-i18n="display.window"></li>
+              </ul>
+            </div>
+            <div class="display-identify-actions">
+              <button type="button" id="display-identify" class="ghost" data-i18n="display.identify"></button>
+              <div id="display-identified" class="display-identified" aria-live="polite" hidden>
+                <p id="display-identified-text"></p>
+                <button type="button" id="display-use-current" class="primary" data-i18n="display.useCurrent"></button>
+              </div>
+            </div>
+          </div>
+          </div>
+          <p id="display-error" class="hint has-warning" role="alert" hidden></p>
+        </section>
+        </section>
+
         <section class="settings-panel" id="settings-panel-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" tabindex="0" hidden>
         <label class="theme-setting" for="theme-preference">
           <span data-i18n="theme.label"></span>
@@ -329,6 +403,12 @@
             <li data-i18n="observer.offMeans"></li>
           </ul>
           <p class="settings-body" data-i18n="observer.body"></p>
+          <label class="observer-provider-label" for="settings-observer-provider" data-i18n="observer.provider"></label>
+          <select id="settings-observer-provider" class="observer-provider-select">
+            <option value="codex" data-i18n="observer.provider.codex"></option>
+            <option value="claude" data-i18n="observer.provider.claude"></option>
+          </select>
+          <p class="settings-body" data-i18n="observer.provider.help"></p>
           <p id="settings-observer-error" class="hint has-warning" role="alert" hidden></p>
         </section>
 

@@ -30,12 +30,32 @@ const shown = async key => Boolean((await board()).canvas.items.find(p => p.item
 const pose = async key => (await board()).canvas.items.find(p => p.item_id === key);
 // Playwright's frame locator hit-test misses SVG-scaled iframe coordinates. Map the observed rectangle, then send real pointer input.
 async function workClick(work, selector) {
+  // The camera may still be easing toward the activated card; map coordinates once it has stopped.
+  const element = await work.frameElement(); let last = '';
+  await until(async () => { const now = await element.evaluate(el => JSON.stringify(Object.values(el.getBoundingClientRect().toJSON()).map(Math.round))); const steady = now === last; last = now; await new Promise(r => setTimeout(r, 80)); return steady; }, 'steady work frame', 5000);
   const child = await work.locator(selector).evaluate(el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
-  const host = await (await work.frameElement()).evaluate(el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, scale: r.width / el.offsetWidth, left: el.clientLeft, top: el.clientTop }; });
+  const host = await element.evaluate(el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, scale: r.width / el.offsetWidth, left: el.clientLeft, top: el.clientTop }; });
   await native.mouse.click(host.x + (host.left + child.x) * host.scale, host.y + (host.top + child.y) * host.scale);
 }
+const settle = () => native.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+/** "Work inside" / "Back to canvas" sit on the selected card's head; the dock repeats them only while that head cannot be used. */
+async function modeButton(name, state) {
+  await settle();
+  const dock = toolbar.locator('.canvas-tool-selection > .canvas-selection-work');
+  if (await dock.isVisible()) { assert.equal(await dock.getAttribute('aria-label'), name); return dock; }
+  return native.locator('.canvas-frame.' + state + ' > .canvas-frame-head').getByRole('button', { name, exact: true });
+}
+const workInside = async () => (await modeButton('Work inside', 'is-selected')).click();
+const backToCanvas = async () => (await modeButton('Back to canvas', 'is-active')).click();
+/** Tidy, Undo/Redo, Card frame, Bring to front, Removed and the item jump live in the toolbar's More menu. */
+async function openMore() {
+  const more = toolbar.locator('.canvas-tool-more');
+  if (!await more.evaluate(details => details.open)) await more.locator(':scope > summary').click();
+  return more;
+}
+const moreItem = async name => (await openMore()).getByRole('button', { name, exact: true }).click();
 async function select(key) {
-  const done = toolbar.getByRole('button', { name: 'Back to canvas', exact: true }); if (await done.count()) await done.click();
+  if (await native.locator('.canvas-frame.is-active').count()) await backToCanvas();
   await until(() => toolbar.locator('option[value="' + key + '"]').count(), 'published object');
   await toolbar.getByRole('button', { name: 'All items', exact: true }).click();
   await native.locator('.canvas-overview-card[data-item-id="' + key + '"]').getByRole('button', { name: 'Locate', exact: true }).click();
@@ -43,7 +63,7 @@ async function select(key) {
   assert(await frame(key).evaluate(f => f.classList.contains('is-selected')));
 }
 async function restore(key) {
-  await toolbar.getByRole('button', { name: 'Removed', exact: true }).click();
+  await moreItem('Removed');
   await native.locator('.canvas-removed [data-item-id="' + key + '"]').getByRole('button', { name: 'Restore to canvas', exact: true }).click();
   await until(() => shown(key), 'restored object');
 }
@@ -60,10 +80,10 @@ try {
     await select(saved.textObject); assert.equal(await native.locator('#input').inputValue(), saved.draftMarker);
     const workReply = saved.expected.replies.find(r => r.blocks[0].type === 'artifact');
     const workObject = saved.expected.objects.find(o => o.content.type === 'reply' && o.content.id === workReply.id);
-    await select(workObject.id); await toolbar.getByRole('button', { name: 'Work inside', exact: true }).click();
+    await select(workObject.id); await workInside();
     const work = await (await frame(workObject.id).locator('iframe').elementHandle()).contentFrame();
     await until(async () => await work.locator('#note').inputValue() === workReply.blocks[0].state.note, 'work after process restart');
-    await toolbar.getByRole('button', { name: 'Back to canvas', exact: true }).click();
+    await backToCanvas();
     saved.restart = true; await writeFile(path.join(output, 'result.json'), JSON.stringify(saved, null, 2));
     console.log('PASS native process restart preserved identities, removed placement, content, work state and draft.'); process.exit(0);
   }
@@ -85,14 +105,22 @@ try {
   assert(await frame(textKey).locator('.canvas-frame-content').evaluate(c => c.inert));
   await frame(textKey).locator('.canvas-card-drag').dblclick({ position: { x: 20, y: 20 } });
   assert(await frame(textKey).evaluate(f => f.classList.contains('is-active'))); assert.equal(await native.locator('.canvas-reader[open]').count(), 0);
+  // Edit continues in the reader: the card's content moves into it, so the editor is found there.
   await frame(textKey).getByRole('button', { name: 'Edit', exact: true }).click();
-  const editor = frame(textKey).locator('textarea'); await editor.fill('Edited in place.'); await editor.press('Delete');
+  const textReader = native.locator('.canvas-reader[open]'); await textReader.waitFor();
+  const editor = textReader.locator('textarea'); await editor.fill('Edited in place.'); await editor.press('Delete');
   assert(await shown(textKey));
-  await frame(textKey).getByRole('button', { name: 'Save', exact: true }).click();
+  await textReader.getByRole('button', { name: 'Save', exact: true }).click();
   await until(async () => (await board()).replies.find(r => r.id === textId).blocks[0].text === 'Edited in place.', 'inline edit');
   const edited = (await board()).replies.find(r => r.id === textId);
-  assert((await request('/api/feedback')).pending.some(e => e.object_id === textKey && e.object_revision === edited.revision && e.source_id === source), 'Feedback must carry the stable object and exact content revision.');
-  await toolbar.getByRole('button', { name: 'Back to canvas', exact: true }).click(); pass('double-click activates inline; text input cannot remove content');
+  // Since the direct feedback workflow a Canvas edit is recorded as local state ("saved, not sent");
+  // it reaches the task only through an explicit send, but still names the stable object and revision.
+  const { events } = await request('/api/events?since=0');
+  assert(events.some(e => e.kind === 'canvas_state' && e.object_id === textKey && e.object_revision === edited.revision && e.source_id === source), 'The edit record must carry the stable object and exact content revision: ' + JSON.stringify(events.slice(-3)));
+  assert(!(await request('/api/feedback')).pending.some(e => e.object_id === textKey), 'A Canvas edit must not be sent without an explicit send.');
+  await textReader.locator(':scope > header').getByRole('button', { name: 'Close', exact: true }).click();
+  assert.equal(await native.locator('.canvas-reader[open]').count(), 0); assert(await shown(textKey));
+  pass('double-click activates inline; Edit continues in the reader; text input cannot remove content');
 
   await select(workKey); await native.keyboard.press('Enter');
   let work = await (await frame(workKey).locator('iframe').elementHandle()).contentFrame();
@@ -104,7 +132,7 @@ try {
   await workClick(work, '#note'); await native.keyboard.press('End'); await native.keyboard.press('Delete');
   const rect = await frame(workKey).locator('iframe').boundingBox(); await native.mouse.move(rect.x + 80, rect.y + 100); await native.mouse.wheel(0, 200);
   assert.deepEqual(await camera(), view); assert(await shown(workKey));
-  await toolbar.getByRole('button', { name: 'Back to canvas', exact: true }).click(); pass('Enter activates sandboxed work; its typing and wheel preserve canvas');
+  await backToCanvas(); pass('Enter activates sandboxed work; its typing and wheel preserve canvas');
 
   await select(textKey); const startPose = await pose(textKey);
   const blockedLayout = route => route.request().method() === 'POST' ? route.abort('failed') : route.continue();
@@ -117,8 +145,8 @@ try {
 
   await select(textKey); await native.keyboard.press('Shift+ArrowLeft');
   await until(async () => (await pose(textKey)).width === startPose.width - 20, 'resized presentation');
-  await toolbar.getByRole('button', { name: 'Card frame', exact: true }).click();
-  await toolbar.getByRole('button', { name: 'Bring to front', exact: true }).click();
+  await moreItem('Card frame');
+  await moreItem('Bring to front');
   await until(async () => { const p = await pose(textKey); return p.appearance === 'card' && p.z > startPose.z; }, 'style and z');
   const rememberedPose = await pose(textKey);
   await native.keyboard.press('Delete'); assert(await shown(textKey));
@@ -138,11 +166,11 @@ try {
   pass('remove/restore keep content, draft and complete placement; toolbar/modal/no-selection protected');
 
   await select(workKey); await native.keyboard.press('Backspace'); await until(async () => !await shown(workKey));
-  await restore(workKey); await toolbar.getByRole('button', { name: 'Work inside', exact: true }).click();
+  await restore(workKey); await select(workKey); await workInside();
   work = await (await frame(workKey).locator('iframe').elementHandle()).contentFrame();
   await until(async () => await work.locator('#count').innerText() === '1', 'restored artifact state');
   assert.equal(await work.locator('#note').inputValue(), 'Saved native work note'); pass('restored work resumes saved parameters');
-  await toolbar.getByRole('button', { name: 'Back to canvas', exact: true }).click();
+  await backToCanvas();
   // DIAG_ONLY migration fixture: two previously saved local drafts for the same work, neither may overwrite the other.
   const workReply = (await board()).replies.find(r => r.id === workId), workBlock = workReply.blocks[0];
   const legacyKey = 'spellcast.artifact-state.' + JSON.stringify([source, workId, 'work']);
@@ -154,31 +182,36 @@ try {
     localStorage.setItem(legacyKey, legacyRaw); localStorage.setItem(canonicalKey, canonicalRaw);
   }, { legacyKey, canonicalKey, legacyRaw, canonicalRaw });
   await native.reload(); await toolbar.waitFor(); await until(() => toolbar.locator('option[value="' + workKey + '"]').count());
-  await toolbar.locator('.canvas-jump').selectOption(workKey);
-  const reader = native.locator('.canvas-reader');
-  await reader.getByRole('button', { name: 'Inspect unsaved parameters', exact: true }).click();
-  const merge = reader.locator('.artifact-source-body > textarea');
+  // A single work keeps its run, parameter and version controls in its Work settings dialog; the live
+  // iframe stays in the card. Recovery starts there instead of in the reader.
+  await select(workKey); await toolbar.getByRole('button', { name: 'Work settings', exact: true }).click();
+  const manage = frame(workKey).locator('.artifact-management[open]'); await manage.waitFor();
+  await manage.locator('.artifact-operations > summary').click();
+  await manage.getByRole('button', { name: 'Inspect unsaved parameters', exact: true }).click();
+  const merge = manage.locator('.artifact-source-body > textarea');
   await merge.waitFor(); assert.equal(JSON.parse(await merge.inputValue()).count, 42);
   assert.deepEqual(await native.evaluate(keys => keys.map(key => localStorage.getItem(key)), [legacyKey, canonicalKey]), [legacyRaw, canonicalRaw]);
   assert.equal((await board()).replies.find(r => r.id === workId).blocks[0].state.count, 1, 'Conflicting local drafts must not save themselves.');
-  const saveMerged = reader.getByRole('button', { name: 'Save merged parameters', exact: true }); assert(await saveMerged.isDisabled());
+  const saveMerged = manage.getByRole('button', { name: 'Save merged parameters', exact: true }); assert(await saveMerged.isDisabled());
   await merge.fill(JSON.stringify({ count: 43, note: 'Merged legacy and canonical' }));
-  await reader.getByText('A separate legacy parameter draft is preserved', { exact: true }).click();
-  assert(await reader.getByText(legacyRaw, { exact: true }).isVisible());
-  await reader.getByRole('button', { name: 'Discard this legacy draft', exact: true }).click();
+  await manage.getByText('A separate legacy parameter draft is preserved', { exact: true }).click();
+  assert(await manage.getByText(legacyRaw, { exact: true }).isVisible());
+  await manage.getByRole('button', { name: 'Discard this legacy draft', exact: true }).click();
   await saveMerged.click();
   await until(async () => (await board()).replies.find(r => r.id === workId).blocks[0].state?.count === 43, 'explicit draft merge');
   assert.deepEqual(await native.evaluate(keys => keys.map(key => localStorage.getItem(key)), [legacyKey, canonicalKey]), [null, null]);
-  await reader.getByRole('button', { name: 'Run', exact: true }).click();
-  const recoveredWork = await (await reader.locator('iframe').elementHandle()).contentFrame();
+  await manage.getByRole('button', { name: 'Run', exact: true }).click();
+  const recoveredWork = await (await frame(workKey).locator('iframe').elementHandle()).contentFrame();
   await until(async () => await recoveredWork.locator('#note').inputValue() === 'Merged legacy and canonical');
-  await reader.locator(':scope > header').getByRole('button', { name: 'Close', exact: true }).click();
+  await manage.locator(':scope > header').getByRole('button', { name: 'Close', exact: true }).click();
+  await backToCanvas();
   pass('conflicting legacy and canonical drafts remain separate until explicitly merged; saved work resumes');
   await select(noteKey);
   for (let i = 0; i < 40; i++) { await native.keyboard.press('Shift+ArrowLeft'); await native.keyboard.press('Shift+ArrowUp'); }
-  await until(async () => { const p = await pose(noteKey); return p.width === 48 && p.height === 48; }, '48px presentation');
+  // Shift+Arrow now scales proportionally, so the shorter side stops at the 48px minimum.
+  await until(async () => { const p = await pose(noteKey); return Math.round(Math.min(p.width, p.height)) === 48; }, '48px presentation');
   await native.keyboard.press('Enter');
-  await toolbar.getByRole('button', { name: 'Back to canvas', exact: true }).click();
+  await backToCanvas();
   assert(await frame(noteKey).locator('.canvas-frame-content').evaluate(c => c.inert));
   pass('48px content keeps an accessible host return control');
   const notePose = await pose(noteKey); await native.keyboard.press('Backspace'); await until(async () => !await shown(noteKey));

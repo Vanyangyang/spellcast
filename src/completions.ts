@@ -1,4 +1,6 @@
 import "./completions.css";
+import "./fonts.css";
+import "./night-desk-notices.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cursorPosition, getCurrentWindow, type PhysicalPosition } from "@tauri-apps/api/window";
@@ -21,16 +23,18 @@ type VoiceSettings = { enabled: boolean; supported: boolean; volume: number; coo
 const voiceButton = document.querySelector<HTMLButtonElement>("#completion-voice")!;
 let voice: VoiceSettings | undefined;
 let items: Completion[] = [];
-const completionWindow = getCurrentWindow();
+// The desktop shell injects its internals before this script runs; a browser preview has no native
+// window, so the page still renders its chrome and cursor routing simply stays off.
+const completionWindow = "__TAURI_INTERNALS__" in window ? getCurrentWindow() : null;
 let windowOrigin: PhysicalPosition | undefined;
 let windowScale = 1;
 let cursorProbePending = false;
 let ignoringCursorEvents = false;
 
-async function refreshWindowMetrics() {
+async function refreshWindowMetrics(win: NonNullable<typeof completionWindow>) {
   [windowOrigin, windowScale] = await Promise.all([
-    completionWindow.innerPosition(),
-    completionWindow.scaleFactor(),
+    win.innerPosition(),
+    win.scaleFactor(),
   ]);
 }
 
@@ -44,10 +48,10 @@ function capturesPointerAt(x: number, y: number) {
 }
 
 async function routeCursorEvents() {
-  if (cursorProbePending || items.length === 0) return;
+  if (!completionWindow || cursorProbePending || items.length === 0) return;
   cursorProbePending = true;
   try {
-    if (!windowOrigin) await refreshWindowMetrics();
+    if (!windowOrigin) await refreshWindowMetrics(completionWindow);
     const cursor = await cursorPosition();
     const x = (cursor.x - windowOrigin!.x) / windowScale;
     const y = (cursor.y - windowOrigin!.y) / windowScale;

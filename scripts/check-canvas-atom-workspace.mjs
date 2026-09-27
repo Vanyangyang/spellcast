@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import path from "node:path";
+import { mkdirSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 let playwright;
@@ -16,6 +17,13 @@ page.setDefaultTimeout(10000);
 await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async value => { window.fixtureClipboard = value; } } }); });
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
+/** "Work inside" sits on the selected card's head; the dock repeats it only while that head cannot be used. */
+async function workInside() {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const dock = page.locator(".canvas-tool-selection > .canvas-selection-work");
+  if (await dock.isVisible()) return dock.click();
+  await page.locator(".canvas-frame.is-selected > .canvas-frame-head > button:first-of-type").click();
+}
 
 try {
   await page.route(url, route => route.fulfill({
@@ -25,7 +33,7 @@ try {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.evaluate(async () => {
     const { mountCanvas } = await import("/src/canvas.ts");
-    await import('/src/canvas-studio.css');
+    await import('/src/fonts.css'); await import('/src/canvas-studio.css');
     await import('/src/theme.css');
     document.body.classList.add('mode-focus', 'view-replies');
     document.body.dataset.theme = 'dark';
@@ -36,10 +44,26 @@ try {
         { id: "first", type: "text", title: "First atom", text: "Read the first atom. ".repeat(100) },
         { id: "second", type: "text", title: "Second atom", text: "Edit the second atom. ".repeat(100) },
         { id: "third", type: "text", title: "Third atom", text: "Read the third atom. ".repeat(700) },
-        { id: "graph", type: "graph", title: "Runtime chain", nodes: [{ id: "node-a", title: "Arrive" }, { id: "node-b", title: "Choose" }],
-          edges: [{ id: "edge-a", from: "node-a", to: "node-b", label: "then" }] },
-        { id: "comparison", type: "comparison", title: "Options", criteria: ["Cost"],
-          options: [{ id: "option-a", title: "Keep", summary: "Keep it", values: ["Low"] }, { id: "option-b", title: "Move", summary: "Move it", values: ["High"] }] },
+        { id: "graph", type: "graph", title: "当前代码中的探索循环", nodes: [
+          { id: "dungeon", title: "Dungeon → Zone", x: 0, y: 0 },
+          { id: "route", title: "空间移动与云卷", x: 496, y: 144 },
+          { id: "snapshot", title: "抵达 → 本 Run 快照", x: 248, y: 0 },
+          { id: "content", title: "遭遇与地点互动", x: 500, y: 0 },
+          { id: "settlement", title: "撤离 / 失败 → 返程事务", x: 744, y: 0 },
+          { id: "knowledge", title: "跨 Run 的地点记忆", x: 992, y: 0 },
+        ], edges: [
+          { id: "d-r", from: "dungeon", to: "route", label: "配置入口与边" },
+          { id: "r-s", from: "route", to: "snapshot", label: "合法进入后生成" },
+          { id: "s-c", from: "snapshot", to: "content", label: "冻结本轮内容" },
+          { id: "c-r", from: "content", to: "route", label: "继续探索 / 回访" },
+          { id: "c-e", from: "content", to: "settlement", label: "返程或失败" },
+          { id: "e-k", from: "settlement", to: "knowledge", label: "按返程结果提交" },
+          { id: "k-r", from: "knowledge", to: "route", label: "下一轮保留认知" },
+        ] },
+        { id: "comparison", type: "comparison", title: "并存区域对照", criteria: ["规模", "当前路线", "验证范围"],
+          options: ["教学 · 破碎小径", "神祠 · 外围林地", "神祠 · 神社庭院", "森林深处 · 迷雾森林", "湖心岛 · 湖岸"].map((title, i) => ({
+            id: `option-${i}`, title, summary: "dungeon_lake_heart_island", values: ["5 地点 / 5 条边", "入口 → 分支地点 → 汇合地点 → 安全返程", "配置已声明路线；实际运行仍待复核"],
+          })) },
         { id: "sequence", type: "sequence", title: "Next steps", steps: [{ id: "step-a", title: "Review", action: "Read the result" }] },
       ],
     };
@@ -47,8 +71,8 @@ try {
       topic: "", form: "spatial", form_reason: "", nodes: [], edges: [], messages: [], replies: [reply],
       canvas: {
         revision: 1, objects: [
-          { id: "object", content: { type: "reply", id: reply.id }, content_revision: 1 },
-          { id: "atom", content: { type: "block", block: { id: "atom-text", type: "text", title: "Standalone atom", text: "Edit me" } }, content_revision: 1 },
+          { id: "object", source_id: "fixture-source", content: { type: "reply", id: reply.id }, content_revision: 1 },
+          { id: "atom", source_id: "fixture-source", content: { type: "block", block: { id: "atom-text", type: "text", title: "Standalone atom", text: "Edit me" } }, content_revision: 1 },
         ],
         items: [
           { item_id: "object", revision: 1, z: 0, removed: false, appearance: "plain", x: 100, y: 100, width: 640, height: 520, user_modified: true },
@@ -91,14 +115,18 @@ try {
     };
     canvas = mountCanvas(document.getElementById("host"), handlers);
     window.fixtureErrors = [];
+    const bindings = [{ source_id: 'fixture-source', thread_id: '11111111-1111-4111-8111-111111111111', cwd: 'G:/ReaderFixture', label: 'Fixture' }];
+    canvas.setOverviewMeta({ bindings });
     canvas.update(snapshot);
-    window.fixture = { canvas, state: () => snapshot, remount: () => {
+    window.fixture = { canvas, state: () => snapshot, deliverBindings: () => canvas.setOverviewMeta({ bindings }), remount: (deferBindings = false) => {
       canvas.destroy(); canvas = mountCanvas(document.getElementById("host"), handlers);
       canvas.update(snapshot); window.fixture.canvas = canvas;
+      if (!deferBindings) canvas.setOverviewMeta({ bindings });
     }, setGraph: () => {
       const nodes = Array.from({ length: 9 }, (_, i) => ({ id: `node-${i}`, title: `Graph step ${i + 1}`, detail: `Description for step ${i + 1}` }));
       const graph = { id: "graph", type: "graph", title: "Runtime chain", nodes,
-        edges: nodes.slice(1).map((node, i) => ({ id: `edge-${i}`, from: nodes[i].id, to: node.id, label: `Transition ${i + 1}` })) };
+        edges: [...nodes.slice(1).map((node, i) => ({ id: `edge-${i}`, from: nodes[i].id, to: node.id, label: `Transition ${i + 1}` })),
+          { id: "return", from: nodes.at(-1).id, to: nodes[0].id, label: "Next run" }] };
       snapshot = { ...snapshot, replies: [{ ...snapshot.replies[0], revision: snapshot.replies[0].revision + 1,
         blocks: snapshot.replies[0].blocks.map(block => block.id === "graph" ? graph : block) }] };
       canvas.update(snapshot);
@@ -167,6 +195,7 @@ try {
   if (process.env.SPELLCAST_TEST_TEXT_SHOT) await page.screenshot({ path: process.env.SPELLCAST_TEST_TEXT_SHOT, animations: 'disabled' });
   await page.evaluate(async () => (await import('/src/canvas-typography.ts')).setCanvasFontPercent('body', 110));
   await reader.locator('button[data-block-id="graph"]').click();
+  assert.equal(await reader.locator('.rb-graph-zoom-value').textContent(), '100%', 'Automatic graph sizing must start at a readable scale.');
   await reader.locator('.rb-graph-canvas').hover();
   await page.keyboard.down('Control');
   await page.mouse.wheel(0, -120);
@@ -179,6 +208,50 @@ try {
     typography.setCanvasFontPercent('interface', 100);
   });
   if (process.env.SPELLCAST_TEST_SHOT) await page.screenshot({ path: process.env.SPELLCAST_TEST_SHOT, animations: "disabled" });
+  // Saved layouts are read-only while changing reading size, panning, or fitting.
+  const graphBefore = await page.evaluate(() => window.fixture.state().replies[0].blocks.find(b => b.id === 'graph'));
+  const graphPositions = await reader.locator('.rb-graph-canvas .x6-node').evaluateAll(nodes => nodes.map(node => {
+    const matrix = node.transform.baseVal.consolidate().matrix;
+    return { id: node.getAttribute('data-cell-id'), x: matrix.e, y: matrix.f };
+  }));
+  assert.deepEqual(graphPositions, graphBefore.nodes.map(({ id, x, y }) => ({ id, x, y })), 'Existing node coordinates must be used exactly, including non-grid positions.');
+  const shots = process.env.SPELLCAST_TEST_READABILITY_DIR;
+  if (shots) mkdirSync(shots, { recursive: true });
+  for (const width of [1440, 720]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const percent of [100, 180]) {
+      await page.evaluate(async value => (await import('/src/canvas-typography.ts')).setCanvasFontPercent('body', value), percent);
+      await reader.locator('button[data-block-id="graph"]').click();
+      await reader.locator('.rb-graph-zoom-value').click();
+      const graphText = await reader.locator('.rb-graph-canvas .x6-node text').first().evaluate(node => ({
+        font: parseFloat(getComputedStyle(node).fontSize) * Math.abs(node.getScreenCTM().a),
+        scale: document.querySelector('.canvas-reader .rb-graph-zoom-value').textContent,
+      }));
+      assert(graphText.font >= 13.9 && graphText.scale === '100%', 'Default graph labels must remain readable at either body size and window width.');
+      if (shots) await page.screenshot({ path: path.join(shots, `graph-${width}-${percent}.png`), animations: 'disabled' });
+      await reader.locator('button[data-block-id="comparison"]').click();
+      const cards = reader.locator('.rb-cmp-card');
+      assert.equal(await cards.count(), 5);
+      assert.doesNotMatch(await reader.locator('.rb-cmp-grid').innerText(), /方案\s*\d|Option\s*\d/);
+      assert.equal(await cards.first().locator('h4').textContent(), '教学 · 破碎小径');
+      assert(await cards.evaluateAll(nodes => nodes.every(node => node.scrollWidth <= node.clientWidth + 1)), 'Comparison titles, long identifiers and values must not overflow their cards.');
+      if (shots) await page.screenshot({ path: path.join(shots, `comparison-${width}-${percent}.png`), animations: 'disabled' });
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await reader.locator('button[data-block-id="graph"]').click();
+  const graphPane = reader.locator('.rb-graph-canvas');
+  const panBefore = await graphPane.locator('.x6-graph-svg-viewport').getAttribute('transform');
+  const graphBox = await graphPane.boundingBox();
+  await page.mouse.move(graphBox.x + 100, graphBox.y + graphBox.height - 40);
+  await page.mouse.down(); await page.mouse.move(graphBox.x + 20, graphBox.y + graphBox.height - 40, { steps: 5 }); await page.mouse.up();
+  assert.notEqual(await graphPane.locator('.x6-graph-svg-viewport').getAttribute('transform'), panBefore, 'Oversized readable graphs must be pannable.');
+  await reader.locator('.rb-graph-tools > button').last().click();
+  assert(parseInt(await reader.locator('.rb-graph-zoom-value').textContent()) < 100, 'Explicit fit should still offer a whole-graph overview.');
+  await reader.locator('.rb-graph-zoom-value').click();
+  assert.deepEqual(await page.evaluate(() => window.fixture.state().replies[0].blocks.find(b => b.id === 'graph')), graphBefore, 'Reading controls must preserve saved node coordinates and content.');
+  assert.equal(await page.evaluate(() => window.fixture.state().replies[0].revision), 1, 'Reading and navigation must not save node positions.');
+  await page.evaluate(async () => (await import('/src/canvas-typography.ts')).setCanvasFontPercent('body', 110));
   assert.equal(await reader.locator(".canvas-reader-atoms button").count(), 6);
   assert.equal(await reader.locator('.rb-block[data-block-id="graph"]').isVisible(), true);
   assert.equal(await reader.locator('.rb-block[data-block-id="first"]').isVisible(), false);
@@ -199,16 +272,21 @@ try {
 
   // Navigating and closing a long block retains the exact scroll offset.
   await reader.locator('button[data-block-id="third"]').click();
-  await readingPane.evaluate(node => { node.scrollTop = 240; });
+  await readingPane.hover();
+  await page.mouse.wheel(0, 240);
+  await page.waitForFunction(() => document.querySelector('.canvas-reader-workspace > .canvas-frame-content').scrollTop === 240);
   await reader.locator('button[data-block-id="first"]').click();
   await reader.locator('button[data-block-id="third"]').click();
   await page.waitForFunction(() => document.querySelector('.canvas-reader-workspace > .canvas-frame-content').scrollTop === 240);
   await reader.locator('.canvas-reader-close').click();
   await reader.waitFor({ state: 'hidden' });
-  await page.locator('.canvas-tool-selection > .canvas-tool-primary:not(.canvas-selection-discuss)').click();
+  await workInside();
   await reader.waitFor({ state: 'visible' });
   await page.waitForFunction(() => document.querySelector('.canvas-reader-workspace > .canvas-frame-content').scrollTop === 240);
-  await page.evaluate(() => window.fixture.remount());
+  await page.evaluate(() => window.fixture.remount(true));
+  await page.waitForTimeout(150);
+  assert.equal(await reader.isVisible(), false, 'Restore must wait until the saved workspace can be resolved.');
+  await page.evaluate(() => window.fixture.deliverBindings());
   await reader.waitFor({ state: 'visible' });
   await page.waitForFunction(() => document.querySelector('.canvas-reader-workspace > .canvas-frame-content')?.scrollTop === 240);
   assert.equal(await reader.locator('.rb-block[data-block-id="third"]').isVisible(), true, 'Remount must restore the focused block.');
@@ -217,7 +295,7 @@ try {
   await page.evaluate(() => window.fixture.remount());
   assert.equal(await reader.isVisible(), false, 'An explicitly closed reader must stay closed after remount.');
   await page.evaluate(() => window.fixture.canvas.select('reply'));
-  await page.locator('.canvas-tool-selection > .canvas-tool-primary:not(.canvas-selection-discuss)').click();
+  await workInside();
   await reader.waitFor({state:'visible'});
 
   // Hidden dirty blocks stay marked. Ctrl+S saves only the focused block and errors remain recoverable.
@@ -307,7 +385,7 @@ try {
   await page.locator('.canvas-reply-summary-atom[data-block-id="second"]').click({modifiers:['Control']});
   assert.deepEqual(await page.evaluate(() => window.fixture.canvas.getSelection().anchors.map(anchor => anchor.block_id)), ['first', 'second']);
   assert.equal(await page.locator('.canvas-reply-summary-atom[data-block-id="second"]').getAttribute('aria-pressed'), 'true');
-  await page.locator('.canvas-tool-selection > .canvas-tool-primary:not(.canvas-selection-discuss)').click();
+  await workInside();
   await reader.waitFor({state:'visible'});
   assert.equal(await reader.locator('.canvas-reader-atom-row[data-block-id="first"] input').isChecked(), true);
   assert.equal(await reader.locator('.canvas-reader-atom-row[data-block-id="second"] input').isChecked(), true);
@@ -369,13 +447,13 @@ try {
   await idea.waitFor({state:'hidden'});
 
   await page.evaluate(() => window.fixture.canvas.select('reply'));
-  await page.locator('.canvas-tool-selection > .canvas-tool-primary:not(.canvas-selection-discuss)').click();
+  await workInside();
   await reader.waitFor({state:'visible'});
   await reader.locator(".canvas-reader-close").click();
   await reader.waitFor({ state: "hidden" });
   assert.equal(await page.locator('.canvas-frame[data-item-id="object"] > .canvas-frame-content').count(), 1);
   await page.evaluate(() => window.fixture.canvas.selectObject("atom"));
-  await page.locator(".canvas-tool-selection > .canvas-tool-primary:not(.canvas-selection-discuss)").click();
+  await workInside();
   await page.locator('.canvas-frame[data-item-id="atom"] .rb-block-tools button').last().click();
   await reader.waitFor({ state: "visible" });
   assert.equal(await reader.locator(".canvas-reader-outline").isVisible(), false, "A standalone atom needs the wide editor without an empty outline.");
@@ -384,7 +462,7 @@ try {
   await reader.waitFor({ state: "hidden" });
   await page.setViewportSize({ width: 720, height: 800 });
   await page.evaluate(() => window.fixture.canvas.select("reply"));
-  await page.locator(".canvas-tool-selection > .canvas-tool-primary:not(.canvas-selection-discuss)").click();
+  await workInside();
   await reader.waitFor({ state: "visible" });
   const mobile = await reader.evaluate(node => ({
     width: node.getBoundingClientRect().width,
@@ -409,6 +487,8 @@ try {
     detailsBottom: node.querySelector('.rb-graph-below').getBoundingClientRect().bottom,
   }));
   assert(graphBounds.detailsBottom <= graphBounds.cardBottom + 1, 'Graph details must stay inside the focused block border.');
+  const flowRows = await reader.locator('.rb-graph-canvas .x6-node').evaluateAll(nodes => [...new Set(nodes.map(node => node.transform.baseVal.consolidate().matrix.f))]);
+  assert.equal(flowRows.length, 9, 'A new cyclic flow must follow its edges through successive rows instead of collapsing into one row.');
   await reader.locator('.canvas-reader-close').click();
   await reader.waitFor({state:'hidden'});
   await page.locator('.canvas-tool-camera > button:nth-child(4)').click();

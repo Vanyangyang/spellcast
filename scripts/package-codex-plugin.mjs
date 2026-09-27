@@ -15,15 +15,18 @@ export const REQUIRED_SKILL_REFS = [
   "skills/spellcast/references/canvas.md",
   "skills/spellcast/references/works.md",
   "skills/spellcast/references/feedback.md",
+  "skills/spellcast/references/project-records.md",
 ];
 
 export const REQUIRED_RELATIVE = [
   ".codex-plugin/plugin.json",
   "hooks/observer-bootstrap.txt",
   "hooks/observer-stop.txt",
+  "hooks/claude-observer-runner.mjs",
   "hooks/INSTALL.md",
   "skills/spellcast/SKILL.md",
   ...REQUIRED_SKILL_REFS,
+  "skills/spellcast/scripts/project-api.mjs",
   "LICENSE",
 ];
 
@@ -221,7 +224,7 @@ function expectHook(out, label, eventName, expectedText) {
     throw new Error(`${label} hookEventName=${parsed.hookEventName}`);
   }
   if (parsed.additionalContext !== expectedText) {
-    throw new Error(`${label} stdout text does not match packaged hook text`);
+    throw new Error(`${label} stdout text does not match packaged hook text: actualTail=${JSON.stringify(parsed.additionalContext.slice(-180))} expectedTail=${JSON.stringify(expectedText.slice(-180))}`);
   }
   return parsed;
 }
@@ -253,7 +256,11 @@ export function assertWindowsShellOnOff({ pluginRoot, bootstrap, stop }) {
     const first = spawnShell("powershell", cmd, { input: start, env });
     if (first.exit !== 0) throw new Error(`powershell ON exit ${first.exit} err=${first.err}`);
     if (first.err && first.err.trim()) throw new Error(`powershell ON stderr: ${first.err}`);
-    expectHook(first.out, "powershell ON", "SessionStart", bootstrap);
+    const runner = join(pluginRoot, "hooks/claude-observer-runner.mjs");
+    const expectedBootstrap = existsSync(runner)
+      ? `${bootstrap}\nCLAUDE_OBSERVER_RUNNER_PATH=${JSON.stringify(runner)}`
+      : bootstrap;
+    expectHook(first.out, "powershell ON", "SessionStart", expectedBootstrap);
     mock.setOff();
     const second = spawnShell("cmd", cmd, { input: prompt, env });
     if (second.exit !== 0) throw new Error(`cmd OFF exit ${second.exit} err=${second.err}`);
@@ -294,6 +301,7 @@ function sleepMs(ms) {
 
 function helperEnv() {
   const env = { ...process.env };
+  delete env.PLUGIN_ROOT;
   delete env.PLUGIN_DATA;
   delete env.CLAUDE_PLUGIN_DATA;
   delete env.SPELLCAST_HOOK_STATE_DIR;
@@ -634,11 +642,13 @@ function main() {
   copyRequired(join(sourceRoot, ".codex-plugin/plugin.json"), join(dest, ".codex-plugin/plugin.json"), "plugin manifest");
   copyRequired(join(sourceRoot, "hooks/observer-bootstrap.txt"), join(dest, "hooks/observer-bootstrap.txt"), "bootstrap text");
   copyRequired(join(sourceRoot, "hooks/observer-stop.txt"), join(dest, "hooks/observer-stop.txt"), "stop text");
+  copyRequired(join(sourceRoot, "hooks/claude-observer-runner.mjs"), join(dest, "hooks/claude-observer-runner.mjs"), "Claude observer runner");
   copyRequired(join(sourceRoot, "hooks/INSTALL.md"), join(dest, "INSTALL.md"), "install notes");
   for (const rel of REQUIRED_SKILL_REFS) {
     copyRequired(join(sourceRoot, rel), join(dest, rel), rel);
   }
   copyRequired(join(sourceRoot, "skills/spellcast/SKILL.md"), join(dest, "skills/spellcast/SKILL.md"), "canonical skill");
+  copyRequired(join(sourceRoot, "skills/spellcast/scripts/project-api.mjs"), join(dest, "skills/spellcast/scripts/project-api.mjs"), "local project API client");
   copyRequired(join(sourceRoot, "LICENSE"), join(dest, "LICENSE"), "license");
   copyRequired(built, join(dest, "bin", exeName), "native helper");
 

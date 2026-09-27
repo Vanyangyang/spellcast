@@ -103,7 +103,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "reply.updated": "更新于 {time}",
     untitled: "未命名",
     "kind.text": "文字",
-    "kind.comparison": "方案对照",
+    "kind.comparison": "对照",
     "kind.graph": "关系图",
     "kind.sequence": "分镜",
     "kind.artifact": "开放作品",
@@ -138,10 +138,10 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "edit.criteria": "对照维度",
     "edit.criterion": "维度 {n}",
     "edit.addCriterion": "添加维度",
-    "edit.options": "方案",
-    "edit.option": "方案 {n}",
-    "edit.addOption": "添加方案",
-    "edit.optionTitle": "方案名",
+    "edit.options": "对照对象",
+    "edit.option": "对象 {n}",
+    "edit.addOption": "添加对象",
+    "edit.optionTitle": "对象名称",
     "edit.optionSummary": "一句话概括",
     "edit.steps": "步骤",
     "edit.step": "第 {n} 步",
@@ -154,15 +154,15 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "edit.nodeTitle": "节点标题",
     "edit.nodeDetail": "节点说明",
     "edit.noNodes": "这张图还没有节点，只能修改标题。",
-    "cmp.choose": "选择这个方案",
-    "cmp.chosen": "已选这个方案",
+    "cmp.choose": "选中此项",
+    "cmp.chosen": "已选中此项",
     "cmp.choosing": "正在选择…",
     "cmp.current": "当前选择：",
     "cmp.none": "尚未选择",
     "cmp.failed": "选择没有成功，请再试一次。",
     "cmp.noValue": "—",
     "cmp.extra": "其他",
-    "cmp.empty": "这一组还没有方案。",
+    "cmp.empty": "这一组还没有对照对象。",
     "seq.step": "第 {n} 步",
     "seq.action": "动作",
     "seq.feedback": "反馈",
@@ -176,6 +176,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "graph.zoomIn": "放大",
     "graph.zoomOut": "缩小",
     "graph.fit": "适应画布",
+    "graph.readable": "恢复可读大小（100%）",
     "graph.canvas": "关系图画布",
     "graph.nodes": "节点",
     "graph.detail": "节点说明",
@@ -236,10 +237,10 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "edit.criteria": "Criteria",
     "edit.criterion": "Criterion {n}",
     "edit.addCriterion": "Add criterion",
-    "edit.options": "Options",
-    "edit.option": "Option {n}",
-    "edit.addOption": "Add option",
-    "edit.optionTitle": "Option name",
+    "edit.options": "Comparison items",
+    "edit.option": "Item {n}",
+    "edit.addOption": "Add item",
+    "edit.optionTitle": "Item name",
     "edit.optionSummary": "One-line summary",
     "edit.steps": "Steps",
     "edit.step": "Step {n}",
@@ -252,7 +253,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "edit.nodeTitle": "Node title",
     "edit.nodeDetail": "Node detail",
     "edit.noNodes": "This graph has no nodes yet; only the title can be edited.",
-    "cmp.choose": "Choose this option",
+    "cmp.choose": "Select this item",
     "cmp.chosen": "Chosen",
     "cmp.choosing": "Choosing…",
     "cmp.current": "Current choice:",
@@ -260,7 +261,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "cmp.failed": "The choice did not go through. Please try again.",
     "cmp.noValue": "—",
     "cmp.extra": "Other",
-    "cmp.empty": "No options in this comparison yet.",
+    "cmp.empty": "No items in this comparison yet.",
     "seq.step": "Step {n}",
     "seq.action": "Action",
     "seq.feedback": "Feedback",
@@ -274,6 +275,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "graph.zoomIn": "Zoom in",
     "graph.zoomOut": "Zoom out",
     "graph.fit": "Fit to view",
+    "graph.readable": "Restore readable size (100%)",
     "graph.canvas": "Relation graph canvas",
     "graph.nodes": "Nodes",
     "graph.detail": "Node detail",
@@ -1208,17 +1210,16 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
     } else {
       const grid = el("div", "rb-cmp-grid");
       grid.setAttribute("role", "group");
-      block.options.forEach((option, index) => {
+      block.options.forEach((option) => {
         const card = el("article", "rb-cmp-card");
         card.dataset.targetId = option.id; card.dataset.targetKind = "option";
         const isChosen = option.id === block.selected_id;
         card.classList.toggle("is-selected", isChosen);
 
         const head = el("div", "rb-cmp-card-head");
-        head.append(el("span", "rb-small", translate("edit.option", { n: index + 1 })));
+        head.append(el("h4", undefined, displayTitle(option.title)));
         if (isChosen) head.append(el("span", "rb-small rb-block-selected-tag", translate("cmp.chosen")));
         card.append(head);
-        card.append(el("h4", undefined, displayTitle(option.title)));
         if (option.summary.trim()) card.append(el("p", "rb-cmp-summary", option.summary));
         if (option.image) card.append(this.renderImage(option.image, { kind: "option", id: option.id }));
         if (option.artifact) card.append(this.renderArtifact(option.artifact));
@@ -1348,7 +1349,7 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
     const options = el("div", "rb-grid-2");
     draft.options.forEach((option, index) => {
       const set = el("fieldset", "rb-fieldset");
-      set.append(el("legend", undefined, translate("edit.option", { n: index + 1 })));
+      set.append(el("legend", undefined, option.title.trim() || translate("edit.option", { n: index + 1 })));
       const head = el("div", "rb-fieldset-head");
       head.append(
         el("span", "rb-small", option.id === draft.selected_id ? translate("cmp.chosen") : ""),
@@ -1563,15 +1564,15 @@ class SequenceView extends BlockView<ReplySequenceBlock, SequenceDraft> {
 
 const NODE_W = 200;
 const NODE_H = 72;
-const LAYOUT_GAP_X = 48;
-const LAYOUT_GAP_Y = 72;
-const GRAPH_FONT = '"IBM Plex Sans", "Noto Sans SC", "Noto Sans JP", sans-serif';
+const LAYOUT_GAP_X = 120;
+const LAYOUT_GAP_Y = 100;
+const GRAPH_FONT = '"Noto Sans SC", "Microsoft YaHei UI", sans-serif';
 
 const NODE_BASE_ATTRS = {
   body: { fill: "var(--rb-node-fill, #14161d)", stroke: "var(--rb-node-stroke, rgba(244, 241, 234, 0.24))", strokeWidth: 1, rx: 12, ry: 12 },
   label: {
     fill: "var(--rb-node-text, #f4f1ea)",
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: GRAPH_FONT,
     textWrap: { width: -24, height: -16, ellipsis: true },
   },
@@ -1607,19 +1608,19 @@ function autoLayout(block: ReplyGraphBlock): Map<string, { x: number; y: number 
     indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
   });
   const level = new Map<string, number>();
-  const queue = loose.filter((n) => (indeg.get(n.id) ?? 0) === 0).map((n) => n.id);
-  queue.forEach((id) => level.set(id, 0));
-  while (queue.length) {
-    const u = queue.shift()!;
-    for (const v of out.get(u) ?? []) {
-      level.set(v, Math.max(level.get(v) ?? 0, (level.get(u) ?? 0) + 1));
-      indeg.set(v, (indeg.get(v) ?? 1) - 1);
-      if (indeg.get(v) === 0) queue.push(v);
+  // Follow the flow from its entry. Back edges in a cycle must not collapse
+  // every unpositioned node into the same row.
+  const visit = (start: string, firstLevel: number) => {
+    const queue = [start]; level.set(start, firstLevel);
+    while (queue.length) {
+      const u = queue.shift()!;
+      for (const v of out.get(u) ?? []) if (!level.has(v)) {
+        level.set(v, level.get(u)! + 1); queue.push(v);
+      }
     }
-  }
-  loose.forEach((n) => {
-    if (!level.has(n.id)) level.set(n.id, 0);
-  });
+  };
+  for (const node of loose.filter(n => indeg.get(n.id) === 0)) if (!level.has(node.id)) visit(node.id, 0);
+  for (const node of loose) if (!level.has(node.id)) visit(node.id, 0);
 
   const rows = new Map<number, string[]>();
   loose.forEach((n) => {
@@ -1668,6 +1669,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
 
   private readonly toolsBar: HTMLElement;
   private readonly hintEl: HTMLElement;
+  private readonly zoomValue: HTMLButtonElement;
   /** CSS-sized frame; X6 gets the inner host because it writes inline px sizes on its container. */
   private readonly canvas: HTMLElement;
   private readonly graphHost: HTMLElement;
@@ -1685,6 +1687,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
 
     this.toolsBar = el("div", "rb-graph-tools");
     this.hintEl = el("span", "rb-small");
+    this.zoomValue = button("100%", "rb-graph-zoom-value", () => this.fit(true));
     this.canvas = el("div", "rb-graph-canvas");
     this.canvas.setAttribute("role", "img");
     this.graphHost = el("div", "rb-graph-host");
@@ -1721,10 +1724,13 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     this.toolsBar.replaceChildren(
       button(translate("graph.zoomOut"), "", () => this.graph?.zoom(-0.15, { minScale: 0.3 })),
       button(translate("graph.zoomIn"), "", () => this.graph?.zoom(0.15, { maxScale: 2.5 })),
+      this.zoomValue,
       button(translate("graph.fit"), "", () => this.fit()),
       this.hintEl,
     );
     this.hintEl.textContent = translate("graph.hint");
+    this.zoomValue.title = translate("graph.readable");
+    this.zoomValue.setAttribute("aria-label", translate("graph.readable"));
   }
 
   private ensureGraph(): void {
@@ -1760,6 +1766,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     });
     graph.on("node:click", ({ node }) => this.focusNode(node.id));
     graph.on("edge:click", ({ edge }) => this.focusEdge(edge.id));
+    graph.on("scale", ({ sx }) => { this.zoomValue.textContent = `${Math.round(sx * 100)}%`; });
     graph.on("node:move", () => {
       this.dragging = true;
     });
@@ -1768,20 +1775,30 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
       const draftNode = this.edit?.draft.nodes.find(item => item.id === node.id);
       if (draftNode) { const pos = node.getPosition(); draftNode.x = Math.round(pos.x); draftNode.y = Math.round(pos.y); }
       this.scheduleLayoutSave();
+      this.syncGraph();
     });
     // Fires after X6's own resize (including the first time a hidden panel becomes visible).
     graph.on("resize", () => {
-      if (this.pendingFit) this.fit();
+      if (this.pendingFit) this.fit(true);
     });
     this.graph = graph;
   }
 
-  private fit(): void {
+  private fit(readable = false): void {
     const g = this.graph;
     if (!g || this.canvas.clientWidth <= 0) return;
     if (g.getNodes().length === 0) return;
-    g.zoomToFit({ padding: 28, maxScale: 1, minScale: 0.3 });
-    g.centerContent();
+    if (readable) {
+      g.zoomTo(1);
+      const area = g.getContentArea();
+      // Start at the top/left when the diagram exceeds the viewport. The user
+      // can pan or jump via the node list without shrinking every label.
+      g.translate(32 + Math.max(0, (this.canvas.clientWidth - 64 - area.width) / 2) - area.x,
+        32 + Math.max(0, (this.canvas.clientHeight - 64 - area.height) / 2) - area.y);
+    } else {
+      g.zoomToFit({ padding: 28, maxScale: 1, minScale: 0.3 });
+      g.centerContent();
+    }
     this.pendingFit = false;
   }
 
@@ -1810,7 +1827,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     return [
       {
         attrs: {
-          text: { text, fill: "var(--rb-node-text, #f4f1ea)", fontSize: 12, fontFamily: GRAPH_FONT },
+          text: { text, fill: "var(--rb-node-text, #f4f1ea)", fontSize: 13, fontFamily: GRAPH_FONT },
           rect: {
             fill: "var(--rb-node-fill, #0f1117)",
             stroke: "var(--rb-node-stroke, rgba(244, 241, 234, 0.18))",
@@ -1827,6 +1844,20 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
         position: { distance: 0.5 },
       },
     ];
+  }
+
+  private edgeGeometry(edge: ReplyGraphBlock["edges"][number]) {
+    const source = this.graph?.getCellById(edge.from), target = this.graph?.getCellById(edge.to);
+    if (!source?.isNode() || !target?.isNode()) return {};
+    const from = source.getPosition(), to = target.getPosition();
+    // A short horizontal gap cannot hold a whole label. Route above the
+    // neighboring nodes instead of printing through their titles.
+    if (Math.abs(from.y - to.y) < NODE_H && Math.abs(from.x - to.x) >= NODE_W && Math.abs(from.x - to.x) < NODE_W + 160) {
+      const y = Math.min(from.y, to.y) - 44;
+      return { source: { cell: edge.from, anchor: "top" }, target: { cell: edge.to, anchor: "top" },
+        vertices: [{ x: from.x + NODE_W / 2, y }, { x: to.x + NODE_W / 2, y }] };
+    }
+    return { source: { cell: edge.from }, target: { cell: edge.to }, vertices: [] };
   }
 
   private syncGraph(): void {
@@ -1857,15 +1888,15 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
         if (!ids.has(edge.from) || !ids.has(edge.to)) return;
         g.addEdge({
           id: edge.id,
-          source: { cell: edge.from },
-          target: { cell: edge.to },
-          connector: { name: "smooth" },
+          ...this.edgeGeometry(edge),
+          router: { name: "manhattan", args: { padding: 20 } },
+          connector: { name: "rounded", args: { radius: 12 } },
           attrs: this.edgeAttrs(edge),
           labels: this.edgeLabels(edge.label),
         });
       });
       this.structureKey = key;
-      if (firstRender) { this.pendingFit = true; this.fit(); }
+      if (firstRender) { this.pendingFit = true; this.fit(true); }
       return;
     }
 
@@ -1885,6 +1916,10 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
       const cell = g.getCellById(edge.id);
       if (!cell || !cell.isEdge()) return;
       const x6edge = cell as X6Edge;
+      const geometry = this.edgeGeometry(edge);
+      if (geometry.source && geometry.target) {
+        x6edge.setSource(geometry.source); x6edge.setTarget(geometry.target); x6edge.setVertices(geometry.vertices);
+      }
       x6edge.setAttrs(this.edgeAttrs(edge));
       x6edge.setLabels(this.edgeLabels(edge.label));
     });
@@ -1920,7 +1955,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     this.focusedEdgeId = null;
   }
 
-  private focusNode(id: string | null): void {
+  private focusNode(id: string | null, reveal = false): void {
     const nodeId = id && this.shownBlock().nodes.some(node => node.id === id) ? id : null;
     this.focusedNodeId = nodeId;
     this.focusedEdgeId = null;
@@ -1928,6 +1963,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
     this.syncGraph();
     this.renderNodeList();
     this.renderDetail();
+    if (reveal && nodeId) { const cell = this.graph?.getCellById(nodeId); if (cell) this.graph?.centerCell(cell); }
     if (this.edit && this.edit.draft.nodeId !== nodeId && nodeId) {
       this.edit.draft.nodeId = nodeId;
       this.rebuildEditor();
@@ -1957,7 +1993,7 @@ class GraphView extends BlockView<ReplyGraphBlock, GraphDraft> {
       nodes.forEach((node) => {
         const item = el("li");
         const focused = node.id === this.focusedNodeId;
-        const b = button("", "", () => this.focusNode(focused ? null : node.id));
+        const b = button("", "", () => this.focusNode(focused ? null : node.id, true));
         b.setAttribute("aria-pressed", String(focused));
         b.append(el("span", undefined, displayTitle(node.title)));
         if (focused) b.append(el("span", "rb-small rb-block-selected-tag", translate("graph.focused")));

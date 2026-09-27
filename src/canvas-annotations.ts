@@ -241,6 +241,8 @@ function objectTitle(board: BoardSnapshot, object: CanvasObject): string {
     case "node": return board.nodes.find(node => node.id === content.id)?.title || "";
     case "reply": return board.replies?.find(reply => reply.id === content.id)?.title || "";
     case "block": return content.block.title || "";
+    case "work_record": return content.record_id;
+    case "source_table": return content.table.title;
     case "text": case "image": case "shape": return content.title;
   }
 }

@@ -11,10 +11,26 @@ pub mod codex;
 pub mod feedback;
 pub mod mcp;
 pub mod observer;
+pub mod project_records;
+pub mod project_planning;
+pub mod project_flow;
+pub mod project_trials;
+pub mod project_proposals;
+pub mod game_config;
+pub mod game_projection;
+pub mod project_game;
+pub mod project_goals;
+mod project_record_store;
+pub mod project_workspace;
+mod project_api;
 #[cfg(test)]
 mod annotation_tests;
 #[cfg(test)]
 mod reply_tests;
+#[cfg(test)]
+mod delete_lock_tests;
+#[cfg(test)]
+mod project_content_tests;
 mod store;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -118,8 +134,22 @@ pub struct Status {
     /// Product aside switch. Missing in old databases means off.
     #[serde(default)]
     pub observer_enabled: bool,
+    #[serde(default = "default_observer_provider")]
+    pub observer_provider: String,
     #[serde(default)]
     pub observer_policy_revision: u64,
+}
+
+fn default_observer_provider() -> String {
+    "codex".into()
+}
+
+fn normalize_observer_provider(raw: &str) -> Option<&'static str> {
+    match raw {
+        "codex" => Some("codex"),
+        "claude" => Some("claude"),
+        _ => None,
+    }
 }
 
 fn default_ui_locale() -> String {
@@ -172,6 +202,8 @@ struct PersistedState {
     /// Independent observer asides. Absent field in an old store is off.
     #[serde(default)]
     observer_enabled: bool,
+    #[serde(default = "default_observer_provider")]
+    observer_provider: String,
     /// Bumps only when the aside switch or observation-relevant pause actually changes.
     #[serde(default)]
     observer_policy_revision: u64,
@@ -258,6 +290,10 @@ impl PersistedState {
 pub struct Bridge {
     state: Mutex<PersistedState>,
     store: Option<Mutex<Store>>,
+    project_window_key: String,
+    project_local_key: Option<String>,
+    game_repositories: game_config::RepositoryCache,
+    game_indexes: game_projection::ProjectionCache,
     status: Mutex<Status>,
     notify: Notify,
     surface: Box<dyn Surface>,
@@ -309,6 +345,10 @@ impl Bridge {
         state.ui_locale = normalize_ui_locale(&state.ui_locale).into();
         Self {
             state: Mutex::new(state),
+            project_window_key: format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple()),
+            project_local_key: None,
+            game_repositories: game_config::RepositoryCache::default(),
+            game_indexes: game_projection::ProjectionCache::default(),
             store: store.map(Mutex::new),
             status: Mutex::new(Status {
                 surface: "ambient".into(),
@@ -321,6 +361,7 @@ impl Bridge {
                 sources: Vec::new(),
                 paused: false,
                 observer_enabled: false,
+                observer_provider: default_observer_provider(),
                 observer_policy_revision: 0,
             }),
             notify: Notify::new(),
@@ -341,6 +382,7 @@ impl Bridge {
         let mut next = current.clone();
         let result = change(&mut next)?;
         next.session.sync_canvas();
+        current.session.ensure_delete_locks_preserved(&next.session)?;
         if let Some(store) = &self.store {
             let requests: Vec<_> = next
                 .deliveries
@@ -385,6 +427,15 @@ impl Bridge {
         Ok(snapshot)
     }
 
+    pub fn set_canvas_delete_lock(&self, current: Vec<spellcast_core::CanvasRead>, locked: bool) -> Result<BoardSnapshot, SpellcastError> {
+        let snapshot = self.update(|state| {
+            state.session.set_canvas_delete_lock(&current, locked)?;
+            Ok(state.session.snapshot())
+        })?;
+        self.surface.board_changed();
+        Ok(snapshot)
+    }
+
     pub fn restore_canvas_item(&self, item_id: &str, expected_revision: u64) -> Result<BoardSnapshot, SpellcastError> {
         let snapshot = self.update(|state| {
             state.session.set_canvas_removed(item_id, expected_revision, false)?;
@@ -410,6 +461,7 @@ impl Bridge {
         let state = self.state.lock().unwrap();
         status.paused = state.paused;
         status.observer_enabled = state.observer_enabled;
+        status.observer_provider = state.observer_provider.clone();
         status.observer_policy_revision = state.observer_policy_revision;
         for binding in &state.bindings {
             if !status.sources.iter().any(|s| s.id == binding.source_id) {
@@ -467,6 +519,21 @@ impl Bridge {
         Ok(self.observer_status())
     }
 
+    pub fn set_observer_provider(&self, provider: &str) -> Result<observer::ObserverStatus, SpellcastError> {
+        let provider = normalize_observer_provider(provider)
+            .ok_or_else(|| SpellcastError::user("Unknown aside observer provider."))?;
+        let mut observers = self.observers.lock().unwrap();
+        self.update(|state| {
+            if state.observer_provider != provider {
+                state.observer_provider = provider.into();
+                state.observer_policy_revision = state.observer_policy_revision.saturating_add(1);
+                observers.invalidate_all();
+            }
+            Ok(())
+        })?;
+        Ok(self.observer_status())
+    }
+
     pub fn set_ui_locale(&self, locale: &str) -> Result<String, SpellcastError> {
         let locale = normalize_ui_locale(locale);
         let mut changed = false;
@@ -499,6 +566,7 @@ impl Bridge {
         let board_focused = surface == "focus" && actual_focus;
         observer::ObserverStatus::from_flags(
             state.observer_enabled,
+            normalize_observer_provider(&state.observer_provider).unwrap_or("codex").into(),
             state.paused,
             board_focused,
             state.observer_policy_revision,
@@ -849,7 +917,7 @@ impl Bridge {
     pub fn clear(&self) -> Result<BoardSnapshot, SpellcastError> {
         self.hello_quiet();
         let snap = self.update(|state| {
-            state.session.reset();
+            state.session.reset()?;
             state.kept.clear();
             Ok(state.session.snapshot())
         })?;
@@ -1193,7 +1261,11 @@ impl Bridge {
     }
 
     pub fn say(&self, req: SayRequest) -> Result<AgentEvent, SpellcastError> {
-        let request_hash = feedback::fingerprint("say", &req)?;
+        self.say_with_project_context(req,None)
+    }
+
+    pub(crate) fn say_with_project_context(&self, req: SayRequest, project_context: Option<serde_json::Value>) -> Result<AgentEvent, SpellcastError> {
+        let request_hash = if project_context.is_some() { feedback::fingerprint("project_say", &(&req,&project_context))? } else {feedback::fingerprint("say", &req)?};
         let text = req.text.trim().to_string();
         if text.is_empty() {
             return Err(SpellcastError::user("先写一句。"));
@@ -1217,6 +1289,7 @@ impl Bridge {
         event.object_id = req.object_id;
         event.anchors = req.anchors;
         event.target_thread_id = req.target_thread_id;
+        event.project_context = project_context;
         let stored = self.update(|state| {
             if let Some(replay) =
                 self.replay_request(state, event.request_id.as_deref(), &request_hash)?
@@ -1403,6 +1476,11 @@ impl Bridge {
     /// a bubble that already referred to a board node never owns that node.
     pub fn unkeep(&self, bubble: &ThrownBubble) -> Result<(bool, AgentEvent), SpellcastError> {
         let (removed, event) = self.update(|state| {
+            if bubble.node_id.is_none() {
+                if let Some(id) = state.kept.get(&bubble.id) {
+                    state.session.ensure_canvas_unlocked(&format!("node:{id}"))?;
+                }
+            }
             let kept_id = state.kept.remove(&bubble.id);
             let removed = if bubble.node_id.is_none() {
                 kept_id
@@ -1515,7 +1593,7 @@ impl Bridge {
 
     pub fn reset_by_user(&self) -> Result<BoardSnapshot, SpellcastError> {
         let snap = self.update(|state| {
-            state.session.reset();
+            state.session.reset()?;
             state.kept.clear();
             state.inbox.push(AgentEvent::new("cleared"));
             Ok(state.session.snapshot())
@@ -2138,7 +2216,7 @@ mod tests {
                 .brief
                 .unwrap();
             let result = bridge
-                .complete_observation(crate::observer::ObserverCompletion {
+                .complete_observation(crate::observer::ObserverCompletion { provider: None,
                     observer_id: brief.observer_id,
                     thought: Some(crate::observer::ObserverThought {
                         tease: "Leave Friday afternoon empty.".into(),
@@ -2200,7 +2278,7 @@ mod tests {
             .brief
             .unwrap();
         bridge
-            .complete_observation(crate::observer::ObserverCompletion {
+            .complete_observation(crate::observer::ObserverCompletion { provider: None,
                 observer_id: brief.observer_id,
                 thought: Some(crate::observer::ObserverThought {
                     tease: "Keep the buffer.".into(),
@@ -2285,7 +2363,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             bridge
-                .complete_observation(crate::observer::ObserverCompletion {
+                .complete_observation(crate::observer::ObserverCompletion { provider: None,
                     observer_id: silent.observer_id,
                     thought: None,
                 })
@@ -2298,7 +2376,7 @@ mod tests {
 
         assert_eq!(
             bridge
-                .complete_observation(crate::observer::ObserverCompletion {
+                .complete_observation(crate::observer::ObserverCompletion { provider: None,
                     observer_id: "missing".into(),
                     thought: Some(crate::observer::ObserverThought {
                         tease: "no".into(),
@@ -2321,7 +2399,7 @@ mod tests {
         bridge.set_observer_enabled(false).unwrap();
         assert_eq!(
             bridge
-                .complete_observation(crate::observer::ObserverCompletion {
+                .complete_observation(crate::observer::ObserverCompletion { provider: None,
                     observer_id: brief.observer_id,
                     thought: Some(crate::observer::ObserverThought {
                         tease: "should not land".into(),
@@ -2376,7 +2454,7 @@ mod tests {
             .brief
             .unwrap();
         let result = bridge
-            .complete_observation(crate::observer::ObserverCompletion {
+            .complete_observation(crate::observer::ObserverCompletion { provider: None,
                 observer_id: brief.observer_id,
                 thought: Some(crate::observer::ObserverThought {
                     tease: tease.into(),
@@ -2483,7 +2561,7 @@ mod tests {
             .brief
             .unwrap();
         let failed = headless
-            .complete_observation(crate::observer::ObserverCompletion {
+            .complete_observation(crate::observer::ObserverCompletion { provider: None,
                 observer_id: brief.observer_id,
                 thought: Some(crate::observer::ObserverThought {
                     tease: "failed throw".into(),
@@ -2522,7 +2600,7 @@ mod tests {
             .brief
             .unwrap();
         let skipped = partial
-            .complete_observation(crate::observer::ObserverCompletion {
+            .complete_observation(crate::observer::ObserverCompletion { provider: None,
                 observer_id: brief.observer_id,
                 thought: Some(crate::observer::ObserverThought {
                     tease: "partial".into(),

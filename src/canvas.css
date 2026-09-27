@@ -4,6 +4,8 @@
 .canvas-origin { display: block; flex: none; padding: 0 0 5px; color: #6b645b; font: 11px/1.35 var(--font); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; pointer-events: none; }
 .canvas-frame.is-card > .canvas-origin { display: none; }
 .canvas-frame.is-origin-redundant:not(.is-selected):not(.is-active) > .canvas-origin { visibility: hidden; }
+/* Native text is inset by its own padding; line the label up with the title instead of the frame edge. */
+.canvas-frame:has(.canvas-native-display.is-text) > .canvas-origin { padding-inline: 12px; }
 @media (max-width: 760px) { .canvas-scope { top: 62px; left: 88px; right: 16px; width: auto; } }
 .canvas-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 8px 10px; background: #14161f; border-bottom: 1px solid var(--line); }
 .canvas-tool-group { display: flex; align-items: center; flex-wrap: nowrap; gap: 6px; padding-right: 10px; border-right: 1px solid var(--line); }
@@ -64,6 +66,9 @@
 .canvas-workspace.is-scaling .canvas-frame * { pointer-events: none !important; }
 .canvas-card-drag { position: absolute; inset: 0; z-index: 1; cursor: grab; border-radius: inherit; }
 .canvas-card-drag:active { cursor: grabbing; }
+.canvas-frame-lock { position: absolute; right: 8px; bottom: 8px; z-index: 4; padding: 3px 7px; border: 1px solid var(--line); border-radius: 8px; background: #191b25ed; font-size: 15px; pointer-events: none; }
+.canvas-frame-lock[hidden] { display: none; }
+.canvas-delete-lock[aria-pressed="true"], .canvas-reader-lock[aria-pressed="true"] { border-color: var(--lilac); background: #393049; }
 .canvas-frame.is-active > .canvas-card-drag { display: none; }
 .canvas-workspace.is-panning .canvas-frame-head, .canvas-workspace.is-panning .canvas-card-drag { cursor: grab; }
 
@@ -164,6 +169,17 @@
 .canvas-native-field input { min-width: 0; min-height: 32px; padding: 4px 8px; }
 .canvas-native-controls button { justify-self: start; min-height: 32px; padding: 0 10px; }
 .canvas-native-notice { grid-column: 1 / -1; margin: 0; color: var(--warn); font-size: 12px; }
+.canvas-work-record { flex: 1; min-height: 0; box-sizing: border-box; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: start; gap: 8px 14px; padding: 18px; overflow: auto; color: var(--paper); background: linear-gradient(145deg, #252938, #171922); }
+.canvas-frame.is-plain .canvas-work-record { border: 1px solid #5e586c; border-radius: var(--radius-md); box-shadow: 0 10px 28px #0004; }
+.canvas-work-record-kind { grid-column: 1 / -1; color: var(--mint); font: 600 11px/1.3 var(--font); letter-spacing: .08em; text-transform: uppercase; }
+.canvas-work-record-title { min-width: 0; margin: 0; color: var(--paper); font: 650 21px/1.3 var(--font); overflow-wrap: anywhere; }
+.canvas-work-record-status { align-self: start; justify-self: end; padding: 4px 8px; border: 1px solid #78cdb933; border-radius: 999px; color: var(--mint); background: #78cdb914; font: 600 11px/1.2 var(--font); text-transform: capitalize; }
+.canvas-work-record-meta { grid-column: 1 / -1; color: var(--mute); font: 12px/1.4 var(--font); }
+.canvas-work-record > strong { grid-column: 1 / -1; margin-top: 4px; color: var(--mute); font: 600 11px/1.3 var(--font); letter-spacing: .04em; text-transform: uppercase; }
+.canvas-work-record-value { grid-column: 1 / -1; margin: -3px 0 0; color: var(--paper); font: 13px/1.5 var(--font); white-space: pre-wrap; overflow-wrap: anywhere; }
+.canvas-work-record-state { grid-column: 1 / -1; align-self: center; margin: 4px 0 0; color: var(--mute); font: 12px/1.4 var(--font); }
+.canvas-work-record[data-state="unavailable"] { background: linear-gradient(145deg, #31252b, #171922); }
+.canvas-work-record[data-state="unavailable"] .canvas-work-record-status, .canvas-work-record[data-state="unavailable"] .canvas-work-record-state { color: var(--warn); border-color: #d4a15d55; }
 .canvas-drafts .saved-item > small, .canvas-removed .saved-item > small { display: block; }
 .canvas-drafts .saved-item > button, .canvas-removed .saved-item > button { display: inline-block; margin-right: 8px; }
 .canvas-draft-note { margin: 6px 0; font-size: 13px; color: var(--warn); }
@@ -238,6 +254,7 @@
 .canvas-reader.is-comparing .rb-block:not(.is-reader-picked) { display: none; }
 .canvas-reader .rb-text { width: 100%; max-width: none; }
 .canvas-reader .rb-block { padding: 20px 24px; }
+.canvas-reader .rb-graph-canvas { height: clamp(340px, 55vh, 620px); }
 .canvas-reader.is-atom-focused .rb-block:not(.is-reader-current) { display: none; }
 .canvas-reader.is-atom-focused .rb-block.is-reader-current { height: auto; flex: 0 0 auto; min-height: calc(100vh - 240px); }
 .canvas-reader .rb-area .rb-form { margin: 0; padding: 0; border: 0; }
@@ -301,7 +318,7 @@ body[data-theme="light"] .canvas-reader-atom-row[data-edit-state="error"] .canva
 .canvas-proposal-value pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 18rem; overflow: auto; margin: 0; font: inherit; }
 .canvas-proposal-value img { max-width: 100%; max-height: 14rem; object-fit: contain; }
 .canvas-native-display.is-text { flex-direction: column; }
-.canvas-native-heading { flex: 0 0 auto; margin: 0; padding: 10px 12px 0; font-size: 1.1em; line-height: 1.35; overflow-wrap: anywhere; color: #1c1a16; min-height: 1.3em; }
+.canvas-native-heading { flex: 0 0 auto; margin: 0; padding: 10px 12px 0; font-size: 1.1em; line-height: 1.35; overflow-wrap: anywhere; color: var(--studio-ink, #1c1a16); min-height: 1.3em; }
 .canvas-native-text { color: #1c1a16; }
 .canvas-native-display.is-text .canvas-native-text { flex: 1; min-height: 2.4em; }
 .canvas-native-bound-value { display: block; flex: none; padding: 10px 12px; color: var(--mint); font-size: 17px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -395,7 +395,7 @@
 
 .rb-cmp-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(240px, 18em)), 1fr));
   gap: 12px;
 }
 
@@ -416,6 +416,7 @@
 
 .rb-cmp-card-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
@@ -423,6 +424,8 @@
 }
 
 .rb-cmp-card h4 {
+  flex: 1 1 160px;
+  min-width: 0;
   margin: 0 0 4px;
   font-size: 15.5px;
   font-weight: 500;
@@ -582,6 +585,8 @@
 .rb-graph-tools .rb-small {
   margin-left: auto;
 }
+
+.rb-graph-zoom-value { min-width: 58px; font-variant-numeric: tabular-nums; }
 
 .rb-graph-canvas {
   position: relative;

@@ -1,4 +1,6 @@
 import "./styles.css";
+import "./fonts.css";
+import "./night-desk-notices.css";
 import { invoke } from "@tauri-apps/api/core";
 import { PhysicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { emit, listen } from "@tauri-apps/api/event";

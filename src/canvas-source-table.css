@@ -1,0 +1,8 @@
+.canvas-source-table { display: grid; align-content: start; gap: 10px; min-width: 0; padding: 14px; line-height: 1.5; }
+.canvas-source-table-badge { justify-self: start; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--lilac); }
+.canvas-source-table-scroll { min-width: 0; overflow: auto; }
+.canvas-source-table table { width: 100%; min-width: 540px; border-collapse: collapse; }
+.canvas-source-table th, .canvas-source-table td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+.canvas-source-table th { color: var(--mute); font-weight: 600; }
+.canvas-source-table td:first-child { font-weight: 600; white-space: nowrap; }
+.canvas-source-table-source, .canvas-source-table-note { color: var(--mute); overflow-wrap: anywhere; }

@@ -10,7 +10,7 @@ const { chromium } = require(path.join(homedir(), '.cache/codex-runtimes/codex-p
 const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'artifacts/workbench-20260914');
 fs.mkdirSync(output, { recursive: true });
 const origin = 'http://127.0.0.1:47331';
-await build({ stdin: { contents: "import './src/styles.css'; import './src/board-workspace.css'; export { mountCanvas } from './src/canvas.ts'; import './src/canvas-studio.css';", resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', outfile: path.join(output, 'canvas-test.js'), define: { 'import.meta.env': '{}' }, external: ['/fonts/*'] });
+await build({ stdin: { contents: "import './src/styles.css'; import './src/fonts.css'; import './src/board-workspace.css'; export { mountCanvas } from './src/canvas.ts'; import './src/canvas-studio.css';", resolveDir: root, loader: 'ts' }, bundle: true, format: 'esm', platform: 'browser', outfile: path.join(output, 'canvas-test.js'), define: { 'import.meta.env': '{}' }, external: ['/fonts/*'] });
 const server = createServer((request, response) => {
   if (/^\/fonts\/[a-z0-9-]+\.woff2$/.test(request.url ?? '')) { response.setHeader('Content-Type', 'font/woff2'); response.end(fs.readFileSync(path.join(root, 'public', request.url.slice(1)))); return; }
   const file = request.url === '/canvas-test.js' ? 'canvas-test.js' : request.url === '/canvas-test.css' ? 'canvas-test.css' : null;

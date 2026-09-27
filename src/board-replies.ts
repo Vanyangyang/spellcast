@@ -1252,7 +1252,7 @@ const NODE_W = 200;
 const NODE_H = 72;
 const LAYOUT_GAP_X = 48;
 const LAYOUT_GAP_Y = 72;
-const GRAPH_FONT = '"IBM Plex Sans", "Noto Sans SC", "Noto Sans JP", sans-serif';
+const GRAPH_FONT = '"Noto Sans SC", "Microsoft YaHei UI", sans-serif';
 
 const NODE_BASE_ATTRS = {
   body: { fill: "#14161d", stroke: "rgba(244, 241, 234, 0.24)", strokeWidth: 1, rx: 12, ry: 12 },

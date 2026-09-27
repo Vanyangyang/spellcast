@@ -142,6 +142,20 @@ pub fn capture_anchor_snapshot(
             }
             serde_json::to_value(selected)?
         }
+        CanvasContent::WorkRecord { .. } => {
+            if anchor.block_id.is_some() || anchor.selection.is_some() {
+                return Err(error("项目引用卡只保存记录身份；请在项目记录历史中查看具体内容版本。"));
+            }
+            serde_json::to_value(&object.content)?
+        }
+        CanvasContent::SourceTable { table } => {
+            if anchor.block_id.is_some() {
+                return Err(error("来源表格没有独立子项。"));
+            }
+            searchable_text = Some(format!("{}\n{}\n{}", table.title, table.columns.join(" "),
+                table.rows.iter().map(|row| row.join(" ")).collect::<Vec<_>>().join("\n")));
+            serde_json::to_value(&object.content)?
+        }
         CanvasContent::Text { title, text } | CanvasContent::Shape { title, text, .. } => {
             if anchor.block_id.is_some() {
                 return Err(error("这个对象没有独立子项。"));

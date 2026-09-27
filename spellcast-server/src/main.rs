@@ -21,7 +21,15 @@ async fn main() {
     let state_path = std::env::var_os("SPELLCAST_STATE_FILE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("data/preview.sqlite3"));
-    let bridge = Arc::new(Bridge::open(Headless, port, state_path).expect("restore preview state"));
+    let mut bridge = Bridge::open(Headless, port, state_path).expect("restore preview state");
+    // Opt-in credential for trusted clients; never return it through the HTTP API.
+    if let Ok(key) = std::env::var("SPELLCAST_PROJECT_UI_KEY") {
+        bridge = bridge.with_project_window_key(key).expect("valid project UI key");
+    }
+    if let Ok(key) = std::env::var("SPELLCAST_PROJECT_LOCAL_KEY") {
+        bridge = bridge.with_project_local_key(key).expect("valid project local key");
+    }
+    let bridge = Arc::new(bridge);
     let app = api::router(bridge);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

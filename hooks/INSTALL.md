@@ -2,7 +2,7 @@
 
 This folder is a self-contained Codex plugin. Installing it is **not** the same as trusting its hooks. Do not use `--dangerously-bypass-hook-trust`.
 
-Running a **prebuilt** plugin package does not require Node or Python. Building the package from source still needs Rust and Node.
+Running a **prebuilt** plugin package with the default Codex observer does not require Node or Python. The optional Claude Code observer needs Node, a Claude subscription login, and the local Claude Supervisor proxy guard; building the package from source needs Rust and Node.
 
 ## What this package is
 
@@ -10,6 +10,7 @@ Running a **prebuilt** plugin package does not require Node or Python. Building 
 - MCP `.mcp.json` points at the same Spellcast instance as the hook `--endpoint`.
 - Canonical Skill: `skills/spellcast/SKILL.md`.
 - Hooks: `hooks/hooks.json` for `SessionStart` and `UserPromptSubmit` only.
+- Optional `hooks/claude-observer-runner.mjs` starts a fresh, headless Claude Code print-mode process. It uses no Herdr workspace or Claude Supervisor session. The installed guard verifies the dedicated `127.0.0.1:17891` route and the exact `claude.exe` firewall rule before and after the run; failures produce no bubble.
 
 Hook stdout is native context output only. It is not a `spellcast_checkpoint` receipt, not observer complete, and not proof the model read the text.
 

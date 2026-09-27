@@ -28,6 +28,7 @@ use std::time::Duration;
 pub struct Config {
     pub endpoint: String,
     pub state_dir: Option<PathBuf>,
+    pub runner_path: Option<PathBuf>,
     pub timeout: Duration,
 }
 
@@ -36,6 +37,7 @@ impl Default for Config {
         Self {
             endpoint: DEFAULT_ENDPOINT.into(),
             state_dir: None,
+            runner_path: None,
             timeout: Duration::from_millis(HTTP_TIMEOUT_MS),
         }
     }
@@ -66,6 +68,9 @@ pub fn parse_config(
         cfg.state_dir = Some(PathBuf::from(dir).join("spellcast-hook"));
     } else if let Some(dir) = env_val(&env, "CLAUDE_PLUGIN_DATA") {
         cfg.state_dir = Some(PathBuf::from(dir).join("spellcast-hook"));
+    }
+    if let Some(root) = env_val(&env, "PLUGIN_ROOT") {
+        cfg.runner_path = Some(PathBuf::from(root).join("hooks").join("claude-observer-runner.mjs"));
     }
     let mut args = args.into_iter();
     let _exe = args.next();
@@ -198,7 +203,14 @@ fn run_inner(
         {
             None
         }
-        (Action::Bootstrap, _) => Some((event.hook_event_name.clone(), BOOTSTRAP.trim().to_string())),
+        (Action::Bootstrap, _) => {
+            let mut context = BOOTSTRAP.trim().to_string();
+            if let Some(path) = cfg.runner_path.as_ref().filter(|path| path.is_file()) {
+                context.push_str("\nCLAUDE_OBSERVER_RUNNER_PATH=");
+                context.push_str(&serde_json::to_string(&path.to_string_lossy()).ok()?);
+            }
+            Some((event.hook_event_name.clone(), context))
+        }
         (Action::Stop, _) => Some((event.hook_event_name.clone(), STOP.trim().to_string())),
     }
 }
@@ -226,6 +238,7 @@ mod tests {
         let cfg = Config {
             endpoint: "http://127.0.0.1:1/api/observer/status".into(),
             state_dir: Some(dir.clone()),
+            runner_path: None,
             timeout: Duration::from_millis(50),
         };
         let mut logged = 0;
@@ -279,6 +292,7 @@ mod tests {
         let cfg = Config {
             endpoint: "http://127.0.0.1:1/api/observer/status".into(),
             state_dir: Some(dir.clone()),
+            runner_path: None,
             timeout: Duration::from_millis(50),
         };
         let parent = br#"{"hook_event_name":"SessionStart","session_id":"s","parent_session_id":"PARENT-SECRET-XYZ","source":"startup"}"#;
@@ -352,6 +366,7 @@ mod tests {
         let cfg = Config {
             endpoint: serve_on_status(),
             state_dir: Some(dir.clone()),
+            runner_path: None,
             timeout: Duration::from_millis(400),
         };
         let start = br#"{"hook_event_name":"SessionStart","session_id":"s","source":"startup"}"#;

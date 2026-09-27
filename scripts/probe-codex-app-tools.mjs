@@ -28,19 +28,19 @@ try {
   fs.writeFileSync('artifacts/workbench-20260914/native-app-tools-catalog.json', JSON.stringify({ method: 'Real native Desktop pipe tools/list, read only', tools: relevant }, null, 2));
   if (!['--read','--send','--reject'].some(arg=>process.argv.includes(arg))) console.log(JSON.stringify(relevant.map(({ name, namespace, inputSchema }) => ({ name, namespace, inputSchema }))));
   if (process.argv.includes('--reject')) {
-    const result = await request('tools/call', { namespace: 'codex_app', tool: 'send_message_to_thread', threadId: process.env.CODEX_THREAD_ID, turnId: 'spellcast-rejection-probe', callId: 'spellcast-reject-' + crypto.randomUUID(), arguments: { threadId: '00000000-0000-4000-8000-000000000000', prompt: 'This is a rejection-only test against an explicitly nonexistent task.' } });
+    const result = await request('tools/call', { namespace: 'codex_app', tool: 'send_message_to_thread', callerSource: 'codex', threadId: process.env.CODEX_THREAD_ID, turnId: 'spellcast-rejection-probe', callId: 'spellcast-reject-' + crypto.randomUUID(), arguments: { threadId: '00000000-0000-4000-8000-000000000000', prompt: 'This is a rejection-only test against an explicitly nonexistent task.' } });
     fs.writeFileSync('artifacts/workbench-20260914/native-app-tools-rejected.json', JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
   }
   if (process.argv.includes('--send')) {
     const threadId = '01a09e5a-b2d8-7de0-bd0f-2870c909e188';
     const marker = 'SPELLCAST_NATIVE_DELIVERY_' + crypto.randomUUID();
-    const result = await request('tools/call', { namespace: 'codex_app', tool: 'send_message_to_thread', threadId, turnId: 'spellcast-native-ui-probe', callId: 'spellcast-send-' + crypto.randomUUID(), arguments: { threadId, prompt: '这是 Spellcast 原生投递通道的单次验收。只回复：' + marker + '。不要读写任何文件，不要改变现有方案，不要调用其他工具。' } });
+    const result = await request('tools/call', { namespace: 'codex_app', tool: 'send_message_to_thread', callerSource: 'codex', threadId, turnId: 'spellcast-native-ui-probe', callId: 'spellcast-send-' + crypto.randomUUID(), arguments: { threadId, prompt: '这是 Spellcast 原生投递通道的单次验收。只回复：' + marker + '。不要读写任何文件，不要改变现有方案，不要调用其他工具。' } });
     fs.writeFileSync('artifacts/workbench-20260914/native-app-tools-send.json', JSON.stringify({ threadId, marker, result }, null, 2));
     console.log(JSON.stringify({ threadId, marker, result }));
   }
   if (process.argv.includes('--read')) {
     const threadId = process.env.CODEX_THREAD_ID; if (!threadId) throw Error('Missing actual caller task identity');
-    const result = await request('tools/call', { namespace: 'codex_app', tool: 'read_thread', threadId, turnId: process.env.CODEX_TURN_ID || 'spellcast-readonly-probe', callId: 'spellcast-readonly-' + crypto.randomUUID(), arguments: { threadId: '01a09e5a-b2d8-7de0-bd0f-2870c909e188', hostId:'local', turnLimit:1, includeOutputs:false, maxOutputCharsPerItem:0 } });
+    const result = await request('tools/call', { namespace: 'codex_app', tool: 'read_thread', callerSource: 'codex', threadId, turnId: process.env.CODEX_TURN_ID || 'spellcast-readonly-probe', callId: 'spellcast-readonly-' + crypto.randomUUID(), arguments: { threadId: '01a09e5a-b2d8-7de0-bd0f-2870c909e188', hostId:'local', turnLimit:1, includeOutputs:false, maxOutputCharsPerItem:0 } });
     fs.writeFileSync('artifacts/workbench-20260914/native-app-tools-read-thread.json', JSON.stringify(result, null, 2));
     console.log(JSON.stringify(result).slice(0,3500));
   }

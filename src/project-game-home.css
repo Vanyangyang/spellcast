@@ -1,0 +1,206 @@
+/* AI-first game home. Colors come from the project workspace palette, so both themes follow. */
+.game-home {
+  --gh-design: #d4b3ff;
+  --gh-config: #7ee0c8;
+  --gh-code: #9ec5ff;
+  --gh-inference: #f0c36a;
+  --gh-verify: #f2a8a8;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  height: 100%;
+  padding: 14px 22px 18px;
+  overflow: hidden;
+}
+body[data-theme="light"] .project-workspace .game-home {
+  --gh-design: #69458e;
+  --gh-config: #236f61;
+  --gh-code: #2b5d9e;
+  --gh-inference: #8a5c09;
+  --gh-verify: #a13232;
+}
+.game-home[hidden] { display: none; }
+.game-home h3 { font: 600 18px/1.3 var(--font); }
+.game-home h3:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; border-radius: 4px; }
+.game-home h4 { font: 600 13px/1.35 var(--font); color: var(--mute); text-transform: none; }
+.game-home p, .game-home small { overflow-wrap: anywhere; }
+.game-home code { font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--mute); overflow-wrap: anywhere; }
+
+.gh-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; position: relative; z-index: 12; }
+.gh-crumbs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.gh-crumbs > span { color: var(--mute); }
+.gh-crumbs button[aria-current="true"] { background: var(--project-selected); border-color: var(--line-strong); }
+
+.gh-connection { position: relative; }
+.gh-connection > summary { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 12px; cursor: pointer; list-style: none; font-weight: 600; border: 1px solid var(--line); border-radius: 999px; background: var(--project-panel); }
+.gh-connection > summary::-webkit-details-marker { display: none; }
+.gh-connection > summary::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
+.gh-connection[data-gh-connection="ready"] > summary::before { background: var(--mint); }
+.gh-connection > summary:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; border-radius: 10px; }
+.gh-connection-panel { position: absolute; right: 0; top: calc(100% + 8px); width: min(560px, calc(100vw - 96px)); display: grid; gap: 8px; padding: 12px; max-height: 60vh; overflow: auto; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--project-panel); box-shadow: 0 18px 48px #0009; }
+.gh-instructions { margin: 0; padding: 10px; white-space: pre-wrap; border-radius: 8px; background: var(--project-input); border: 1px solid var(--line); font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.gh-host-note { color: var(--mute); }
+.gh-access { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; background: var(--project-input); }
+.gh-access[data-gh-access="pending"] { border: 1px solid var(--warn); }
+
+.gh-composer { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--project-panel); }
+.game-home .gh-composer-label { display: grid; gap: 4px; margin: 0; }
+.gh-composer-label > span { font: 600 13px/1.3 var(--font); color: var(--mute); }
+.gh-composer textarea { width: 100%; min-height: 46px; max-height: 32vh; field-sizing: content; resize: vertical; box-sizing: border-box; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--project-input); color: var(--paper); font: 14px/1.55 var(--font); }
+.gh-composer textarea:focus-visible, .gh-composer select:focus-visible { outline: 2px solid var(--mint); outline-offset: 1px; }
+.gh-composer-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.game-home .gh-target { display: flex; flex-direction: row; align-items: center; gap: 6px; min-width: 0; flex: 0 1 380px; margin: 0; }
+.gh-target > span { color: var(--mute); font-size: 12px; white-space: nowrap; }
+.gh-target select { min-width: 0; flex: 1; min-height: 34px; border-radius: 9px; border: 1px solid var(--line); background: var(--project-input); color: var(--paper); padding: 0 8px; }
+.gh-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.gh-suggestions small { color: var(--mute); margin-right: 4px; }
+.gh-chip { border-radius: 999px !important; min-height: 30px !important; font-weight: 500 !important; }
+.gh-chip[aria-pressed="false"] { color: var(--mute) !important; }
+.gh-status:empty, .gh-status[hidden] { display: none; }
+.gh-status { color: var(--mint); margin: 0; font-size: 13px; }
+.gh-connect-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; color: var(--warn); font-size: 13px; }
+.gh-back { justify-self: start; align-self: flex-start; }
+
+.gh-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: 16px; }
+.gh-main, .gh-side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
+.gh-side { border-left: 1px solid var(--line); padding-left: 14px; }
+.gh-side-section { display: grid; gap: 8px; }
+
+.gh-intro { display: grid; gap: 6px; }
+.gh-section { display: grid; align-content: start; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--project-detail); }
+.gh-section > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gh-section > button, .gh-proposal-card > button, .gh-record > button, .gh-location > button { justify-self: start; }
+.gh-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; color: var(--mute); white-space: nowrap; }
+.gh-badge.design { color: var(--gh-design); border-color: color-mix(in srgb, var(--gh-design) 45%, transparent); }
+.gh-badge.config { color: var(--gh-config); border-color: color-mix(in srgb, var(--gh-config) 45%, transparent); }
+.gh-badge.code { color: var(--gh-code); border-color: color-mix(in srgb, var(--gh-code) 45%, transparent); }
+.gh-badge.inference { color: var(--gh-inference); border-color: color-mix(in srgb, var(--gh-inference) 45%, transparent); }
+.gh-badge.verification { color: var(--gh-verify); border-color: color-mix(in srgb, var(--gh-verify) 45%, transparent); }
+.gh-badge.warning { color: var(--warn); border-color: var(--warn); }
+.gh-badge.muted { opacity: .75; }
+.gh-source { display: block; color: var(--mute); }
+.gh-source code { margin-right: 4px; }
+.gh-muted { color: var(--mute); }
+.gh-unknown { color: var(--warn); }
+.gh-warning { color: var(--warn); }
+.gh-alert { color: var(--project-negative); }
+.gh-prose { white-space: pre-wrap; line-height: 1.55; }
+.gh-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.gh-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.gh-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.gh-loading { color: var(--mute); }
+
+.gh-loop { width: 100%; border-collapse: collapse; }
+.gh-loop th, .gh-loop td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.gh-loop th { color: var(--mute); font-weight: 600; }
+.gh-loop td:first-child { font-weight: 600; white-space: nowrap; }
+.gh-zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.gh-zone-card { display: grid !important; gap: 4px; justify-items: start; text-align: left; min-height: 84px !important; padding: 12px !important; line-height: 1.35 !important; }
+.gh-zone-card small { color: var(--mute); font-weight: 400; }
+.gh-region { border-top: 1px solid var(--line); padding: 8px 0; }
+.gh-region > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; cursor: pointer; }
+.gh-region > summary small { color: var(--mute); }
+.gh-dungeon { display: grid; gap: 6px; padding: 8px 0 8px 12px; }
+.gh-checks > summary { cursor: pointer; color: var(--mute); }
+.gh-counts { color: var(--mute); }
+.gh-verify-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+
+/* The review board takes the full reading area without crowding the game overview. */
+.game-home[data-documents="true"] .gh-body { grid-template-columns: minmax(0, 1fr); }
+.game-home[data-documents="true"] .gh-side { display: none; }
+.gh-document-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gh-document-controls input { flex: 1 1 280px; min-width: 0; }
+.gh-document-controls input, .gh-document-controls select, .gh-document-row select { min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--project-input); color: var(--paper); font: 13px/1.3 var(--font); }
+.gh-document-controls input:focus-visible, .gh-document-controls select:focus-visible, .gh-document-row select:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+.gh-document-groups { display: grid; gap: 8px; }
+.gh-document-group { border: 1px solid var(--line); border-radius: 10px; background: var(--project-panel); }
+.gh-document-group > summary { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; cursor: pointer; }
+.gh-document-group > summary small { color: var(--mute); }
+.gh-document-group > summary:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+.gh-document-list { display: grid; gap: 0; padding: 0 10px 10px; }
+.gh-document-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 10px 2px; border-top: 1px solid var(--line); }
+.gh-document-row > strong, .gh-document-row > small { grid-column: 1; overflow-wrap: anywhere; }
+.gh-document-row > .gh-actions { grid-column: 2; grid-row: 1 / span 3; justify-content: flex-end; }
+.gh-document-row[hidden], .gh-document-group[hidden] { display: none; }
+@media (max-width: 760px) { .gh-document-row { grid-template-columns: minmax(0, 1fr); } .gh-document-row > .gh-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; } }
+
+.gh-graph-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--project-panel); }
+.gh-graph { position: relative; }
+.gh-graph svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.gh-graph path { stroke: var(--line-strong); stroke-width: 2; fill: none; }
+.gh-graph path.selected { stroke: var(--mint); }
+.gh-node { position: absolute; transform: translate(-50%, -50%); display: grid !important; gap: 2px; min-width: 104px; min-height: 52px !important; padding: 6px 10px !important; text-align: center; line-height: 1.25 !important; }
+.gh-node small { color: var(--mute); font-weight: 400; }
+.gh-node[aria-pressed="true"] { border-color: var(--mint) !important; background: var(--project-selected) !important; }
+.gh-node.missing { border-style: dashed !important; }
+.gh-location, .gh-mission, .gh-candidate, .gh-record, .gh-goal, .gh-proposal-card, .gh-proposal-item { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--project-panel); }
+.gh-location > header, .gh-candidate > header, .gh-proposal-item > header, .gh-proposal-card > header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.gh-location > button, .gh-record > button { justify-self: start; }
+.gh-mentions, .gh-code { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.gh-code li { display: grid; gap: 2px; }
+.gh-evidence { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.gh-source-button { font: 12px/1 ui-monospace, Consolas, monospace !important; }
+
+.gh-goal[data-tone="warning"] { border-color: var(--warn); }
+.gh-goal-status { font-weight: 600; }
+.gh-goal-status.live { color: var(--mint); }
+.gh-goal-status.warning { color: var(--warn); }
+.gh-goal-status.muted { color: var(--mute); }
+.gh-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.game-home .gh-check { display: inline-flex; flex-direction: row; align-items: center; gap: 4px; margin: 0; color: var(--mute); }
+.gh-proposal-content { display: grid; gap: 4px; }
+
+.gh-proposal-review { display: grid; gap: 10px; }
+.gh-proposal-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gh-proposal-items { display: grid; gap: 10px; }
+.gh-proposal-item[data-status="adopted"] { border-color: color-mix(in srgb, var(--mint) 55%, transparent); }
+.gh-proposal-item[data-status="dismissed"] { opacity: .7; }
+.gh-proposal-item[data-status="returned"] { border-color: var(--warn); }
+.gh-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.gh-compare > div { display: grid; gap: 4px; padding: 8px; border-radius: 8px; background: var(--project-input); }
+.gh-reason { color: var(--paper); }
+.gh-boundary { color: var(--warn); }
+.gh-decision.adopted { color: var(--mint); }
+.gh-decision.returned, .gh-decision.dismissed { color: var(--warn); }
+.gh-proposal-editor, .gh-note { display: grid; gap: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--project-input); }
+.gh-proposal-editor label, .gh-note label { display: grid; gap: 4px; }
+.gh-proposal-editor textarea, .gh-proposal-editor input, .gh-note textarea { box-sizing: border-box; width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--project-detail); color: var(--paper); font: 13px/1.5 var(--font); }
+.gh-references > summary { cursor: pointer; color: var(--mute); }
+.gh-reference { display: grid; gap: 2px; padding: 4px 0; }
+
+.gh-source-view { width: min(1100px, calc(100vw - 80px)); height: min(820px, calc(100vh - 80px)); padding: 16px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--project-base); color: var(--paper); }
+.gh-source-view[open] { display: flex; flex-direction: column; gap: 8px; }
+.gh-source-view header { display: flex; justify-content: space-between; align-items: center; }
+.gh-source-view pre { flex: 1; overflow: auto; margin: 0; padding: 12px; border-radius: 10px; background: var(--project-input); font: 12px/1.5 ui-monospace, Consolas, monospace; }
+
+.gh-connect { display: grid; gap: 8px; max-width: 720px; }
+.gh-connect label { display: grid; gap: 4px; }
+.gh-connect input { min-height: 34px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--project-input); color: var(--paper); }
+
+/* The workspace tools menu replaces flat view tabs. */
+.project-workspace-tools { position: relative; }
+.project-workspace-tools > summary { list-style: none; display: inline-flex; align-items: center; min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--project-control); cursor: pointer; font: 500 13px/1 var(--font); }
+.project-workspace-tools > summary::-webkit-details-marker { display: none; }
+.project-workspace-tools > summary:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+.project-workspace-tools-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; display: grid; gap: 4px; min-width: 220px; padding: 8px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--project-panel); box-shadow: 0 16px 40px #0008; }
+.project-workspace-tools-menu button { justify-content: flex-start; text-align: left; width: 100%; }
+.project-workspace-tools-menu button[aria-pressed="true"] { background: var(--project-selected); }
+.project-workspace-project-picker { min-height: 34px; max-width: 220px; border-radius: 9px; border: 1px solid var(--line); background: var(--project-input); color: var(--paper); padding: 0 8px; }
+.project-workspace[data-workspace-view="game"] .project-workspace-projects,
+.project-workspace[data-workspace-view="game"] .project-workspace-records,
+.project-workspace[data-workspace-view="game"] .project-workspace-detail { display: none; }
+.project-workspace[data-workspace-view="game"] .project-workspace-layout { display: block; }
+
+@media (max-width: 1400px) {
+  .gh-body { grid-template-columns: minmax(0, 1fr) minmax(260px, 300px); }
+  .gh-evidence { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 1100px) {
+  .game-home { overflow: auto; padding: 12px 14px 16px; }
+  .gh-body { display: flex; flex-direction: column; min-height: auto; }
+  .gh-main, .gh-side { overflow: visible; padding-right: 0; }
+  .gh-side { border-left: 0; border-top: 1px solid var(--line); padding: 12px 0 0; }
+  .gh-compare { grid-template-columns: minmax(0, 1fr); }
+  .gh-connection { max-width: 100%; width: 100%; }
+}

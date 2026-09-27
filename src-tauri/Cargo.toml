@@ -2,7 +2,7 @@
 
 [package]
 name = "spellcast"
-version = "0.4.12"
+version = "0.4.13"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Spellcast desktop shell — Windows, macOS, and Linux"
@@ -38,6 +38,7 @@ tauri-plugin-single-instance = "2"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -46,6 +47,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Devices_Display",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

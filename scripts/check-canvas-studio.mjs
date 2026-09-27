@@ -76,6 +76,8 @@ async function until(read, label, timeout = 15000) {
 
 const toolbar = page.locator('.canvas-toolbar');
 async function clickToolbar(name) {
+  // The selection dock repaints on the next frame after a selection change.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const button = toolbar.getByRole('button', { name, exact: true });
   if (!(await button.isVisible())) {
     await toolbar.locator('.canvas-tool-more > summary').click();
@@ -87,9 +89,15 @@ const board = () => api('/api/board');
 const object = async id => (await board()).canvas.objects.find(item => item.id === id);
 const pose = async id => (await board()).canvas.items.find(item => item.item_id === id);
 const frame = id => page.locator('.canvas-frame[data-item-id="' + id + '"]');
+/** "进入内容" / "返回画布" sit on the selected card's head; the dock repeats them only while that head cannot be used. */
+async function modeButton(name, state) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const dock = toolbar.locator('.canvas-tool-selection > .canvas-selection-work');
+  if (await dock.isVisible()) { assert.equal(await dock.getAttribute('aria-label'), name); return dock; }
+  return page.locator('.canvas-frame.' + state + ' > .canvas-frame-head').getByRole('button', { name, exact: true });
+}
 async function done() {
-  const button = toolbar.getByRole('button', { name: '返回画布', exact: true });
-  if (await button.isVisible()) await button.click();
+  if (await page.locator('.canvas-frame.is-active').count()) await (await modeButton('返回画布', 'is-active')).click();
 }
 async function select(id) {
   await done();
@@ -141,20 +149,23 @@ function contrastRatio(foreground, background) {
 }
 async function nativePaint(id) {
   return frame(id).evaluate(node => {
+    // What the text is painted over: the nearest ancestor with a background (the Canvas follows the theme).
+    const backdrop = el => { for (let n = el; n; n = n.parentElement) { const bg = getComputedStyle(n).backgroundColor; if (bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") return bg; } return getComputedStyle(document.body).backgroundColor; };
     const vis = el => {
       if (!el) return null;
       const box = el.getBoundingClientRect();
       const style = getComputedStyle(el);
       return {
         tag: el.tagName, text: el.tagName === 'TEXTAREA' ? el.value : (el.textContent ?? ''),
-        color: style.color, background: style.backgroundColor, opacity: style.opacity,
+        color: style.color, background: backdrop(el), opacity: style.opacity,
         display: style.display, visibility: style.visibility, hidden: el.hidden,
         x: box.x, y: box.y, w: box.width, h: box.height,
       };
     };
     return {
       heading: vis(node.querySelector('h3.canvas-native-heading')),
-      text: vis(node.querySelector('textarea.canvas-native-text')),
+      // The card shows the saved text; the text field itself lives in the object's edit dialog.
+      text: vis(node.querySelector('.canvas-native-formatted')),
       frame: vis(node),
     };
   });
@@ -399,7 +410,8 @@ try {
   await select(chartObject.id);
   const selectionUi = await page.evaluate(() => {
     const dock = document.querySelector('.canvas-tool-selection');
-    const head = document.querySelector('.canvas-frame.is-plain.is-selected > .canvas-frame-head');
+    const head = document.querySelector('.canvas-frame.is-selected > .canvas-frame-head');
+    const headWork = head?.querySelector('button');
     const dockBox = dock?.getBoundingClientRect();
     const headStyle = head ? getComputedStyle(head) : null;
     const primary = document.querySelector('.canvas-tool-primary');
@@ -409,6 +421,9 @@ try {
       dock: dockBox ? { x: dockBox.x, y: dockBox.y, w: dockBox.width, h: dockBox.height } : null,
       headPointer: headStyle?.pointerEvents,
       headClip: head ? { w: head.getBoundingClientRect().width, h: head.getBoundingClientRect().height, opacity: headStyle.opacity } : null,
+      headWork: headWork ? { text: headWork.textContent.trim(), hit: headWork.contains(document.elementFromPoint(headWork.getBoundingClientRect().x + headWork.getBoundingClientRect().width / 2, headWork.getBoundingClientRect().y + headWork.getBoundingClientRect().height / 2)) } : null,
+      dockHasHead: dock?.classList.contains('has-card-head'),
+      dockWorkShown: (() => { const work = dock?.querySelector('.canvas-selection-work'); return Boolean(work && getComputedStyle(work).display !== 'none'); })(),
       primary: primaryStyle ? { color: primaryStyle.color, background: primaryStyle.backgroundColor, size: primaryStyle.fontSize } : null,
       title: document.querySelector('.canvas-tool-selection-title')?.textContent,
       focus: document.activeElement?.className,
@@ -421,20 +436,25 @@ try {
   assert(railBox && workspaceBox && selectedBox);
   assert(selectionUi.dock.x >= railBox.x + railBox.width - 8, 'dock should sit to the right of the rail');
   assert(selectionUi.dock.x <= railBox.x + railBox.width + 40, 'dock left ' + selectionUi.dock.x + ' rail ' + railBox.x);
-  assert(selectionUi.dock.y >= workspaceBox.y && selectionUi.dock.y <= workspaceBox.y + 28, 'dock top ' + selectionUi.dock.y);
+  // The dock shares the bottom row with the camera, so nothing floats over card titles at the top.
+  const dockBottom = selectionUi.dock.y + selectionUi.dock.h, workspaceBottom = workspaceBox.y + workspaceBox.height;
+  assert(dockBottom <= workspaceBottom && dockBottom >= workspaceBottom - 40, 'dock bottom ' + dockBottom + ' workspace bottom ' + workspaceBottom);
   assert(Math.abs(selectionUi.dock.y - selectedBox.y) > 20, 'dock should not follow the selected object');
-  assert.equal(selectionUi.headPointer, 'none');
-  assert(selectionUi.headClip.w <= 2 && selectionUi.headClip.h <= 2, 'plain head still visible');
+  // The selected card's head is the handle for its own actions; the dock does not repeat them.
+  assert.notEqual(selectionUi.headPointer, 'none');
+  assert(selectionUi.headClip.w > 40 && selectionUi.headClip.h >= 20, 'selected head should be usable ' + JSON.stringify(selectionUi.headClip));
+  assert.deepEqual(selectionUi.headWork, { text: '进入内容', hit: true });
+  assert.equal(selectionUi.dockHasHead, true); assert.equal(selectionUi.dockWorkShown, false);
   assert.equal(selectionUi.primary.size, '13px');
   result.selectionUi = selectionUi;
   await shot('selection.png');
   await shot('zh-desktop.png');
-  pass('one fixed selection dock; plain frame head is not a second toolbar');
+  pass('one fixed selection dock at the bottom; the card head carries Work inside and the dock does not repeat it');
 
   await page.keyboard.press('Enter');
   await until(() => frame(chartObject.id).evaluate(node => node.classList.contains('is-active')), 'chart active');
   await shot('active.png');
-  await clickToolbar('返回画布');
+  await (await modeButton('返回画布', 'is-active')).click();
   await until(() => frame(chartObject.id).evaluate(node => !node.classList.contains('is-active')), 'chart inactive');
   pass('Work inside and Done round-trip');
 
@@ -539,6 +559,10 @@ try {
   await page.locator('.canvas-layer-row[data-item-id="harbor-value"] .canvas-layer-pick').click({ modifiers: ['Shift'] });
   await page.keyboard.press('Escape');
   await clickToolbar('组合');
+  // Grouping now names the idea first; 保存 keeps every member where it is.
+  const idea = page.locator('dialog.canvas-idea[open]'); await idea.waitFor();
+  await idea.locator('input[name="title"]').fill('港口说明');
+  await idea.getByRole('button', { name: '保存', exact: true }).click();
   await until(async () => (await board()).canvas.compositions?.length >= 1, 'grouped');
   const groupId = (await board()).canvas.compositions[0].id;
   await clickToolbar('层级');
@@ -558,7 +582,8 @@ try {
   await page.locator('.canvas-connections').waitFor();
   await page.locator('.canvas-connections').getByRole('button', { name: '关闭', exact: true }).click();
   await toolbar.locator('.canvas-tool-more > summary').click();
-  await toolbar.locator('.canvas-tool-menu button').last().waitFor();
+  // The legacy-connections toggle at the end of the menu only exists when such edges do.
+  await toolbar.locator('.canvas-tool-more > .canvas-tool-menu > button:not([hidden])').last().waitFor();
   await page.keyboard.press('Escape');
   pass('Layers, Connections and More remain reachable');
 

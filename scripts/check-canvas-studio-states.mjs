@@ -75,6 +75,8 @@ async function until(read, label, timeout = 15000) {
 
 const toolbar = page.locator('.canvas-toolbar');
 async function clickToolbar(name) {
+  // The selection dock repaints on the next frame after a selection change.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const button = toolbar.getByRole('button', { name, exact: true });
   if (!(await button.isVisible())) {
     await toolbar.locator('.canvas-tool-more > summary').click();
@@ -92,9 +94,15 @@ async function workPage(id) {
   assert(inner, 'missing work iframe ' + id);
   return inner;
 }
+/** "进入内容" / "返回画布" sit on the selected card's head; the dock repeats them only while that head cannot be used. */
+async function modeButton(name, state) {
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const dock = toolbar.locator('.canvas-tool-selection > .canvas-selection-work');
+  if (await dock.isVisible()) return dock;
+  return page.locator('.canvas-frame.' + state + ' > .canvas-frame-head').getByRole('button', { name, exact: true });
+}
 async function done() {
-  const button = toolbar.getByRole('button', { name: /返回画布|Back to canvas/, exact: true });
-  if (await button.isVisible()) await button.click();
+  if (await page.locator('.canvas-frame.is-active').count()) await (await modeButton(/^(返回画布|Back to canvas)$/, 'is-active')).click();
 }
 async function select(id) {
   await done();
@@ -191,8 +199,9 @@ const sampleContrast = () => page.evaluate(() => {
   };
   return [
     sample('#settings-title'),
-    sample('.agent-clients button', 'unselected'),
-    sample('.agent-clients button', 'selected'),
+    // The chips shown in Settings; the home card keeps its own (hidden) set while the Canvas is open.
+    sample('#settings .agent-clients button', 'unselected'),
+    sample('#settings .agent-clients button', 'selected'),
     sample('#settings-agent-seen'),
     sample('#settings-close'),
     sample('.artifact-controls button:disabled'),
@@ -260,12 +269,15 @@ try {
   assert(titleSample && Number.parseFloat(titleSample.fontSize) <= 28 && Number.parseFloat(titleSample.fontSize) >= 20, 'settings title size ' + titleSample?.fontSize);
   await shot('dialog-settings-zh-1320.png');
   const originalUrl = await page.locator('#settings-mcp-url').inputValue();
-  await page.locator('#settings-clients [data-client="cursor"]').click();
+  // The app chips sit on the setup card (setup is Codex-only since 0.4.4, so Cursor is shown but disabled);
+  // the MCP address and the full client list are under Connection details.
+  assert.equal(await page.locator('#settings .setup-clients [data-client="cursor"]').isDisabled(), true);
+  await page.locator('#settings .settings-connection-details > summary').click();
   await page.locator('#settings-mcp-url').fill('http://127.0.0.1:9/mcp');
   await page.locator('#settings-mcp-url').blur();
   await page.locator('#settings-mcp-url').fill(originalUrl);
   await page.locator('#settings-mcp-url').blur();
-  await page.locator('#settings-clients [data-client="codex"]').click();
+  await page.locator('#settings .setup-clients [data-client="codex"]').click();
   pass('settings dialog traps focus and client/status text meets contrast');
 
   await page.keyboard.press('Escape');
@@ -289,7 +301,8 @@ try {
   await until(() => page.locator('#settings').evaluate(node => node.open), 'english settings');
   await shot('dialog-settings-en-1320.png');
   const enTitle = await page.locator('#settings-title').textContent();
-  assert.match(enTitle || '', /Connect Agent/);
+  // The dialog is titled "Settings" and splits its areas into tabs (it was "Connect Agent" before the tabs).
+  assert.equal((enTitle || '').trim(), 'Settings');
   await page.locator('#settings-close').click();
   await until(() => page.locator('#settings').evaluate(node => node.hidden), 'english settings closed');
   pass('English settings panel uses the compact operation title');
@@ -448,10 +461,15 @@ try {
   await select(workObject.id);
   await page.keyboard.press('Enter');
   await until(() => frame(workObject.id).evaluate(node => node.classList.contains('is-active')), 'work active');
-  const controls = frame(workObject.id).locator('.artifact-controls');
+  // A single work keeps Run/Stop, Restart and its sources in its Work settings dialog; the live iframe stays in the card.
+  await clickToolbar('作品设置');
+  const manage = frame(workObject.id).locator('.artifact-management[open]');
+  await manage.waitFor({ state: 'visible' });
+  const controls = manage.locator('.artifact-controls');
   await controls.waitFor({ state: 'visible' });
   const toggle = controls.locator('button').first();
-  const restart = frame(workObject.id).getByRole('button', { name: '重新运行', exact: true });
+  await manage.locator('.artifact-operations > summary').click();
+  const restart = manage.getByRole('button', { name: '重新运行', exact: true });
   await restart.waitFor({ state: 'visible' });
   const toggleBefore = (await toggle.textContent() || '').trim();
   result.artifactToggle = { before: toggleBefore, enabled: await toggle.isEnabled() };
@@ -484,14 +502,14 @@ try {
     return /^\d/.test((text || '').trim());
   }, 'example content ready after restart');
   await shot('active-running.png');
-  await frame(workObject.id).locator('.artifact-sources > summary').click();
+  await manage.locator('.artifact-sources > summary').click();
   await until(async () => {
-    const value = await frame(workObject.id).locator('textarea.artifact-source-editor').inputValue().catch(() => '');
+    const value = await manage.locator('textarea.artifact-source-editor').inputValue().catch(() => '');
     return (value || '').trim().length > 8 ? value : false;
   }, 'source editor has file text');
   const sourceLayout = await until(async () => {
     const layout = await page.evaluate(id => {
-      const root = document.querySelector('.canvas-frame[data-item-id="' + id + '"] .canvas-frame-content');
+      const root = document.querySelector('.canvas-frame[data-item-id="' + id + '"] .artifact-management[open]');
       const editor = root?.querySelector('textarea.artifact-source-editor');
       const body = root?.querySelector('.artifact-source-body');
       if (!root || !editor || !body) return null;
@@ -510,8 +528,8 @@ try {
       };
     }, workObject.id);
     if (layout?.inView && layout.readable) return layout;
-    const summaryBox = await frame(workObject.id).locator('.artifact-sources > summary').boundingBox();
-    const box = summaryBox || await frame(workObject.id).locator('.canvas-frame-content').boundingBox();
+    const summaryBox = await manage.locator('.artifact-sources > summary').boundingBox();
+    const box = summaryBox || await manage.boundingBox();
     if (box) {
       await page.mouse.move(box.x + box.width / 2, box.y + Math.min(12, box.height / 2));
       await page.mouse.wheel(0, 320);
@@ -519,22 +537,25 @@ try {
     return false;
   }, 'source editor scrolled into work content view');
   result.sourceLayout = sourceLayout;
-  assert.equal(sourceLayout.inView, true, 'source editor not in work content view');
+  assert.equal(sourceLayout.inView, true, 'source editor not in the Work settings view');
   assert.equal(sourceLayout.readable, true, 'source editor has no readable text');
   await shot('active-sources.png');
-  await clickToolbar('返回画布');
+  await manage.locator(':scope > header').getByRole('button', { name: '关闭', exact: true }).click();
+  await (await modeButton('返回画布', 'is-active')).click();
   pass('Work inside exposes Stop/Restart as real enabled/disabled controls');
 
   await select('state-note');
   await page.keyboard.press('Enter');
-  const text = frame('state-note').locator('textarea.canvas-native-text');
+  // Native text is edited in the object's own dialog, opened from the active card's 编辑.
+  await frame('state-note').getByRole('button', { name: /^编辑/ }).click();
+  const editor = page.locator('dialog.canvas-native-editor[data-object-id="state-note"]');
+  const text = editor.locator('textarea.canvas-native-text');
   await text.waitFor({ state: 'visible' });
   await text.fill('编辑后的草稿');
   await shot('native-edit.png');
-  const cancel = frame('state-note').getByRole('button', { name: '返回画布', exact: true });
-  if (await toolbar.getByRole('button', { name: '返回画布', exact: true }).isVisible()) {
-    await toolbar.getByRole('button', { name: '返回画布', exact: true }).click();
-  } else if (await cancel.count()) await cancel.click();
+  await editor.getByRole('button', { name: '返回内容', exact: true }).click();
+  await editor.waitFor({ state: 'hidden' });
+  await (await modeButton('返回画布', 'is-active')).click();
   assert.equal((await board()).canvas.objects.find(item => item.id === 'state-note').content.text, '可编辑的正文');
   pass('native text can be edited without rewriting saved content on cancel');
 

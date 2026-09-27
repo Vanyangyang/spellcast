@@ -1,0 +1,62 @@
+.plan-main[data-map="true"] { display: flex; padding: 0; overflow: hidden; }
+.plan-map { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.plan-map-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--project-panel); }
+.plan-map-caption { display: grid; gap: 5px; flex: 1 1 100%; }
+.plan-map-caption small { color: var(--mute); }
+.plan-map[data-example="true"] .plan-map-caption strong { color: var(--warn); }
+.plan-map-layers, .plan-map-camera { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.plan-map-camera { margin-left: auto; }
+.plan-map-camera span { min-width: 40px; text-align: center; color: var(--mute); }
+.project-planning .plan-map-layer { display: inline-flex; flex-direction: row; align-items: center; gap: 5px; margin: 0; border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; font-size: 12px; }
+.project-planning .plan-map-layer input { flex: none; width: 14px; height: 14px; min-height: 14px; padding: 0; margin: 0; accent-color: var(--layer-color); }
+.plan-map [data-kind="rule"] { --layer-color: #89b8fa; }
+.plan-map [data-kind="parameter"] { --layer-color: #edc980; }
+.plan-map [data-kind="content"] { --layer-color: #91dacf; }
+.plan-map [data-kind="hook"] { --layer-color: #c6a4f1; }
+.plan-map-layer span { color: var(--layer-color); }
+.plan-map-body { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.plan-map-stage { flex: 1; min-width: 0; min-height: 280px; position: relative; overflow: hidden; touch-action: none; background-color: var(--project-detail); background-image: radial-gradient(circle, var(--line-strong) 1px, transparent 1px); cursor: grab; }
+.plan-map-stage:active { cursor: grabbing; }
+.plan-map-world { position: absolute; inset: 0; transform-origin: 0 0; pointer-events: none; }
+.plan-map-lines { position: absolute; inset: 0; width: 1px; height: 1px; overflow: visible; color: var(--mute); }
+.plan-map-lines > path { fill: none; stroke: var(--mute); stroke-width: 2; }
+.plan-map-lines > path[data-overlay="true"] { stroke-dasharray: 7 5; stroke: #c6a4f1; }
+.plan-map-lines > path[data-active="true"] { stroke: var(--mint); stroke-width: 3; }
+.plan-map-node { position: absolute; width: 304px; box-sizing: border-box; padding: 12px; border: 1px solid var(--line-strong); border-top: 3px solid var(--mint); border-radius: 12px; background: var(--project-panel); box-shadow: 0 8px 24px #0003; pointer-events: auto; cursor: default; }
+.plan-map-node[data-selected="true"] { outline: 2px solid var(--mint); outline-offset: 3px; }
+.plan-map-node[data-unattached="true"] { border-style: dashed; border-color: var(--warn); }
+.plan-map-node[data-outside-scope="true"] > .plan-map-node-head, .plan-map-node[data-outside-scope="true"] > .plan-map-node-meta { opacity: .6; }
+.plan-map-node-head { display: flex; align-items: start; gap: 6px; }
+.project-planning .plan-map-node-head [data-map-action="drag"] { flex: none; padding: 4px; border: none; background: transparent; color: var(--mute); cursor: move; touch-action: none; }
+.project-planning .plan-map-node-title { text-align: left; font-size: 17px; font-weight: 700; line-height: 1.45; background: transparent; border: none; padding: 2px; white-space: normal; overflow-wrap: anywhere; }
+.plan-map-node-meta { display: block; color: var(--mute); padding: 3px 0 7px 26px; font-size: 11px; }
+.plan-map-node-summary { font-size: 12px; color: var(--mute); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.plan-map-node-empty { display: block; padding: 10px 0 2px; color: var(--mute); font-size: 11px; }
+.plan-map-overlays { display: grid; gap: 7px; margin: 12px -6px -6px; padding-top: 10px; border-top: 1px dashed var(--line-strong); }
+.project-planning .plan-map-overlay { display: grid; gap: 3px; text-align: left; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--layer-color); background: var(--project-detail); color: var(--paper); white-space: normal; min-width: 0; }
+.plan-map-overlay small { color: var(--layer-color); font-size: 10px; }
+.plan-map-overlay strong { overflow-wrap: anywhere; font-size: 15px; }
+.plan-map-overlay span { color: var(--mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.plan-map-overlay[data-selected="true"] { outline: 1px solid var(--layer-color); }
+.plan-map-effective { font-size: 14px; color: var(--mint); }
+.project-planning .plan-map-edge-label { position: absolute; transform: translate(-50%, -50%); pointer-events: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; border-radius: 20px; background: var(--project-detail); padding: 4px 9px; font-size: 11px; color: var(--mute); }
+.plan-map-hint { position: absolute; left: 12px; bottom: 10px; right: 12px; pointer-events: none; font-size: 11px; line-height: 1.5; color: var(--mute); text-shadow: 0 1px 3px var(--project-detail); }
+.plan-map-inspector { width: min(340px, 36%); box-sizing: border-box; flex: none; padding: 16px; overflow: auto; border-left: 1px solid var(--line-strong); background: var(--project-panel); }
+.plan-map-inspector[hidden] { display: none; }
+.plan-map-inspector > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.plan-map-inspector h3, .plan-map-inspector p { overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.6; }
+.plan-map-inspector > small { display: block; color: var(--mute); margin-block: 8px 14px; }
+.plan-map-inspector > section { display: grid; gap: 8px; padding-block: 14px; border-bottom: 1px solid var(--line); }
+.plan-map-inspector h4 { color: var(--mute); }
+.plan-map-inspector section button { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.plan-map-inspector-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.plan-map-inspector > [data-map-action="connections"] { margin-top: 16px; }
+.plan-map-example-note { color: var(--warn); }
+@media (max-width: 1100px) { .plan-map-camera { margin-left: 0; } }
+@media (max-width: 760px) {
+  .plan-main[data-map="true"] { min-height: 640px; }
+  .plan-map { min-height: 640px; }
+  .plan-map-body { flex-direction: column; }
+  .plan-map-stage { min-height: 400px; }
+  .plan-map-inspector { width: 100%; max-height: 420px; border-left: none; border-top: 1px solid var(--line); }
+}

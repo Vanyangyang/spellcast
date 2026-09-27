@@ -64,8 +64,7 @@ body[data-theme="light"] .observer-switch:hover { background: rgba(28, 26, 22, 0
 body[data-theme="light"] .observer-switch:has(input:checked) { background: var(--studio-lilac-soft); }
 body[data-theme="light"] .agent-chip.live { color: #0f4f46; background: #d8ebe4; }
 body[data-theme="light"] .agent-chip.stale { color: #6b4a0c; background: #f3e6c4; }
-body[data-theme="light"] .board-dialog,
-body[data-theme="light"] .recipient-confirm {
+body[data-theme="light"] .board-dialog {
   background: var(--studio-paper);
   color: var(--studio-ink);
   border-color: var(--studio-line);
@@ -73,8 +72,7 @@ body[data-theme="light"] .recipient-confirm {
 body[data-theme="light"] .board-dialog input,
 body[data-theme="light"] .board-dialog textarea,
 body[data-theme="light"] .board-dialog select,
-body[data-theme="light"] .board-dialog button:not(.primary),
-body[data-theme="light"] .recipient-confirm button:not(.primary) {
+body[data-theme="light"] .board-dialog button:not(.primary) {
   background: var(--studio-canvas);
   color: var(--studio-ink);
   border-color: var(--studio-line);
@@ -128,6 +126,15 @@ body[data-theme="dark"].mode-focus.view-replies .board-views {
   border-color: var(--studio-line);
 }
 body[data-theme="dark"].mode-focus.view-replies .board-views button { color: var(--studio-soft); }
+/* The shared Canvas rules brighten hovered buttons for the light palette; keep dark text readable. */
+body[data-theme="dark"].mode-focus.view-replies button.ghost:hover:not(:disabled) {
+  background: rgba(244, 241, 234, 0.08);
+  color: var(--studio-ink);
+  border-color: var(--studio-line-strong);
+}
+body[data-theme="dark"].mode-focus.view-replies .agent-clients button.is-on {
+  color: var(--studio-mint);
+}
 body[data-theme="dark"].mode-focus.view-replies .board-views [aria-pressed="true"] {
   background: #343849;
   color: var(--studio-ink);
@@ -161,16 +168,3 @@ body[data-theme="dark"].mode-focus.view-replies .composer-delivery-status[data-p
 body[data-theme="dark"].mode-focus.view-replies .composer-delivery-status[data-phase="unknown"],
 body[data-theme="dark"].mode-focus.view-replies .composer-delivery-status[data-phase="unanswered"] { color: #f0c36a; }
 body[data-theme="dark"].mode-focus.view-replies .composer-delivery-status { color: var(--studio-mint); }
-body[data-theme="dark"].mode-focus.view-replies .recipient-confirm {
-  background: var(--studio-paper);
-  color: var(--studio-ink);
-  border-color: var(--studio-line);
-}
-body[data-theme="dark"].mode-focus.view-replies .recipient-confirm-route section,
-body[data-theme="dark"].mode-focus.view-replies .recipient-confirm button:not(.primary) {
-  background: var(--studio-canvas-2);
-  color: var(--studio-ink);
-  border-color: var(--studio-line);
-}
-body[data-theme="dark"].mode-focus.view-replies .recipient-confirm-route small,
-body[data-theme="dark"].mode-focus.view-replies .recipient-confirm #recipient-confirm-help { color: var(--studio-soft); }

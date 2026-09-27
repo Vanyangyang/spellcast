@@ -70,7 +70,7 @@ pub fn window_title(locale: &str) -> &'static str {
     }
 }
 
-fn preferences(root: &Path) -> Result<rusqlite::Connection, String> {
+pub(crate) fn preferences(root: &Path) -> Result<rusqlite::Connection, String> {
     let db = completion_hook::inbox(root)?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS completion_preferences (
         key TEXT PRIMARY KEY, value INTEGER NOT NULL);

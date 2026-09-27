@@ -12,7 +12,7 @@ const { chromium } = require(path.join(homedir(), '.cache/codex-runtimes/codex-p
 const root = path.resolve(import.meta.dirname, '..');
 const output = path.join(root, 'artifacts/workbench-20260914');
 fs.mkdirSync(output, { recursive: true });
-await build({ stdin: { contents: "import './src/styles.css'; import './src/theme.css'; export { mountSpatial } from './src/forms/spatial.ts';", resolveDir: root, loader: 'ts' },
+await build({ stdin: { contents: "import './src/styles.css'; import './src/fonts.css'; import './src/theme.css'; export { mountSpatial } from './src/forms/spatial.ts';", resolveDir: root, loader: 'ts' },
   bundle: true, format: 'esm', platform: 'browser', outfile: path.join(output, 'spatial-contrast.js'), external: ['/fonts/*'] });
 
 const server = createServer((request, response) => {

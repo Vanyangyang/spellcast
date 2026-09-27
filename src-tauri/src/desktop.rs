@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use spellcast_core::types::{BubbleShape, BubbleSize, ScreenAim, ThrownBubble};
+use spellcast_core::types::{BubbleShape, BubbleSize, ThrownBubble};
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
 };
@@ -77,7 +77,18 @@ fn finish_bubble_drag(window: &tauri::WebviewWindow) -> Result<(), String> {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopScreen {
     pub index: usize,
+    /// Stable identity used to remember a fixed display across restarts and reconnects.
+    pub id: String,
+    /// 1-based, left to right then top to bottom, so the number follows the physical layout.
+    pub number: usize,
     pub name: String,
+    /// The monitor's own model name when the OS reports one; empty otherwise.
+    pub label: String,
+    /// Monitor bounds in physical pixels, for the settings layout sketch.
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
     pub scale: f64,
     pub work_x: f64,
     pub work_y: f64,
@@ -137,9 +148,9 @@ pub fn list_screens(app: &AppHandle) -> Result<Vec<DesktopScreen>, String> {
                 .flatten()
         })
         .or_else(|| primary.clone());
-    let same_monitor = |a: &tauri::Monitor, b: &tauri::Monitor| {
-        a.position() == b.position() && a.size() == b.size()
-    };
+    let identities = monitor_identities();
+    let mut order: Vec<usize> = (0..monitors.len()).collect();
+    order.sort_by_key(|&i| (monitors[i].position().x, monitors[i].position().y));
 
     Ok(monitors
         .iter()
@@ -150,8 +161,22 @@ pub fn list_screens(app: &AppHandle) -> Result<Vec<DesktopScreen>, String> {
                 .name()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("display-{index}"));
+            let (position, size) = (monitor.position(), monitor.size());
+            let identity = identities.iter().find(|(device, _, _)| *device == name);
             DesktopScreen {
                 index,
+                id: screen_id(&name, identity.map(|(_, path, _)| path.as_str()), position, size),
+                number: order.iter().position(|&i| i == index).unwrap_or(index) + 1,
+                label: match identity {
+                    Some((_, _, friendly)) => friendly.clone(),
+                    // Windows slot names such as \\.\DISPLAY1 are not model names.
+                    None if cfg!(windows) => String::new(),
+                    None => name.clone(),
+                },
+                x: position.x,
+                y: position.y,
+                width: size.width,
+                height: size.height,
                 name: name.clone(),
                 scale,
                 work_x,
@@ -165,6 +190,100 @@ pub fn list_screens(app: &AppHandle) -> Result<Vec<DesktopScreen>, String> {
             }
         })
         .collect())
+}
+
+pub(crate) fn same_monitor(a: &tauri::Monitor, b: &tauri::Monitor) -> bool {
+    a.position() == b.position() && a.size() == b.size()
+}
+
+/// A remembered display must never match a different panel that later reuses the same
+/// OS slot name, so prefer the monitor's device path and include geometry otherwise.
+fn screen_id(
+    name: &str,
+    device_path: Option<&str>,
+    position: &tauri::PhysicalPosition<i32>,
+    size: &tauri::PhysicalSize<u32>,
+) -> String {
+    match device_path.filter(|path| !path.is_empty()) {
+        Some(path) => format!("path:{path}"),
+        None if cfg!(windows) => format!("gdi:{name}@{}x{}", size.width, size.height),
+        None => format!(
+            "name:{name}@{},{},{}x{}",
+            position.x, position.y, size.width, size.height
+        ),
+    }
+}
+
+/// `(GDI device name, monitor device path, friendly model name)` for each active display.
+#[cfg(windows)]
+fn monitor_identities() -> Vec<(String, String, String)> {
+    use windows_sys::Win32::Devices::Display::{
+        DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
+        DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+        DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+        DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+    };
+    let text = |raw: &[u16]| {
+        let end = raw.iter().position(|&c| c == 0).unwrap_or(raw.len());
+        String::from_utf16_lossy(&raw[..end])
+    };
+    // Reads display topology only; nothing here touches windows or their content.
+    unsafe {
+        let (mut path_count, mut mode_count) = (0u32, 0u32);
+        if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut path_count, &mut mode_count)
+            != 0
+        {
+            return Vec::new();
+        }
+        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); path_count as usize];
+        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); mode_count as usize];
+        if QueryDisplayConfig(
+            QDC_ONLY_ACTIVE_PATHS,
+            &mut path_count,
+            paths.as_mut_ptr(),
+            &mut mode_count,
+            modes.as_mut_ptr(),
+            std::ptr::null_mut(),
+        ) != 0
+        {
+            return Vec::new();
+        }
+        paths.truncate(path_count as usize);
+        let mut found: Vec<(String, String, String)> = Vec::new();
+        for path in &paths {
+            let mut source = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+            source.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            source.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+            source.header.adapterId = path.sourceInfo.adapterId;
+            source.header.id = path.sourceInfo.id;
+            let mut target = DISPLAYCONFIG_TARGET_DEVICE_NAME::default();
+            target.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            target.header.size = std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
+            target.header.adapterId = path.targetInfo.adapterId;
+            target.header.id = path.targetInfo.id;
+            if DisplayConfigGetDeviceInfo(&mut source.header) != 0
+                || DisplayConfigGetDeviceInfo(&mut target.header) != 0
+            {
+                continue;
+            }
+            let device = text(&source.viewGdiDeviceName);
+            // A mirrored source drives several panels; keep the first so the id stays stable.
+            if found.iter().any(|(known, _, _)| *known == device) {
+                continue;
+            }
+            found.push((
+                device,
+                text(&target.monitorDevicePath),
+                text(&target.monitorFriendlyDeviceName),
+            ));
+        }
+        found
+    }
+}
+
+#[cfg(not(windows))]
+fn monitor_identities() -> Vec<(String, String, String)> {
+    Vec::new()
 }
 
 #[cfg(windows)]
@@ -244,20 +363,6 @@ fn work_area_logical(monitor: &tauri::Monitor) -> (f64, f64, f64, f64, f64) {
     (x, y + top, w, (h - top - bottom).max(200.0), scale)
 }
 
-fn pick_screen(screens: &[DesktopScreen], aim: ScreenAim) -> &DesktopScreen {
-    let active = screens.iter().find(|s| s.is_active).unwrap_or(&screens[0]);
-    let primary = screens.iter().find(|s| s.is_primary).unwrap_or(&screens[0]);
-    match aim {
-        ScreenAim::Primary => primary,
-        ScreenAim::Side => screens
-            .iter()
-            .find(|s| s.index != active.index)
-            .or_else(|| screens.iter().find(|s| !s.is_active))
-            .unwrap_or(active),
-        ScreenAim::Active => active,
-    }
-}
-
 /// The widest a shape may grow before its words wrap. Matches `max-width` in styles.css.
 fn max_width(shape: BubbleShape) -> f64 {
     match shape {
@@ -307,7 +412,7 @@ const EDGE_PAD: f64 = 20.0;
 
 pub fn spawn_bubble(app: &AppHandle, item: ThrownBubble) -> Result<(), String> {
     let screens = list_screens(app)?;
-    let screen = pick_screen(&screens, item.screen);
+    let screen = crate::display_target::bubble_screen(app, &screens);
     let width = (max_width(item.shape) + BUBBLE_MARGIN * 2.0).min(screen.work_w - EDGE_PAD * 2.0);
     let height = (guess_height(&item) + BUBBLE_MARGIN * 2.0).min(screen.work_h - EDGE_PAD * 2.0);
     let pad = EDGE_PAD;
@@ -380,6 +485,9 @@ pub fn spawn_bubble(app: &AppHandle, item: ThrownBubble) -> Result<(), String> {
         let _ = win.close();
         return Err(err.to_string());
     }
+    if let Err(err) = crate::completions::keep_in_front(app) {
+        eprintln!("Completion window Z order: {err}");
+    }
     // Belt and braces for a page that is already listening.
     let _ = win.emit("spellcast-flight", &flight);
     Ok(())
@@ -440,7 +548,7 @@ fn js_random() -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Opt-in numeric evidence for a real desktop check. Reads window/monitor
@@ -471,35 +579,37 @@ mod tests {
         assert!(foreground_screen_point().is_some());
     }
 
-    #[test]
-    fn active_screen_wins_over_primary_even_when_display_names_match() {
-        let screens = [
-            DesktopScreen {
-                index: 0,
-                name: "Same model".into(),
-                scale: 1.0,
-                work_x: 0.0,
-                work_y: 0.0,
-                work_w: 1920.0,
-                work_h: 1040.0,
-                is_primary: true,
-                is_active: false,
-            },
-            DesktopScreen {
-                index: 1,
-                name: "Same model".into(),
-                scale: 1.5,
-                work_x: -1706.0,
-                work_y: 0.0,
-                work_w: 1706.0,
-                work_h: 920.0,
-                is_primary: false,
-                is_active: true,
-            },
-        ];
-        assert_eq!(pick_screen(&screens, ScreenAim::default()).index, 1);
-        assert_eq!(pick_screen(&screens, ScreenAim::Primary).index, 0);
-        assert_eq!(pick_screen(&screens, ScreenAim::Side).index, 0);
-        assert_eq!(pick_screen(&screens[1..], ScreenAim::Side).index, 1);
+    /// A test display; only the fields placement reads are meaningful.
+    pub(crate) fn screen(index: usize, id: &str, is_primary: bool, is_active: bool) -> DesktopScreen {
+        DesktopScreen {
+            index,
+            id: id.into(),
+            number: index + 1,
+            name: "Same model".into(),
+            label: String::new(),
+            x: index as i32 * 1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            work_x: index as f64 * 1920.0,
+            work_y: 0.0,
+            work_w: 1920.0,
+            work_h: 1040.0,
+            is_primary,
+            is_active,
+        }
     }
+
+    /// Opt-in evidence that each active display gets a device path and model name.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires an interactive Windows desktop"]
+    fn live_monitor_identities() {
+        let found = monitor_identities();
+        println!("{}", serde_json::json!(found));
+        assert!(!found.is_empty(), "QueryDisplayConfig reported no active display");
+        assert!(found.iter().all(|(device, path, _)| device.starts_with(r"\\.\") && !path.is_empty()));
+    }
+
 }

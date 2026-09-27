@@ -1,0 +1,260 @@
+/* Night Desk, round one — one visual vocabulary for the main window's home, Canvas, settings and
+   dialogs. Loaded last by main.ts; delete that import (and this file) to roll the round back.
+
+   Roles: accent = primary action, chosen option, connected; select = selection, toggled tool,
+   focus; warn = paused, stale, attention. Dark values are the default. Light values follow
+   body[data-theme="light"], which theme.ts also sets for "system" when the OS is light, so the
+   system choice needs no rules of its own. Desktop bubbles and completion cards are separate
+   windows over any wallpaper and keep their own dark material (night-desk-notices.css). */
+
+:root {
+  --nd-accent: #7ee0c8;
+  --nd-accent-hover: #9aebd5;
+  --nd-on-accent: #0b1a17;
+  --nd-accent-soft: rgba(126, 224, 200, 0.14);
+  --nd-accent-line: rgba(126, 224, 200, 0.5);
+  --nd-select: #d4b3ff;
+  --nd-select-soft: rgba(212, 179, 255, 0.2);
+  --nd-warn: #f0c36a;
+  --nd-text: #f4f1ea;
+  --nd-muted: #aaa9b2;
+  --nd-panel: #12141c;
+  --nd-raised: #191c25;
+  --nd-hairline: rgba(244, 241, 234, 0.14);
+  --nd-hairline-strong: rgba(244, 241, 234, 0.26);
+  --nd-hover: rgba(244, 241, 234, 0.07);
+  --nd-radius-control: 10px;
+  --nd-caption: 12px;
+  --nd-settle: 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Light: the filled accent is darkened so paper-coloured text on it keeps 5.5:1. */
+body[data-theme="light"] {
+  --nd-accent: #237566;
+  --nd-accent-hover: #1c5f53;
+  --nd-on-accent: #fffcf7;
+  --nd-accent-soft: #dcede6;
+  --nd-accent-line: rgba(35, 117, 102, 0.45);
+  --nd-select: #8461aa;
+  --nd-select-soft: rgba(132, 97, 170, 0.18);
+  --nd-warn: #8a5f0f;
+  --nd-text: #1c1a16;
+  --nd-muted: #5c574e;
+  --nd-panel: #fffcf7;
+  --nd-raised: #f4f2ec;
+  --nd-hairline: rgba(28, 26, 22, 0.13);
+  --nd-hairline-strong: rgba(28, 26, 22, 0.24);
+  --nd-hover: rgba(28, 26, 22, 0.05);
+}
+
+/* ---- Shape: standalone controls share one corner; chips, switches and bubbles stay round. ---- */
+button.ghost,
+button.primary,
+a.ghost,
+.locale-wrap select,
+body.mode-focus.view-replies .locale-wrap select,
+body.mode-focus.view-replies button.ghost,
+body.mode-focus.view-replies button.primary,
+body.mode-focus.view-replies #talk #send {
+  border-radius: var(--nd-radius-control);
+}
+
+/* ---- Primary: one filled accent for the action that moves the task on. ---- */
+button.primary,
+body.mode-focus.view-replies button.primary,
+body.mode-focus.view-replies .settings-sheet button.primary,
+.board-dialog button.primary,
+body.mode-focus.view-replies .board-dialog button.primary,
+.board-dialog.canvas-insert .canvas-insert-actions button.primary {
+  background: var(--nd-accent);
+  border-color: var(--nd-accent);
+  color: var(--nd-on-accent);
+}
+button.primary:hover:not(:disabled),
+.board-dialog button.primary:hover:not(:disabled),
+.board-dialog.canvas-insert .canvas-insert-actions button.primary:hover:not(:disabled) {
+  background: var(--nd-accent-hover);
+  border-color: var(--nd-accent-hover);
+}
+
+/* ---- Secondary: hairline and text; the hover tint now also shows on the light page. ---- */
+button.ghost:hover:not(:disabled),
+a.ghost:hover {
+  background: var(--nd-hover);
+  border-color: var(--nd-hairline-strong);
+}
+/* Top-bar chrome stays quiet in every view, so the one filled action reads first. */
+.top button.ghost,
+.top .locale-wrap select {
+  color: var(--nd-muted);
+  border-color: var(--nd-hairline);
+}
+.top button.ghost:hover:not(:disabled) {
+  color: var(--nd-text);
+}
+
+/* Folded More menu (narrow Canvas, or any top bar that would otherwise wrap): the button matches
+   its neighbours, the list is one panel in every view, and a dot says replies wait inside. */
+body .top-more.is-compact > summary {
+  position: relative;
+  width: var(--control-h, 34px);
+  min-height: var(--control-h, 34px);
+  border: 1px solid var(--nd-hairline);
+  border-radius: var(--nd-radius-control);
+  color: var(--nd-muted);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+body .top-more.is-compact > summary:hover,
+body .top-more.is-compact[open] > summary {
+  color: var(--nd-text);
+  background: var(--nd-hover);
+  border-color: var(--nd-hairline-strong);
+}
+body .top-more.is-compact:has(#feedback-count:not([hidden])) > summary::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nd-select);
+}
+body .top-more.is-compact[open] > .top-more-menu {
+  top: calc(100% + 6px);
+  background: var(--nd-panel);
+  border-color: var(--nd-hairline);
+  box-shadow: var(--studio-shadow, 0 12px 32px rgba(0, 0, 0, 0.4));
+}
+body .top-more.is-compact[open] > .top-more-menu .ghost {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: start;
+  border-color: transparent;
+  background: transparent;
+  color: var(--nd-text);
+}
+body .top-more.is-compact[open] > .top-more-menu .ghost:hover:not(:disabled) {
+  background: var(--nd-hover);
+}
+/* On the home page the card sits above the bar; an open menu has to come forward over it. */
+.top:has(.top-more.is-compact[open]) {
+  z-index: 7;
+}
+
+/* ---- Quiet primary inside Canvas tool groups: tinted, not a bright block among tools. ---- */
+.canvas-toolbar .canvas-tool-primary,
+body.mode-focus.view-replies .canvas-toolbar button.canvas-tool-primary {
+  background: var(--nd-accent-soft);
+  border-color: var(--nd-accent-line);
+  color: var(--nd-accent);
+}
+.canvas-toolbar .canvas-tool-primary:hover:not(:disabled),
+body.mode-focus.view-replies .canvas-toolbar button.canvas-tool-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--nd-accent) 24%, transparent);
+  color: var(--nd-accent);
+}
+
+/* ---- Chosen option (client, feedback view): accent outline, never a second primary. ---- */
+.agent-clients button.is-on,
+body.mode-focus.view-replies .agent-clients button.is-on,
+body[data-theme="dark"].mode-focus.view-replies .agent-clients button.is-on,
+.feedback-views button.is-on,
+.feedback-views button[aria-selected="true"],
+.board-dialog .feedback-views button.is-on,
+.board-dialog .feedback-views button[aria-selected="true"],
+body.mode-focus.view-replies .board-dialog .feedback-views button.is-on,
+body.mode-focus.view-replies .board-dialog .feedback-views button[aria-selected="true"],
+body.mode-focus.view-replies .feedback-views button.is-on,
+body.mode-focus.view-replies .feedback-views button[aria-selected="true"] {
+  background: var(--nd-accent-soft);
+  border-color: var(--nd-accent-line);
+  color: var(--nd-accent);
+}
+
+/* ---- Status: connected = accent, waiting for an agent = select, stale = warn. ---- */
+.agent-dot.ready {
+  background: var(--nd-select);
+  box-shadow: 0 0 0 4px var(--nd-select-soft);
+}
+.agent-dot.live {
+  background: var(--nd-accent);
+  box-shadow: 0 0 0 4px var(--nd-accent-soft), 0 0 12px color-mix(in srgb, var(--nd-accent) 40%, transparent);
+}
+.agent-dot.stale {
+  background: var(--nd-warn);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--nd-warn) 18%, transparent);
+}
+.agent-chip.live,
+body[data-theme="light"] .agent-chip.live,
+body[data-theme="dark"].mode-focus.view-replies .agent-chip.live {
+  background: var(--nd-accent-soft);
+  border-color: var(--nd-accent-line);
+  color: var(--nd-accent);
+}
+.agent-chip.stale,
+body[data-theme="light"] .agent-chip.stale,
+body[data-theme="dark"].mode-focus.view-replies .agent-chip.stale {
+  background: color-mix(in srgb, var(--nd-warn) 14%, transparent);
+  border-color: color-mix(in srgb, var(--nd-warn) 45%, transparent);
+  color: var(--nd-warn);
+}
+
+/* ---- Captions: nothing below 12px in the main window's own chrome. ---- */
+.eyebrow,
+.agent-setup-checks-title,
+.agent-setup-checks-note,
+.board-dialog .results-help,
+.saved-item small,
+#settings .config-line input,
+#settings .setup-details-body {
+  font-size: var(--nd-caption);
+}
+
+/* ---- Settings: identical wherever it opens (home or Canvas), and a text size that stops growing. ---- */
+#settings {
+  --setup-text: var(--nd-text);
+  --setup-muted: var(--nd-muted);
+  --setup-bg: var(--nd-panel);
+  --setup-subtle: var(--nd-raised);
+  --setup-border: var(--nd-hairline);
+  --setup-accent: var(--nd-accent);
+  --settings-text-size: clamp(14px, 1vw, 16px);
+  --settings-small-size: clamp(12px, 0.8vw, 14px);
+}
+#settings button.ghost {
+  background: var(--nd-raised);
+  border-color: var(--nd-hairline);
+  color: var(--nd-text);
+}
+#settings button.ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--nd-text) 8%, var(--nd-raised));
+  border-color: var(--nd-hairline-strong);
+}
+#settings button:focus-visible,
+#settings summary:focus-visible {
+  outline-color: var(--nd-select);
+}
+#settings [data-tone="attention"] {
+  color: var(--nd-warn);
+}
+
+/* ---- Motion: a short settle when a panel or the selection tools appear; nothing loops. ---- */
+@keyframes nd-settle {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+#settings[open] > .settings-sheet,
+.board-dialog[open],
+.canvas-tool-selection:not([hidden]) {
+  animation: nd-settle var(--nd-settle) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  #settings[open] > .settings-sheet,
+  .board-dialog[open],
+  .canvas-tool-selection:not([hidden]) {
+    animation: none;
+  }
+}

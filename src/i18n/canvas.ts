@@ -1,6 +1,7 @@
 import { currentLocale } from "./index";
 
 const en = {
+  deleteLock: "Lock against deletion", deleteUnlock: "Unlock", deleteLockAll: "Lock all selected", deleteLockedState: "Locked against deletion", deleteLockHint: "Protects the whole canvas object, including its content blocks. Unlock before removing it; reading, editing and moving remain available.", deleteLockedNotice: "{n} locked item(s) kept. Unlock them before removal.", deleteLockedSkipped: "Unlocked items removed; {n} locked item(s) kept.", deleteLockSaved: "Locked {n} item(s) against deletion.", deleteUnlockSaved: "Unlocked {n} item(s).",
   multiSelect: "Select multiple", selectedItems: "{n} items selected", selectedBlocks: "{n} blocks selected", clearSelection: "Clear selection", removeSelected: "Remove from canvas", alignLeft: "Align left", alignLeftHint: "Align left edges and move cards down as needed to avoid overlap.", arrangeRow: "Arrange in a row", groupHint: "Name and save these items as one idea. You can keep their positions or arrange them.", selectAll: "Select all", selectBlock: "Select {title}", selectionLimit: "Select up to 32 blocks at a time.",
   readerCompare: "View side by side", readerCopy: "Copy selected text", readerDiscuss: "Discuss selected", readerDiscussReady: "The selected blocks are ready. Write your question in the canvas composer.", readerUnsaved: "Unsaved changes", readerSaving: "Saving…", readerSaveFailed: "Save failed", readerHideOutline: "Hide outline", readerShowOutline: "Show outline", readerOutlineWidth: "Outline width", readerTextSize: "Body text size", readerTextSizeHint: "Ctrl + wheel changes body text only; click to reset it to 100%. Set other sizes in Settings.",
   selectionMore: "More actions", selectionReaderTitle: "Selected content · {n}", selectionDiscussReady: "Selected content is ready. Write your question in the canvas composer.",
@@ -51,6 +52,7 @@ const en = {
 };
 type Key = keyof typeof en;
 const zh: Record<Key, string> = {
+  deleteLock: "防误删锁定", deleteUnlock: "解锁", deleteLockAll: "锁定全部所选", deleteLockedState: "已锁定，防止误删", deleteLockHint: "保护整张画布对象及其内容块。移除前须先解锁；仍可阅读、编辑和移动。", deleteLockedNotice: "已保留 {n} 个锁定对象，请先解锁再移除。", deleteLockedSkipped: "已移除未锁定对象，保留了 {n} 个锁定对象。", deleteLockSaved: "已锁定 {n} 个对象，防止误删。", deleteUnlockSaved: "已解锁 {n} 个对象。",
   multiSelect: "多选", selectedItems: "已选 {n} 项", selectedBlocks: "已选 {n} 个内容块", clearSelection: "清除选择", removeSelected: "从画布移除", alignLeft: "左对齐", alignLeftHint: "统一左边界，并按原有上下顺序向下避让，防止卡片重叠。", arrangeRow: "横向排列", groupHint: "为所选内容命名并保存为一个想法；可以保留位置，也可以选择编排。", selectAll: "全选", selectBlock: "选择「{title}」", selectionLimit: "每次最多选择 32 个内容块。",
   readerCompare: "并排查看", readerCopy: "复制所选正文", readerDiscuss: "一起讨论", readerDiscussReady: "已选好这些内容块，请在画布输入框中写下问题。", readerUnsaved: "未保存修改", readerSaving: "正在保存…", readerSaveFailed: "保存失败", readerHideOutline: "收起目录", readerShowOutline: "展开目录", readerOutlineWidth: "目录宽度", readerTextSize: "正文字号", readerTextSizeHint: "按住 Ctrl 滚动只调整正文；点击恢复正文 100%。其他字号请在设置中调整。",
   selectionMore: "更多操作", selectionReaderTitle: "并排查看 · 已选 {n} 项", selectionDiscussReady: "所选内容已加入提问上下文，请在画布输入框中写下问题。",
@@ -73,7 +75,7 @@ const zh: Record<Key, string> = {
   overviewCaptured: "当初背景：{label}", overviewLinked: "关联任务：{label}", overviewEmptyFilter: "没有匹配的内容。",
   openItem: "展开内容…",
   readerOutline: "内容块 · {n}", readerAll: "阅读全部", readerEdit: "编辑这一块", readerFontSettings: "字号设置",
-  readerKindText: "文字", readerKindComparison: "方案对照", readerKindGraph: "关系图", readerKindSequence: "步骤", readerKindArtifact: "作品",
+  readerKindText: "文字", readerKindComparison: "对照", readerKindGraph: "关系图", readerKindSequence: "步骤", readerKindArtifact: "作品",
   activate: "进入内容", done: "返回画布", activeHelp: "正在操作内容 · Esc 或「返回画布」回到选择态 · 作品内部的按键留在作品里",
   removed: "已移除", removedCount: "已移除 · {n}", removedHelp: "已移除的内容保留原文、位置与尺寸。恢复后回到原来的位置。", emptyRemoved: "没有已移除的内容。", restoreItem: "恢复到画布",
   draftRemoved: "这条内容已从画布移除。恢复后即可继续编辑，草稿会保留。",
@@ -100,6 +102,7 @@ const zh: Record<Key, string> = {
   unbound: "尚未关联原任务", details: "投递详情", receipt: "请求 {n}", timelineSaved: "已保存", timelineQueued: "已排队", timelineRead: "已读取", timelineReply: "回复更新", timelineHandled: "已处理", recentHandled: "最近处理", requestSaved: "请求已保存", source: "来自 {source}", emptyCanvas: "画布上还没有内容", emptyHelp: "左侧 + 可以记下想法。Agent 送到这里的内容也会出现。",
 };
 const ja: Record<Key, string> = {
+  deleteLock: "削除をロック", deleteUnlock: "ロック解除", deleteLockAll: "選択をすべてロック", deleteLockedState: "削除ロック中", deleteLockHint: "内容ブロックを含むオブジェクト全体を保護します。削除前に解除してください。閲覧・編集・移動は可能です。", deleteLockedNotice: "ロック中の {n} 件を保持しました。削除前に解除してください。", deleteLockedSkipped: "未ロックの項目を除去し、ロック中の {n} 件を保持しました。", deleteLockSaved: "{n} 件の削除をロックしました。", deleteUnlockSaved: "{n} 件のロックを解除しました。",
   multiSelect: "複数選択", selectedItems: "{n} 件選択中", selectedBlocks: "{n} ブロック選択中", clearSelection: "選択を解除", removeSelected: "キャンバスから除去", alignLeft: "左揃え", alignLeftHint: "左端を揃え、重ならないよう元の上下順に下へずらします。", arrangeRow: "横に並べる", groupHint: "選択内容に名前を付けて一つのアイデアとして保存します。位置を維持するか配置し直すか選べます。", selectAll: "すべて選択", selectBlock: "「{title}」を選択", selectionLimit: "一度に選べるのは 32 ブロックまでです。",
   readerCompare: "並べて表示", readerCopy: "選択した本文をコピー", readerDiscuss: "選択内容を相談", readerDiscussReady: "選択したブロックについて、キャンバスの入力欄に質問を書いてください。", readerUnsaved: "未保存の変更", readerSaving: "保存中…", readerSaveFailed: "保存に失敗", readerHideOutline: "目次を閉じる", readerShowOutline: "目次を開く", readerOutlineWidth: "目次の幅", readerTextSize: "本文の文字サイズ", readerTextSizeHint: "Ctrl + ホイールでは本文だけ変わります。クリックで 100% に戻し、他の文字は設定で変更できます。",
   selectionMore: "その他の操作", selectionReaderTitle: "選択内容 · {n} 件", selectionDiscussReady: "選択内容を質問の参照に追加しました。キャンバスの入力欄に質問を書いてください。",

@@ -51,6 +51,8 @@ pub struct CanvasContentFields {
     pub alt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_table: Option<crate::canvas::CanvasSourceTable>,
 }
 
 impl CanvasContentFields {
@@ -70,6 +72,9 @@ impl CanvasContentFields {
         }
         if self.fill.is_some() {
             names.push("fill");
+        }
+        if self.source_table.is_some() {
+            names.push("source_table");
         }
         names
     }
@@ -748,6 +753,9 @@ fn create(
 ) -> Result<(), (CanvasTargetKind, Fail)> {
     use CanvasTargetKind::{Content, Presentation};
     validate_new_id(id).map_err(|f| (Content, f))?;
+    if mode.agent && matches!(content, CanvasContent::SourceTable { .. }) {
+        return Err((Content, Fail::protected(0, "来源表格只能由本地项目视图加入画布。")));
+    }
     if content.is_legacy() {
         return Err((
             Content,
@@ -796,6 +804,7 @@ fn create(
         revision: 1,
         z: placement.z.unwrap_or_else(|| canvas.next_z()),
         removed: placement.removed.unwrap_or(false),
+        delete_locked: false,
         appearance: placement.appearance.unwrap_or(CanvasAppearance::Plain),
         x: placement.x.unwrap_or(48.0),
         y: placement.y.unwrap_or(48.0),
@@ -860,8 +869,9 @@ fn patch_content(
         CanvasContent::Reply { .. } => &["title"],
         CanvasContent::Image { .. } => &["title", "src", "alt"],
         CanvasContent::Shape { .. } => &["title", "fill", "text"],
-        // Block objects change only as a whole form through `PatchBlock`.
-        CanvasContent::Block { .. } => &[],
+        CanvasContent::SourceTable { .. } => &["source_table"],
+        // References and block objects have no editable scalar fields in Canvas.
+        CanvasContent::WorkRecord { .. } | CanvasContent::Block { .. } => &[],
     };
     if let Some(name) = given.iter().find(|name| !allowed.contains(name)) {
         return Err(Fail::invalid(format!(
@@ -933,8 +943,16 @@ fn patch_content(
                         *text = v.clone();
                     }
                 }
+                CanvasContent::SourceTable { table } => {
+                    let replacement = fields.source_table.as_ref().expect("validated source table field");
+                    if !table.same_source(replacement) {
+                        return Err(Fail::invalid("来源身份已经改变，不能用刷新覆盖另一张表。"));
+                    }
+                    *table = replacement.clone();
+                }
                 CanvasContent::Node { .. }
                 | CanvasContent::Reply { .. }
+                | CanvasContent::WorkRecord { .. }
                 | CanvasContent::Block { .. } => unreachable!(),
             }
             content.validate()?;
@@ -1159,6 +1177,9 @@ fn place(
         expected,
         "对象呈现已经更新，请查看最新位置后重试。",
     )?;
+    if current.delete_locked && fields.removed == Some(true) {
+        return Err(Fail::protected(current.revision, "此内容已锁定，请先明确解锁，再从画布移除。"));
+    }
     if mode.agent && (current.user_modified || object.source_id.is_none()) {
         return Err(Fail::protected(
             current.revision,
@@ -2298,12 +2319,54 @@ impl Session {
 mod tests {
     use super::*;
     use crate::{
-        validate_fill, validate_image_src, CanvasPatch, CanvasShape, NodeDraft, ReplyGraphEdge,
+        validate_fill, validate_image_src, CanvasPatch, CanvasShape, CanvasSourceTable, NodeDraft, ReplyGraphEdge,
         ReplyGraphNode, ReplyImageReference, ReplyOption, ReplyRequest, ReplyStep,
         MAX_IMAGE_DATA_BYTES,
     };
 
     const AGENT: Option<&str> = Some("codex:one");
+
+    #[test]
+    fn source_table_refresh_keeps_identity_and_layout_and_rejects_another_source() {
+        let table = CanvasSourceTable {
+            title: "玩家循环".into(), project_id: "project-1".into(), root: "g:/game".into(),
+            path: "Assets/Documents/Atlas/domains/cycle.md".into(), heading: "四层循环".into(),
+            line: 46, hash: "a".repeat(64), columns: vec!["层级".into(), "内容".into()],
+            rows: vec![vec!["短期".into(), "探索".into()]],
+        };
+        let mut session = Session::default();
+        let agent_create = session.apply_canvas_batch(batch("agent-source-create", vec![CanvasOperation::Create {
+            id: "source-table-1".into(), content: CanvasContent::SourceTable { table: table.clone() },
+            origin: None, placement: CanvasPlacementFields::default(), bindings: vec![],
+        }]), AGENT).unwrap();
+        assert_eq!(agent_create.targets[0].status, CanvasTargetState::Protected);
+        assert!(session.board.canvas.object("source-table-1").is_none());
+        assert!(session.apply_canvas_batch(batch("source-create", vec![CanvasOperation::Create {
+            id: "source-table-1".into(), content: CanvasContent::SourceTable { table: table.clone() },
+            origin: None, placement: CanvasPlacementFields { x: Some(120.0), y: Some(80.0), ..Default::default() },
+            bindings: vec![],
+        }]), None).unwrap().is_applied());
+        let placement = session.board.canvas.items[0].clone();
+        let mut refreshed = table.clone();
+        refreshed.hash = "b".repeat(64);
+        refreshed.rows[0][1] = "探索并结算".into();
+        assert!(session.apply_canvas_batch(batch("source-refresh", vec![CanvasOperation::PatchContent {
+            id: "source-table-1".into(), expected_revision: 1,
+            fields: CanvasContentFields { source_table: Some(refreshed.clone()), ..Default::default() },
+        }]), None).unwrap().is_applied());
+        let object = session.board.canvas.object("source-table-1").unwrap();
+        assert_eq!(object.content_revision, 2);
+        assert_eq!(object.content, CanvasContent::SourceTable { table: refreshed.clone() });
+        assert_eq!(session.board.canvas.items[0], placement);
+        let mut other = refreshed;
+        other.path = "Assets/Documents/other.md".into();
+        let rejected = session.apply_canvas_batch(batch("source-other", vec![CanvasOperation::PatchContent {
+            id: "source-table-1".into(), expected_revision: 2,
+            fields: CanvasContentFields { source_table: Some(other), ..Default::default() },
+        }]), None).unwrap();
+        assert_eq!(rejected.targets[0].status, CanvasTargetState::Invalid);
+        assert_eq!(session.board.canvas.object("source-table-1").unwrap().content_revision, 2);
+    }
 
     #[test]
     fn idea_metadata_order_and_user_edits_survive_restart_and_agent_conflicts() {
@@ -2706,6 +2769,92 @@ mod tests {
         assert_eq!(reloaded.board.canvas.objects.len(), 3);
         assert!(reloaded.board.canvas.object("t1").is_some());
         assert_eq!(reloaded.board.canvas.proposals[0].result, result);
+    }
+
+    #[test]
+    fn work_record_is_an_ids_only_reference_and_removal_keeps_its_content() {
+        let content = CanvasContent::WorkRecord {
+            project_id: "project-1".into(),
+            record_id: "record-1".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&content).unwrap(),
+            serde_json::json!({
+                "type": "work_record",
+                "project_id": "project-1",
+                "record_id": "record-1"
+            })
+        );
+        assert!(content.validate().is_ok());
+        assert!(CanvasContent::WorkRecord {
+            project_id: "project/invalid".into(),
+            record_id: "record-1".into(),
+        }
+        .validate()
+        .is_err());
+
+        let mut session = Session::default();
+        let result = session
+            .apply_canvas_batch(
+                batch(
+                    "record-reference",
+                    vec![CanvasOperation::Create {
+                        id: "record-card".into(),
+                        content: content.clone(),
+                        origin: None,
+                        placement: CanvasPlacementFields::default(),
+                        bindings: vec![],
+                    }],
+                ),
+                None,
+            )
+            .unwrap();
+        assert!(result.is_applied());
+        let rejected = session
+            .apply_canvas_batch(
+                batch(
+                    "record-reference-edit",
+                    vec![CanvasOperation::PatchContent {
+                        id: "record-card".into(),
+                        expected_revision: 1,
+                        fields: CanvasContentFields {
+                            title: Some("cached title".into()),
+                            ..Default::default()
+                        },
+                    }],
+                ),
+                None,
+            )
+            .unwrap();
+        assert_eq!(rejected.status, CanvasBatchStatus::Proposed);
+        assert_eq!(rejected.targets[0].status, CanvasTargetState::Invalid);
+        assert_eq!(session.board.canvas.object("record-card").unwrap().content, content);
+        session
+            .set_canvas_delete_lock(
+                &[CanvasRead {
+                    kind: CanvasTargetKind::Presentation,
+                    id: "record-card".into(),
+                    revision: 1,
+                }],
+                true,
+            )
+            .unwrap();
+        assert!(session.remove_canvas_item("record-card", 2).is_err());
+        assert!(!session.board.canvas.placement("record-card").unwrap().removed);
+        assert_eq!(session.board.canvas.object("record-card").unwrap().content, content);
+        session
+            .set_canvas_delete_lock(
+                &[CanvasRead {
+                    kind: CanvasTargetKind::Presentation,
+                    id: "record-card".into(),
+                    revision: 2,
+                }],
+                false,
+            )
+            .unwrap();
+        session.remove_canvas_item("record-card", 3).unwrap();
+        assert!(session.board.canvas.placement("record-card").unwrap().removed);
+        assert_eq!(session.board.canvas.object("record-card").unwrap().content, content);
     }
 
     #[test]

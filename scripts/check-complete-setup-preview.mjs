@@ -466,6 +466,8 @@ try {
 
   await page.setViewportSize({ width: 1280, height: 860 });
   await openSettings(page);
+  // The theme lives on the Appearance & reading tab; Settings always opens on the connection tab.
+  await page.click("#settings-tab-appearance");
   await page.selectOption("#theme-preference", "light");
   await page.keyboard.press("Escape");
   await page.click("#mode-focus");

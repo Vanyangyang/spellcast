@@ -31,11 +31,14 @@ pub const REQUIRED_RELATIVE: &[&str] = &[
     "hooks/hooks.json",
     "hooks/observer-bootstrap.txt",
     "hooks/observer-stop.txt",
+    "hooks/claude-observer-runner.mjs",
     "skills/spellcast/SKILL.md",
     "skills/spellcast/references/asides.md",
     "skills/spellcast/references/canvas.md",
     "skills/spellcast/references/works.md",
     "skills/spellcast/references/feedback.md",
+    "skills/spellcast/references/project-records.md",
+    "skills/spellcast/scripts/project-api.mjs",
     ".mcp.json",
     "LICENSE",
 ];
@@ -45,11 +48,14 @@ const MANAGED_RELATIVE: &[&str] = &[
     "hooks/hooks.json",
     "hooks/observer-bootstrap.txt",
     "hooks/observer-stop.txt",
+    "hooks/claude-observer-runner.mjs",
     "skills/spellcast/SKILL.md",
     "skills/spellcast/references/asides.md",
     "skills/spellcast/references/canvas.md",
     "skills/spellcast/references/works.md",
     "skills/spellcast/references/feedback.md",
+    "skills/spellcast/references/project-records.md",
+    "skills/spellcast/scripts/project-api.mjs",
     ".mcp.json",
     "LICENSE",
 ];
@@ -60,6 +66,8 @@ const SKILL_OFFICIAL: &[&str] = &[
     "references/canvas.md",
     "references/works.md",
     "references/feedback.md",
+    "references/project-records.md",
+    "scripts/project-api.mjs",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -86,7 +94,10 @@ pub enum HookTrust { Trusted, Untrusted, Modified, Disabled, Unknown }
 #[derive(Debug, Clone, Serialize)]
 pub struct SetupComponents {
     pub mcp: bool,
+    /// The host has a Spellcast Skill to load.
     pub skill: bool,
+    /// That Skill has this build's text; false means an explicit update would replace it.
+    pub skill_current: bool,
     pub hooks: bool,
 }
 
@@ -2719,7 +2730,7 @@ pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) 
             }
         },
     };
-    let skill_ok = configure::spellcast_skill_is_current(&codex_skill_md(&paths.codex_home));
+    let skill_state = configure::spellcast_skill_state(&codex_skill_md(&paths.codex_home));
     let helper = aside_helper_dest(&paths.codex_home);
     let helper_ok = helper.is_file();
     let hooks_path = codex_user_hooks_path(&paths.codex_home);
@@ -2736,9 +2747,11 @@ pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) 
     };
     let components = SetupComponents {
         mcp: matches!(mcp_state, GrokMcp::Ready),
-        skill: skill_ok,
+        skill: skill_state != configure::SkillState::Missing,
+        skill_current: skill_state == configure::SkillState::Current,
         hooks: features_ok && helper_ok && hooks_ok,
     };
+    let skill_differs = "Skill 已安装，但与当前版本不同；点“更新”会先备份现有文件再替换。";
     let trust = if components.hooks {
         match (config_doc.as_ref(), hooks_doc.as_ref()) {
             (Some(cfg), Some(hooks)) => inspect_user_aside_trust(cfg, &hooks_path, hooks, &helper, &status),
@@ -2749,6 +2762,9 @@ pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) 
     };
     if components.mcp && components.skill && components.hooks {
         let mut r = user_aside_files_report(client, trust);
+        if !components.skill_current {
+            r.not_done.push(skill_differs.into());
+        }
         r.components = Some(components);
         r.done.push(format!("MCP：{}", config_path.display()));
         r.done.push(format!("Skill：{}", codex_skill_md(&paths.codex_home).display()));
@@ -2763,17 +2779,17 @@ pub fn codex_direct_status(client: &str, url: Option<&str>, paths: &SetupPaths) 
         "尚未安装完整 Spellcast 接入。",
     );
     if components.hooks { r.hook_trust = Some(trust); }
-    r.components = Some(components);
     if matches!(mcp_state, GrokMcp::Ready) {
         r.done.push("MCP 已写入。".into());
     } else {
         r.not_done.push("MCP 未写入。".into());
     }
-    if skill_ok {
-        r.done.push("Skill 已安装。".into());
-    } else {
-        r.not_done.push("Skill 未安装。".into());
+    match skill_state {
+        configure::SkillState::Current => r.done.push("Skill 已安装。".into()),
+        configure::SkillState::Differs => r.not_done.push(skill_differs.into()),
+        configure::SkillState::Missing => r.not_done.push("Skill 未安装。".into()),
     }
+    r.components = Some(components);
     if hooks_ok && helper_ok && features_ok {
         r.done.push("Hooks 已写入。".into());
     } else {
@@ -2802,7 +2818,9 @@ pub fn codex_direct_install(client: &str, url: Option<&str>, paths: &SetupPaths)
         probe.not_done.push("安装未开始。".into());
         return probe;
     }
-    if probe.installed {
+    // An installed Skill that differs from this build is still replaced here, on this explicit
+    // request, after `commit_with_backup` keeps the existing files.
+    if probe.installed && probe.components.as_ref().is_none_or(|c| c.skill_current) {
         probe.note = "已是当前接入，未重复写入。".into();
         probe.done.push("重新检查只读文件，未调用 Codex CLI。".into());
         return probe;
@@ -4509,6 +4527,84 @@ enabled = ["cursor-bridge"]
         let components = partial.components.as_ref().unwrap();
         assert!(components.mcp && !components.skill && components.hooks, "{:?}", partial);
         assert_eq!(partial.hook_trust, Some(HookTrust::Untrusted));
+        let _ = fs::remove_dir_all(user);
+    }
+
+    #[test]
+    fn codex_direct_status_reports_a_differing_skill_as_installed_not_missing() {
+        let (user, codex, _bundle, p) = isolated_direct("direct-skill-differs");
+        let url = Some("http://127.0.0.1:47194/mcp");
+        assert!(codex_direct_install("codex", url, &p).installed);
+        let command = installed_aside_command(&codex);
+        let start = command_hook_hash("session_start", Some(MATCHER), &command, HOOK_TIMEOUT);
+        let prompt = command_hook_hash("user_prompt_submit", None, &command, HOOK_TIMEOUT);
+        write_user_hook_trust(&codex, 0, 0, &start, &prompt);
+        let skill = codex.join("skills").join("spellcast");
+        let edited = "---\nname: spellcast\n---\nA locally edited Skill.\n";
+        let line_endings = |path: &Path, crlf: bool| {
+            let lf = fs::read_to_string(path).unwrap().replace("\r\n", "\n");
+            fs::write(path, if crlf { lf.replace('\n', "\r\n") } else { lf }).unwrap();
+        };
+        // The reported machine: SKILL.md and asides.md edited, two references only in CRLF.
+        fs::write(skill.join("SKILL.md"), edited).unwrap();
+        fs::write(skill.join("references").join("asides.md"), "# edited asides\n").unwrap();
+        for name in ["works.md", "feedback.md"] {
+            let path = skill.join("references").join(name);
+            let crlf = !fs::read_to_string(&path).unwrap().contains("\r\n");
+            line_endings(&path, crlf);
+        }
+
+        let works = fs::read(skill.join("references").join("works.md")).unwrap();
+        let before = collect_files(&user);
+        let differs = codex_direct_status("codex", url, &p);
+        assert_eq!(differs.kind, SetupKind::Verified, "{:?}", differs);
+        assert!(differs.installed);
+        assert_eq!(differs.hook_trust, Some(HookTrust::Trusted));
+        let c = differs.components.as_ref().unwrap();
+        assert!(c.mcp && c.skill && c.hooks && !c.skill_current, "{:?}", differs);
+        assert!(differs.not_done.iter().any(|line| line.contains("与当前版本不同")), "{:?}", differs.not_done);
+        assert!(!differs.not_done.iter().any(|line| line.contains("未安装")), "{:?}", differs.not_done);
+        assert_eq!(collect_files(&user), before, "status never rewrites the existing Skill");
+
+        // Only an explicit install replaces it, keeps a backup, and leaves config and hooks alone.
+        let config = fs::read(codex.join("config.toml")).unwrap();
+        let hooks = fs::read(codex.join("hooks.json")).unwrap();
+        let updated = codex_direct_install("codex", url, &p);
+        assert_eq!(updated.kind, SetupKind::Verified, "{:?}", updated);
+        assert!(updated.components.as_ref().unwrap().skill_current, "{:?}", updated);
+        assert!(!updated.note.contains("未重复写入"), "{:?}", updated.note);
+        assert_eq!(fs::read_to_string(skill.join("SKILL.md")).unwrap(), configure::SPELLCAST_SKILL);
+        let kept = fs::read_dir(&skill).unwrap().flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("SKILL.md.spellcast.bak"))
+            .map(|entry| fs::read_to_string(entry.path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(kept, vec![edited.to_string()], "the edited Skill stays in its backup");
+        let references = skill.join("references");
+        assert_eq!(fs::read_to_string(references.join("asides.md.spellcast.bak")).unwrap(), "# edited asides\n");
+        assert_eq!(fs::read(references.join("works.md")).unwrap(), works, "a line-ending-only reference is left alone");
+        assert!(!references.join("works.md.spellcast.bak").exists() && !references.join("feedback.md.spellcast.bak").exists());
+        assert_eq!(fs::read(codex.join("config.toml")).unwrap(), config);
+        assert_eq!(fs::read(codex.join("hooks.json")).unwrap(), hooks);
+
+        // A copy that differs only in line endings is current and is not rewritten.
+        for path in std::iter::once(skill.join("SKILL.md")).chain(["asides.md", "canvas.md", "works.md", "feedback.md"].map(|name| skill.join("references").join(name))) {
+            let crlf = !fs::read_to_string(&path).unwrap().contains("\r\n");
+            line_endings(&path, crlf);
+        }
+        let flipped = collect_files(&user);
+        let same = codex_direct_status("codex", url, &p);
+        assert!(same.components.as_ref().unwrap().skill_current, "{:?}", same);
+        assert!(!same.not_done.iter().any(|line| line.contains("与当前版本不同")), "{:?}", same.not_done);
+        assert!(codex_direct_install("codex", url, &p).note.contains("未重复写入"));
+        assert_eq!(collect_files(&user), flipped);
+
+        // A truly missing Skill is still reported as not installed.
+        fs::remove_file(skill.join("SKILL.md")).unwrap();
+        let missing = codex_direct_status("codex", url, &p);
+        assert_eq!(missing.kind, SetupKind::NotInstalled, "{:?}", missing);
+        let c = missing.components.as_ref().unwrap();
+        assert!(c.mcp && !c.skill && !c.skill_current && c.hooks, "{:?}", missing);
+        assert!(missing.not_done.iter().any(|line| line == "Skill 未安装。"), "{:?}", missing.not_done);
         let _ = fs::remove_dir_all(user);
     }
 
