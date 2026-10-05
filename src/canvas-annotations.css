@@ -38,6 +38,8 @@
 .canvas-annotation-meta { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 5px; max-width: 48%; }
 .canvas-annotation-author, .canvas-annotation-state { padding: 2px 6px; border-radius: 999px; color: var(--studio-soft, #5c574e); background: var(--studio-canvas-2, #edede7); font-size: 11px; line-height: 1.4; white-space: nowrap; }
 .canvas-annotation-state.is-updated { color: #725824; background: #f6ecd2; }
+.canvas-annotation-state.is-pending { color: #725824; background: #f6ecd2; }
+.canvas-annotation-state.is-handled { color: #255d50; background: #e1f1e9; }
 .canvas-annotation-state.is-removed, .canvas-annotation-state.is-unavailable { color: #8b4c35; background: #f9e3dc; }
 .canvas-annotation-original, .canvas-annotation-body { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--studio-line, rgba(28, 26, 22, .1)); }
 .canvas-annotation-kicker { display: block; margin-bottom: 4px; color: var(--studio-mute, #80796e); font-size: 11px; }
@@ -52,6 +54,8 @@
 .canvas-annotation-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .canvas-annotation-actions .canvas-annotation-discuss { border-color: #9ac4b7; background: #e8f1ec; color: #255d50; }
 .canvas-annotation-actions .canvas-annotation-danger { margin-left: auto; color: #8a4032; }
+.canvas-annotations-more { flex: none; align-self: center; margin: 0 0 10px; padding: 6px 12px; border: 1px solid var(--studio-line, rgba(28, 26, 22, .14)); border-radius: 8px; background: var(--studio-canvas, #f7f6f2); color: var(--studio-ink, #1c1a16); cursor: pointer; }
+.canvas-annotations-more[hidden] { display: none; }
 .canvas-annotation-editor { display: grid; flex: none; gap: 8px; max-height: min(46vh, 380px); overflow: auto; padding: 14px 22px 16px; border-top: 1px solid var(--studio-line, rgba(28, 26, 22, .14)); background: var(--studio-paper, #fffcf7); }
 .canvas-annotation-editor[hidden] { display: none; }
 .canvas-annotation-editor h3 { margin: 0; font: 600 15px/1.35 var(--font, system-ui, sans-serif); }

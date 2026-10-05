@@ -203,6 +203,7 @@ export class NativeCanvasContent {
   title() { return this.titleInput.value || (this.content.type === "text" ? textLabel(this.textInput.value) : this.content.title) || ct("untitledBlock"); }
   setInputs(inputs: CanvasInputSnapshot) { this.inputs = inputs; this.paintBinding(); }
   get hasUnpersistedDraft() { return Boolean(this.draft && this.draftUnsafe); }
+  get hasDraft() { return Boolean(this.draft) || this.draftUnsafe; }
   prepareFeedback() { if (this.draft) throw new Error(ct("nativeSaveBeforeFeedback")); }
   getRegion() { return this.region ? { ...this.region } : undefined; }
   setRegion(region: Region | undefined) {

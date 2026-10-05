@@ -118,6 +118,7 @@ await page.setContent(`<!doctype html>
   <details class="setup-details" hidden><summary>安装详情</summary><pre id="agent-setup-details-body"></pre></details>
   <p id="settings-setup-status"></p>
   <p id="settings-setup-hint"></p>
+  <p data-setup-body hidden></p><p data-setup-body hidden></p>
   <details class="setup-details" hidden><summary>安装详情</summary><pre id="settings-setup-details-body"></pre></details>
 </body></html>`);
 await page.addScriptTag({ path: iifeOut });
@@ -194,6 +195,7 @@ const result = await page.evaluate(async () => {
     details: document.querySelector("#agent-setup-details-body")?.textContent ?? "",
     detailsHidden: [...document.querySelectorAll(".setup-details")].every((el) => el.hidden),
     detailsOpen: [...document.querySelectorAll(".setup-details")].some((el) => el.open),
+    introHidden: [...document.querySelectorAll("[data-setup-body]")].every((el) => el.hidden),
   });
   const base = (over = {}) => ({
     client: "codex",
@@ -229,12 +231,14 @@ const result = await page.evaluate(async () => {
   check(document.querySelector('[data-setup-component="hooks"]').textContent === "已信任", "trusted component");
   check([...document.querySelectorAll('[data-setup-component="mcp"]')].every((el) => el.textContent === "已安装"), "home and settings show MCP installation");
   check(document.querySelector('#settings-complete-setup').textContent === "更新 Hooks + Skill", "installed action names Hooks and Skill");
+  check(snap.introHidden, "installed setup does not show first-time guidance");
 
   paintSetupView(base({
     kind: "not_installed",
     components: { mcp: true, skill: false, hooks: true },
     hook_trust: "untrusted",
   }), t);
+  check(!view().introHidden, "setup guidance returns while installation is needed");
   check([...document.querySelectorAll('[data-setup-component="mcp"]')].every((el) => el.textContent === "已安装"), "partial MCP is reported accurately in both views");
   check([...document.querySelectorAll('[data-setup-component="skill"]')].every((el) => el.textContent === "未安装"), "partial Skill is reported accurately in both views");
   check([...document.querySelectorAll('[data-setup-component="hooks"]')].every((el) => el.textContent === "待信任"), "partial Hooks trust is reported accurately in both views");

@@ -72,7 +72,7 @@ function validRecord(value: unknown): value is DraftRecord {
   if (!object(value) || ![value.source_id, value.reply_id, value.reply_title, value.block_id].every(v => typeof v === "string")
       || (value.object_id != null && (typeof value.object_id !== "string" || !value.object_id || value.object_id.length > 160))
       || (value.target_source_id != null && typeof value.target_source_id !== "string")
-      || (value.anchors != null && (!Array.isArray(value.anchors) || value.anchors.length > 32 || !value.anchors.every(anchor => object(anchor) && typeof anchor.object_id === "string" && Number.isSafeInteger(anchor.content_revision))))
+      || (value.anchors != null && (!Array.isArray(value.anchors) || value.anchors.length > 64 || !value.anchors.every(anchor => object(anchor) && typeof anchor.object_id === "string" && Number.isSafeInteger(anchor.content_revision))))
       || !["text", "comparison", "graph", "sequence", "artifact"].includes(String(value.block_type))
       || (value.channel != null && value.channel !== "composer")
       || !Number.isSafeInteger(value.expected_revision) || !Number.isFinite(value.updated_at)) return false;
@@ -143,11 +143,18 @@ export class DraftStore {
   }
   get(key: string): DraftRecord | undefined { this.load(); const value = this.records.get(key); return value ? structuredClone(value) : undefined; }
   /** Startup recomputes inputs. Recover a unique draft for the same references without rewriting its saved evidence. */
-  getComposer(record: DraftRecord): DraftRecord | undefined {
-    const exact = this.get(draftKey(record));
+  getComposer(record: DraftRecord, readLatest = false): DraftRecord | undefined {
+    this.load();
+    let records = this.records;
+    if (readLatest) {
+      try { records = this.read(); }
+      catch { this.lastError = "storage"; return; }
+    }
+    const value = records.get(draftKey(record));
+    const exact = value ? structuredClone(value) : undefined;
     if (exact || record.channel !== "composer" || !record.anchors?.length) return exact;
     const targetKey = (draft: DraftRecord) => draftKey({ ...draft, anchors: draft.anchors?.map(({ inputs: _inputs, ...anchor }) => anchor) });
-    const key = targetKey(record), matches = [...this.records.values()].filter(draft => draft.channel === "composer" && targetKey(draft) === key);
+    const key = targetKey(record), matches = [...records.values()].filter(draft => draft.channel === "composer" && targetKey(draft) === key);
     return matches.length === 1 ? structuredClone(matches[0]) : undefined;
   }
   get hasUnpersisted(): boolean { return [...this.pending.values()].some(Boolean); }

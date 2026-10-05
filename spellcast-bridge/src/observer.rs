@@ -1,12 +1,14 @@
-//! Short-lived, source-bound observation tickets. Models remain in their host.
+//! Source-bound tickets. Codex uses a host child; Claude observations run in the application.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
 use spellcast_core::types::{new_id, BubbleRequest, SpellcastError};
 
 use crate::Bridge;
+use crate::observer_runner::{ClaudeObserverRunner, ObserverDispatcher, ObserverJob};
 
 const COOLDOWN_MS: u64 = 120_000;
 const LEASE_MS: u64 = 180_000;
@@ -138,11 +140,24 @@ struct Source {
     last_locale: Option<String>,
     last_provider: Option<String>,
     pending: Option<ObserverBrief>,
+    /// Server-owned provenance frozen before dispatch or release to a Codex child.
+    captured_context: Option<spellcast_core::CapturedContext>,
+    /// Dropping the ticket's job cancels the corresponding process tree.
+    job: Option<ObserverJob>,
 }
 
 #[derive(Default)]
 pub(crate) struct Observers {
     sources: HashMap<String, Source>,
+    dispatcher: Option<ObserverDispatcher>,
+}
+
+impl Source {
+    fn invalidate(&mut self) {
+        self.pending = None;
+        self.captured_context = None;
+        self.job = None;
+    }
 }
 
 fn text_limit(value: &str, limit: usize, field: &str) -> Result<(), SpellcastError> {
@@ -152,6 +167,21 @@ fn text_limit(value: &str, limit: usize, field: &str) -> Result<(), SpellcastErr
         )));
     }
     Ok(())
+}
+
+pub(crate) fn claude_native_source(source: &str) -> Result<Option<&str>, SpellcastError> {
+    if source.split_once(':').is_some_and(|(engine, _)| engine.eq_ignore_ascii_case("claude") && engine != "claude") {
+        return Err(SpellcastError::user("Claude 旁念来源必须使用规范的 claude: 前缀。"));
+    }
+    let Some(native) = source.strip_prefix("claude:") else {
+        return Ok(None);
+    };
+    if !uuid::Uuid::parse_str(native)
+        .is_ok_and(|id| !id.is_nil() && id.hyphenated().to_string() == native)
+    {
+        return Err(SpellcastError::user("Claude 旁念来源需要真实、规范的原生会话 UUID。"));
+    }
+    Ok(Some(native))
 }
 
 impl Observers {
@@ -218,10 +248,10 @@ impl Observers {
                 || !brief.snapshot.same_context(&snapshot)
                 || now >= brief.expires_at_ms
         }) {
-            source.pending = None;
+            source.invalidate();
         }
         if !allowed {
-            source.pending = None;
+            source.invalidate();
             return Ok(CheckpointResult {
                 status: "suppressed",
                 brief: None,
@@ -260,6 +290,7 @@ impl Observers {
         source.last_provider = Some(provider.into());
         source.last_snapshot = Some(snapshot);
         source.pending = Some(brief.clone());
+        source.captured_context = None;
         Ok(CheckpointResult {
             status: "ready",
             brief: Some(brief),
@@ -268,11 +299,20 @@ impl Observers {
 
     pub(crate) fn invalidate_all(&mut self) {
         for source in self.sources.values_mut() {
-            source.pending = None;
+            source.invalidate();
         }
     }
 
+    #[cfg(test)]
     fn take(&mut self, id: &str, now: u64) -> Option<ObserverBrief> {
+        self.take_captured(id, now).map(|(brief, _)| brief)
+    }
+
+    fn take_captured(
+        &mut self,
+        id: &str,
+        now: u64,
+    ) -> Option<(ObserverBrief, Option<spellcast_core::CapturedContext>)> {
         let source = self.sources.values_mut().find(|source| {
             source
                 .pending
@@ -280,18 +320,53 @@ impl Observers {
                 .is_some_and(|brief| brief.observer_id == id)
         })?;
         let brief = source.pending.take()?;
-        (now < brief.expires_at_ms).then_some(brief)
+        let captured = source.captured_context.take();
+        source.job = None;
+        (now < brief.expires_at_ms).then_some((brief, captured))
     }
 }
 
 impl Bridge {
+    #[cfg(test)]
+    pub(crate) fn test_observer_brief(&self, source: &str) -> Option<ObserverBrief> {
+        self.observers.lock().unwrap().sources.get(source).and_then(|source| source.pending.clone())
+    }
+
+    /// Desktop startup configures trusted bundled paths. No tool can set a runner or command.
+    /// A headless/older host with no runtime reports unavailable rather than reviving a courier.
+    pub fn configure_claude_observer_runner(self: &Arc<Self>, runner: ClaudeObserverRunner) {
+        let mut observers = self.observers.lock().unwrap();
+        observers.invalidate_all();
+        if let Some(dispatcher) = observers.dispatcher.as_mut() {
+            dispatcher.set_runner(runner);
+        } else {
+            observers.dispatcher = Some(ObserverDispatcher::new(runner, Arc::downgrade(self)));
+        }
+    }
+
+    /// Application shutdown must also cancel observations, even when other Arc holders remain.
+    pub fn shutdown_observers(&self) {
+        let mut observers = self.observers.lock().unwrap();
+        observers.invalidate_all();
+        if let Some(dispatcher) = &observers.dispatcher {
+            dispatcher.synchronize_spawns();
+        }
+        observers.dispatcher = None;
+    }
+
     pub fn checkpoint(&self, req: CheckpointRequest) -> Result<CheckpointResult, SpellcastError> {
+        claude_native_source(&req.source_id)?;
+        if req.snapshot.is_none() {
+            return self.observers.lock().unwrap().checkpoint(
+                req,
+                spellcast_core::inbox::now_ms(),
+                true,
+            );
+        }
+        let actual_focus = self.surface.board_is_focused();
         let mut observers = self.observers.lock().unwrap();
         let now = spellcast_core::inbox::now_ms();
-        if req.snapshot.is_none() {
-            return observers.checkpoint(req, now, true);
-        }
-        let gate = self.observer_gate();
+        let gate = self.observer_gate_with_focus(actual_focus);
         if !gate.enabled {
             observers.invalidate_all();
             return Ok(CheckpointResult {
@@ -299,7 +374,36 @@ impl Bridge {
                 brief: None,
             });
         }
-        observers.checkpoint_for_locale(req, now, gate.allowed, &gate.locale, &gate.provider)
+        let mut result =
+            observers.checkpoint_for_locale(req, now, gate.allowed, &gate.locale, &gate.provider)?;
+        if let Some(brief) = result.brief.clone() {
+            let captured = self.capture_from_brief(&brief);
+            let source = observers
+                .sources
+                .get_mut(&brief.source_id)
+                .expect("ready ticket has a source");
+            source.captured_context = Some(captured);
+            if brief.provider == "claude" {
+                // Never expose a Claude brief to the host: no native child, no task-notification,
+                // and no pending observer that can keep the host's foreground CLI alive.
+                let job = observers.dispatcher.as_ref()
+                    .ok_or_else(|| "Claude observer runtime is unavailable.".to_string())
+                    .and_then(|dispatcher| dispatcher.schedule(brief.clone()));
+                let source = observers.sources.get_mut(&brief.source_id).unwrap();
+                result.brief = None;
+                match job {
+                    Ok(job) => {
+                        source.job = Some(job);
+                        result.status = "scheduled";
+                    }
+                    Err(_) => {
+                        source.invalidate();
+                        result.status = "unavailable";
+                    }
+                }
+            }
+        }
+        Ok(result)
     }
 
     pub fn complete_observation(
@@ -314,10 +418,13 @@ impl Bridge {
                 ));
             }
         }
-        let (brief, thought) = {
+        let actual_focus = self.surface.board_is_focused();
+        let (brief, thought, captured) = {
             let mut observers = self.observers.lock().unwrap();
-            let gate = self.observer_gate();
-            let Some(brief) = observers.take(&req.observer_id, spellcast_core::inbox::now_ms()) else {
+            let gate = self.observer_gate_with_focus(actual_focus);
+            let Some((brief, captured)) =
+                observers.take_captured(&req.observer_id, spellcast_core::inbox::now_ms())
+            else {
                 return Ok(ObserverResult {
                     status: "stale".into(),
                     bubble_id: None,
@@ -341,9 +448,11 @@ impl Bridge {
                     bubble_id: None,
                 });
             }
-            (brief, thought)
+            let captured = captured.ok_or_else(|| {
+                SpellcastError::user("旁念票据缺少原始归属上下文；没有从当前宿主重新推断。")
+            })?;
+            (brief, thought, captured)
         };
-        let captured = self.capture_from_brief(&brief);
         let result = self.bubble_now_captured(
             BubbleRequest {
                 source_id: Some(brief.source_id),
@@ -645,20 +754,9 @@ mod tests {
             thought: None,
         }).unwrap().status, "stale");
         assert!(bridge.set_observer_provider("auto").is_err());
-        let claude_brief = bridge.checkpoint(checkpoint("new-source", "Lunch resolved"))
-            .unwrap().brief.unwrap();
-        assert_eq!(claude_brief.provider, "claude");
-        assert_eq!(bridge.complete_observation(ObserverCompletion { provider: None,
-            observer_id: claude_brief.observer_id,
-            thought: None,
-        }).unwrap().status, "stale");
-        let claude_brief = bridge.checkpoint(checkpoint("another-source", "Lunch resolved"))
-            .unwrap().brief.unwrap();
-        assert_eq!(bridge.complete_observation(ObserverCompletion {
-            provider: Some("claude".into()),
-            observer_id: claude_brief.observer_id,
-            thought: None,
-        }).unwrap().status, "silent");
+        let unavailable = bridge.checkpoint(checkpoint("new-source", "Lunch resolved")).unwrap();
+        assert_eq!(unavailable.status, "unavailable");
+        assert!(unavailable.brief.is_none(), "a missing app runtime must never create a host courier");
 
         let mut gate = Observers::default();
         let first = gate.checkpoint_for_locale(checkpoint("a", "Lunch resolved"), 0, true, "zh-CN", "codex")
@@ -899,3 +997,6 @@ mod tests {
         assert_eq!(surface.thrown.lock().unwrap().len(), 1);
     }
 }
+
+#[cfg(test)]
+mod runner_tests;

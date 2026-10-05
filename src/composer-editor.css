@@ -1,0 +1,17 @@
+.composer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; margin-left: auto; }
+.composer-actions .composer-game-design { margin-left: 0; }
+.composer #composer-expand { min-height: 28px; flex: none; padding: 4px 8px; border-radius: 8px; font: 500 12px/1.25 var(--font); white-space: nowrap; }
+.composer #talk { min-width: 0; }
+.composer #input, body.mode-focus.view-replies .composer #input { box-sizing: border-box; min-width: 0; flex: 1 1 0; padding: 8px 10px; line-height: 1.55; overflow: auto; resize: none; scroll-padding: 8px; }
+.composer.is-editing #input, body.mode-focus.view-replies .composer.is-editing #input { resize: vertical; }
+.composer.is-editing #input:focus-visible { outline: 2px solid var(--studio-lilac, var(--lilac)); outline-offset: 1px; }
+.composer .reason, body.mode-focus.view-replies .composer .reason { max-height: 60px; overflow: auto; }
+.composer .composer-recipient-status, .composer .composer-delivery-status { max-height: 64px; overflow: auto; }
+.composer .composer-route-options { max-height: min(180px, 24vh); overflow: auto; }
+.composer .composer-game-design-panel { box-sizing: border-box; }
+@media (max-width: 600px) {
+  .composer-actions { gap: 4px; }
+  .composer #talk { align-items: stretch; flex-direction: column; }
+  .composer #talk #send { align-self: flex-end; }
+  .composer #input, body.mode-focus.view-replies .composer #input { flex: none; width: 100%; }
+}

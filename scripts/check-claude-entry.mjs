@@ -1,0 +1,44 @@
+/** Unit-level setup contract. Uses an isolated DOM and fake native IPC, not
+ * any desktop/browser surface or user configuration. */
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import vm from 'node:vm';
+import path from 'node:path';
+import {build} from 'esbuild';
+const root=path.resolve(import.meta.dirname,'..');
+const require=createRequire(path.join(root,'artifacts/ccgui-compat/ccgui-host-src/package.json'));
+const {JSDOM}=require('jsdom');
+const dom=new JSDOM('<html><body><div id="agent-result"></div><span id="agent-setup-status"></span><span id="agent-setup-hint"></span><span id="settings-setup-status"></span><span id="settings-setup-hint"></span><h3 data-setup-title></h3><p data-setup-hooks-desc></p><button id="agent-complete-setup"></button><button data-setup-refresh></button><span data-setup-component="hooks"></span><span data-setup-component="skill"></span><ul><li data-setup-ccgui-row hidden><span data-setup-component="ccgui"></span></li></ul></body></html>',{url:'http://localhost/'});
+const calls=[],secret='a'.repeat(64);let live=[];
+dom.window.__TAURI_INTERNALS__={invoke:async(command,args)=>{calls.push({command,args});if(command==='bridge_status')return{port:47194};if(command==='host_link_key')return secret;if(command==='open_claude_plugin_folder')return null;throw new Error('Unexpected IPC '+command);}};
+let copied='';Object.defineProperty(dom.window.navigator,'clipboard',{value:{writeText:async text=>{copied=text;}}});
+const bundle=await build({stdin:{contents:"export * from './src/complete-setup-ui'; export * from './src/host-link-ui'; export {setLocale,t} from './src/i18n';",resolveDir:root,loader:'ts'},bundle:true,write:false,format:'cjs',platform:'browser',define:{'import.meta.env':'{}'}});
+const module={exports:{}};const context=vm.createContext({module,exports:module.exports,window:dom.window,document:dom.window.document,navigator:dom.window.navigator,localStorage:dom.window.localStorage,CustomEvent:dom.window.CustomEvent,fetch:async()=>({ok:true,json:async()=>({sessions:live})}),console,setTimeout,clearTimeout,crypto:globalThis.crypto});
+vm.runInContext(bundle.outputFiles[0].text,context);const api=module.exports;api.setLocale('zh-CN');
+api.mountHostLinkSettings(dom.window.document.querySelector('#agent-result'));
+const report={client:'claude-code',kind:'pending_reload',complete_supported:true,installed:true,components:{mcp:true,skill:true,hooks:true,skill_current:true},note:'',done:[],not_done:[],conflicts:[],ccgui_plugin_path:'C:/Users/Fixture/.spellcast/integrations/claude/ccgui-spellcast',native_reload_required:true,runtime_verified:false};
+api.paintSetupView(report,api.t);await new Promise(setImmediate);await new Promise(setImmediate);
+const section=dom.window.document.querySelector('[data-claude-pairing]');assert.equal(section.hidden,false);assert.match(dom.window.document.querySelector('[data-setup-title]').textContent,/Claude Code/);assert.match(dom.window.document.querySelector('#agent-complete-setup').textContent,/Claude/);assert.equal(section.querySelector('[role=status]').dataset.connected,'false');
+section.querySelector('[data-host-link-copy]').click();await new Promise(setImmediate);assert.equal(copied,secret);assert.ok(!section.textContent.includes(secret));assert.equal(section.querySelector('[role=status]').dataset.connected,'false');
+section.querySelector('[data-claude-plugin-folder]').click();await new Promise(setImmediate);assert.ok(calls.some(call=>call.command==='open_claude_plugin_folder'&&Object.keys(call.args||{}).length===0));
+live=[{reachable:true,label:'工作会话',capabilities:['canvas_requests','durable_receipts'],active:true,host_pin:{client:'ccgui',source_id:'claude:12345678-1234-4234-8234-123456789abc',native_session_id:'12345678-1234-4234-8234-123456789abc',cwd:'G:/Work',window_id:'window-1'}}];dom.window.dispatchEvent(new dom.window.CustomEvent('spellcast:host-sessions',{detail:live}));assert.equal(section.querySelector('[role=status]').dataset.connected,'true');assert.match(section.textContent,/12345678-1234/);
+const skillStatus=dom.window.document.querySelector('[data-setup-component=skill]');
+api.paintSetupView({...report,kind:'installed_unverified',plugin_resources_current:true},api.t);assert.equal(skillStatus.dataset.tone,'done');assert.doesNotMatch(dom.window.document.querySelector('#agent-setup-hint').textContent,/与这一版内置的不同/);
+api.paintSetupView({...report,kind:'installed_unverified',plugin_resources_current:false},api.t);assert.equal(skillStatus.dataset.tone,'done');assert.match(dom.window.document.querySelector('#agent-setup-status').textContent,/接入插件需更新/);assert.match(dom.window.document.querySelector('#agent-setup-hint').textContent,/插件的资源或来源/);assert.doesNotMatch(skillStatus.textContent,/不同/);
+api.paintSetupView({...report,plugin_resources_current:false,components:{...report.components,skill_current:false}},api.t);assert.match(skillStatus.textContent,/不同/);assert.match(dom.window.document.querySelector('#agent-setup-hint').textContent,/画布用法已安装/);
+api.paintSetupView({...report,kind:'failed',plugin_resources_current:false,ui:'status-read-failed'},api.t);assert.doesNotMatch(dom.window.document.querySelector('#agent-setup-status').textContent,/插件需更新/);
+api.paintSetupView({...report,client:'codex'},api.t);assert.equal(section.hidden,false);assert.equal(section.querySelector('[data-host-link-diagnostics]').open,false);
+// CC GUI send-back is part of Claude setup: one row reports deployment and pairing, the section explains what is left.
+const ccguiRow=dom.window.document.querySelector('[data-setup-ccgui-row]'),ccguiStatus=dom.window.document.querySelector('[data-setup-component=ccgui]');
+const settle=async()=>{await new Promise(setImmediate);await new Promise(setImmediate);};live=[];
+api.paintSetupView(report,api.t);await settle();assert.equal(ccguiRow.hidden,false);assert.equal(ccguiStatus.textContent,'未核验');
+api.paintSetupView({...report,ccgui_detected:false},api.t);await settle();assert.equal(ccguiStatus.textContent,'未检测到 CC GUI');assert.match(section.querySelector('[role=status]').textContent,/未检测到 CC GUI/);
+api.paintSetupView({...report,ccgui_detected:true,ccgui_plugin_current:false,ccgui_paired:false},api.t);await settle();assert.equal(ccguiStatus.textContent,'待安装');assert.equal(ccguiStatus.dataset.tone,'attention');assert.match(section.querySelector('[role=status]').textContent,/自动安装并配对/);
+api.paintSetupView({...report,ccgui_detected:true,ccgui_plugin_current:true,ccgui_paired:false},api.t);await settle();assert.equal(ccguiStatus.textContent,'待配对');
+api.paintSetupView({...report,ccgui_detected:true,ccgui_plugin_current:true,ccgui_paired:true},api.t);await settle();assert.equal(ccguiStatus.textContent,'已安装并配对');assert.equal(ccguiStatus.dataset.tone,'done');assert.match(section.querySelector('[role=status]').textContent,/重启 CC GUI/);
+api.paintSetupView({...report,client:'codex'},api.t);assert.equal(ccguiRow.hidden,true);
+const html=readFileSync(path.join(root,'index.html'),'utf8');const buttons=html.match(/<button[^>]*data-client="claude-code"[^>]*>/g);assert.equal(buttons.length,3,'home, onboarding and the settings connection card all offer Claude Code');
+assert.equal((html.match(/data-setup-component="ccgui"/g)||[]).length,2,'home and settings checks both list CC GUI send-back');assert.ok(buttons.every(button=>!button.includes('disabled')));
+const main=readFileSync(path.join(root,'src/main.ts'),'utf8');assert.match(main,/return client === "codex" \|\| client === "claude-code"/);
+console.log(JSON.stringify({pass:true,checks:19,method:'Isolated setup renderer and native IPC contract; no CU or user application automation'}));

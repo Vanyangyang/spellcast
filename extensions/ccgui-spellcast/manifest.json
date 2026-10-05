@@ -1,0 +1,8 @@
+{
+  "id": "spellcast-canvas-bridge",
+  "name": "Spellcast 会话回发",
+  "version": "0.1.2",
+  "tier": "js",
+  "description": "将 Canvas 请求送回准确的原聊天，并同步状态和结果。",
+  "permissions": ["host:chat", "host:session", "events", "storage", "ui:settings-section", "network:127.0.0.1:47194"]
+}

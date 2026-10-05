@@ -46,6 +46,7 @@ export type ReplyEditState = "clean" | "dirty" | "saving" | "error";
 export type ReplyBoardHandlers = {
   getBoard?(): BoardSnapshot | undefined;
   onAnnotation?(id: string): void;
+  onAnnotate?(selection: ReplySelection): void;
   onArtifactPresentationChange?(replyId: string, blockId: string, height: number, mode: "compact" | "full", explicit: boolean): void;
   onArtifactWheel?(clientX: number, clientY: number, deltaY: number): void;
   getCanvas?(): CanvasLayout | undefined;
@@ -109,6 +110,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "kind.artifact": "开放作品",
     "block.selected": "当前讨论对象",
     "block.focus": "针对这块讨论",
+    "block.annotate": "注释",
     "block.focusActive": "✓ 已选中",
     "block.focusHelp": "已选中「{title}」，可在底部输入，继续讨论这一块。",
     "action.ask": "提问",
@@ -170,6 +172,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "seq.focus": "关注这一拍",
     "seq.focused": "关注中",
     "seq.askStep": "就这一拍提问",
+    "seq.annotateStep": "注释这一拍",
     "seq.stepContext": "第 {n} 步「{title}」",
     "seq.empty": "这段分镜还没有步骤。",
     "graph.hint": "拖动节点调整位置；拖动空白处平移；Ctrl + 滚轮缩放。",
@@ -208,6 +211,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "kind.artifact": "Web work",
     "block.selected": "Current discussion target",
     "block.focus": "Discuss this block",
+    "block.annotate": "Annotate",
     "block.focusActive": "✓ Selected",
     "block.focusHelp": "Selected “{title}”. Use the input below to discuss this block.",
     "action.ask": "Ask",
@@ -269,6 +273,7 @@ const MESSAGES: Record<Locale, Record<string, string>> = {
     "seq.focus": "Focus this beat",
     "seq.focused": "In focus",
     "seq.askStep": "Ask about this beat",
+    "seq.annotateStep": "Annotate this beat",
     "seq.stepContext": "step {n} “{title}”",
     "seq.empty": "This sequence has no steps yet.",
     "graph.hint": "Drag nodes to reposition; drag empty space to pan; Ctrl + wheel to zoom.",
@@ -455,6 +460,7 @@ abstract class BlockView<B extends ReplyBlock, D> {
   protected readonly askBtn: HTMLButtonElement;
   protected readonly editBtn: HTMLButtonElement;
   protected readonly focusBtn: HTMLButtonElement;
+  protected readonly annotateBtn: HTMLButtonElement;
 
   reply!: BoardReply;
   block!: B;
@@ -479,9 +485,14 @@ abstract class BlockView<B extends ReplyBlock, D> {
       this.ctx.selectBlock(this.reply.id, this.block.id);
       this.ctx.handlers.onFocusNotice?.(translate("block.focusHelp", { title: this.block.title?.trim() || translate(this.kindKey) }));
     });
+    this.annotateBtn = button("", "rb-quiet rb-annotate-block", () => {
+      const selection = this.ctx.selection();
+      const target = selection?.reply_id === this.reply.id && selection.block_id === this.block.id ? selection.target : undefined;
+      this.annotate(target);
+    });
     this.askBtn = button("", "", () => this.toggleAsk());
     this.editBtn = button("", "", () => this.beginEdit());
-    this.tools.append(this.focusBtn, this.askBtn, this.editBtn);
+    this.tools.append(this.focusBtn, this.annotateBtn, this.askBtn, this.editBtn);
     head.append(this.heading, this.tools);
 
     this.body = el("div", "rb-block-body");
@@ -559,6 +570,10 @@ abstract class BlockView<B extends ReplyBlock, D> {
   protected focusTarget(target: ReplyTarget, region?: CanvasAnchor["region"]): void {
     this.ctx.selectBlock(this.reply.id, this.block.id, target, region);
     this.ctx.handlers.onFocusNotice?.(imageText(region ? "regionSelected" : "focused"));
+  }
+
+  protected annotate(target?: ReplyTarget): void {
+    this.ctx.handlers.onAnnotate?.({ object_id: this.reply.object_id, reply_id: this.reply.id, block_id: this.block.id, ...(target ? { target } : {}) });
   }
 
   protected renderImage(image: ReplyImageReference, target: ReplyTarget): HTMLElement {
@@ -683,6 +698,8 @@ abstract class BlockView<B extends ReplyBlock, D> {
     this.titleEl.textContent = title;
     this.titleEl.hidden = title.length === 0;
     this.focusBtn.textContent = translate("block.focus");
+    this.annotateBtn.textContent = translate("block.annotate");
+    this.annotateBtn.hidden = !this.ctx.handlers.onAnnotate;
     this.askBtn.textContent = translate("action.ask");
     this.askBtn.setAttribute("aria-expanded", String(this.ask !== null));
     this.editBtn.textContent = translate("action.edit");
@@ -1248,6 +1265,7 @@ class ComparisonView extends BlockView<ReplyComparisonBlock, ComparisonDraft> {
         pick.disabled = this.pickingId !== null;
         card.append(pick);
         card.append(button(imageText("focus"), "rb-quiet rb-target-button", () => this.focusTarget({ kind: "option", id: option.id })));
+        if (this.ctx.handlers.onAnnotate) card.append(button(translate("block.annotate"), "rb-quiet rb-annotate-target", () => this.annotate({ kind: "option", id: option.id })));
         grid.append(card);
       });
       frag.push(grid);
@@ -1479,6 +1497,7 @@ class SequenceView extends BlockView<ReplySequenceBlock, SequenceDraft> {
 
       const foot = el("div", "rb-seq-foot");
       foot.append(
+        ...(this.ctx.handlers.onAnnotate ? [button(translate("seq.annotateStep"), "rb-quiet rb-annotate-target", () => this.annotate({ kind: "step", id: step.id }))] : []),
         button(translate("seq.askStep"), "rb-quiet", () => {
           this.focusedStepId = step.id;
           this.focusTarget({ kind: "step", id: step.id });

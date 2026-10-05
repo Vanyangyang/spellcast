@@ -104,7 +104,7 @@ fn overview_and_zone_relations_come_from_sources_with_hashes() {
     assert_eq!(overview["world"]["name"], "山海世界");
     assert_eq!(overview["loop"]["columns"], json!(["层级", "时长", "循环内容"]));
     assert_eq!(overview["loop"]["rows"][0][0], "短期");
-    assert_eq!(overview["loop"]["source"]["path"], crate::game_projection::LOOP_SOURCE);
+    assert_eq!(overview["loop"]["source"]["path"], "Assets/Documents/Atlas/domains/cycle.md", "report the legacy source actually written by this fixture");
     assert_eq!(overview["loop"]["source"]["hash"].as_str().unwrap().len(), 64);
     assert_eq!(overview["routed_zones"].as_array().unwrap().len(), 1, "only zones with declared routes are explorable");
     assert_eq!(overview["routed_zones"][0]["dungeon_id"], "dungeon_fixture");

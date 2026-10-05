@@ -148,6 +148,12 @@ pub fn capture_anchor_snapshot(
             }
             serde_json::to_value(&object.content)?
         }
+        CanvasContent::Sigil { .. } => {
+            if anchor.block_id.is_some() || anchor.selection.is_some() {
+                return Err(error("法阵卡只保存法阵身份；请在法阵面板中查看具体版本。"));
+            }
+            serde_json::to_value(&object.content)?
+        }
         CanvasContent::SourceTable { table } => {
             if anchor.block_id.is_some() {
                 return Err(error("来源表格没有独立子项。"));
@@ -155,6 +161,41 @@ pub fn capture_anchor_snapshot(
             searchable_text = Some(format!("{}\n{}\n{}", table.title, table.columns.join(" "),
                 table.rows.iter().map(|row| row.join(" ")).collect::<Vec<_>>().join("\n")));
             serde_json::to_value(&object.content)?
+        }
+        CanvasContent::SourceSkeleton { skeleton } => {
+            if let Some(node_id) = &anchor.block_id {
+                let node = skeleton.model.nodes.iter().find(|node| &node.id == node_id)
+                    .ok_or_else(|| error("引用的骨架节点已经不存在。"))?;
+                let mut ancestors = Vec::new();
+                let mut parent = node.parent_id.as_deref();
+                while let Some(parent_id) = parent {
+                    let ancestor = skeleton.model.nodes.iter().find(|candidate| candidate.id == parent_id)
+                        .ok_or_else(|| error("引用的骨架祖先已经不存在。"))?;
+                    ancestors.push(serde_json::json!({"id": ancestor.id, "title": ancestor.title}));
+                    parent = ancestor.parent_id.as_deref();
+                }
+                ancestors.reverse();
+                let mut visible = vec![node.title.as_str(), node.summary.as_str()];
+                if let Some(notes) = &node.notes { visible.extend(notes.iter().map(String::as_str)); }
+                if let Some(steps) = &node.steps {
+                    for step in steps { visible.push(&step.title); visible.push(&step.text); }
+                }
+                if let Some(rule) = &node.rule {
+                    for values in rule.values() { visible.extend(values.iter().map(String::as_str)); }
+                }
+                if let Some(provenance) = &node.provenance {
+                    for item in provenance { visible.push(&item.quote); visible.push(&item.path); }
+                }
+                visible.extend(node.sources.iter().map(String::as_str));
+                searchable_text = Some(visible.join("\n"));
+                let relations: Vec<_> = skeleton.model.relations.iter()
+                    .filter(|relation| relation.from == *node_id || relation.to == *node_id).collect();
+                serde_json::json!({"type":"source_skeleton", "title":skeleton.title,
+                    "project_id":skeleton.project_id, "root":skeleton.root, "path":skeleton.path,
+                    "hash":skeleton.hash, "node":node, "ancestors":ancestors, "relations":relations})
+            } else {
+                serde_json::to_value(&object.content)?
+            }
         }
         CanvasContent::Text { title, text } | CanvasContent::Shape { title, text, .. } => {
             if anchor.block_id.is_some() {

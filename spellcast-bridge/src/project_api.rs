@@ -10,7 +10,7 @@ pub(crate) fn owner(headers:&HeaderMap,bridge:&Bridge)->Result<(),Fail>{
     application(headers,bridge)
 }
 fn bad(e:impl ToString)->Fail {(StatusCode::BAD_REQUEST,Json(json!({"error":e.to_string()})))}
-fn application(headers:&HeaderMap,bridge:&Bridge)->Result<(),Fail>{
+pub(crate) fn application(headers:&HeaderMap,bridge:&Bridge)->Result<(),Fail>{
     if !headers.get("x-spellcast-window").and_then(|v|v.to_str().ok()).is_some_and(|v|bridge.is_project_window_key(v)) {
         return Err((StatusCode::FORBIDDEN,Json(json!({"error":"项目管理需要主窗口私有凭据；伪造 Origin 或来源 ID 不会获得授权。"}))));
     }

@@ -310,7 +310,7 @@ try {
   const page = await context.newPage();
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("#agent-complete-setup");
-  assert.equal(await page.locator("body").getAttribute("data-theme"), "dark", "the home theme defaults to dark");
+  assert.equal(await page.locator("body").getAttribute("data-theme"), "light", "the home theme defaults to light");
   const snippet = await page.$("#agent-snippet, #settings-snippet, #settings-path, #settings-skill-path, #agent-note, #settings-note");
   assert.equal(snippet, null, "manual snippet / skill path / old notes must be gone");
 
@@ -332,7 +332,8 @@ try {
   assert.equal(home.detailsOpen, false, "install details must start collapsed");
   assert.equal(/插件源|Install cache|Skill|C:\\\\Users/.test(home.status + home.hint), false);
   assert.match(home.button, /安装 Hooks \+ Skill/);
-  assert.equal(await page.locator("#agent-result [data-setup-component]").count(), 3, "home shows MCP, Skill and Hooks checks");
+  assert.equal(await page.locator("#agent-result [data-setup-component]:visible").count(), 3, "home shows MCP, Skill and Hooks checks");
+  assert.equal(await page.locator("#agent-result [data-setup-component=ccgui]").count(), 1, "home keeps the Claude-only CC GUI send-back row");
 
   const cursorDisabled = await page.evaluate(() => ({
     button: document.querySelector('[data-client="cursor"]')?.disabled ?? false,
@@ -372,7 +373,7 @@ try {
   assert.match(await page.locator("#settings-close").innerText(), /Close/);
   await openSettings(page);
   const enIntro = await page.locator("#settings [data-setup-body]").innerText();
-  assert.match(enIntro, /Choose the app you are using/);
+  assert.match(enIntro, /Choose an app/);
   assert.equal(/使っているソフト|先选你正在用的软件/.test(enIntro), false);
   const enComponents = await page.evaluate(() => ({
     names: [...document.querySelectorAll("#settings .setup-component-name")].map((el) => el.textContent?.replace(/\s+/g, " ").trim() ?? ""),
@@ -381,9 +382,8 @@ try {
   assert.match(enComponents.names.join(" | "), /Aside trigger.*Hooks/);
   assert.match(enComponents.names.join(" | "), /Canvas guide.*Skill/);
   assert.match(enComponents.names.join(" | "), /Local connection.*MCP/);
-  assert.match(enComponents.observer, /Outside the main chat/);
-  assert.match(enComponents.observer, /On:/);
-  assert.match(enComponents.observer, /Off:/);
+  assert.match(enComponents.observer, /independent thought.*without changing the Canvas/);
+  assert.equal(/On:|Off:/.test(enComponents.observer), false);
   assert.equal(/主对话之外|主会話|オン：|オフ：/.test(enComponents.observer), false);
   await page.keyboard.press("Escape");
   await page.selectOption("#locale", "zh-CN");
@@ -417,7 +417,7 @@ try {
   await assertSettingsOpen(page);
   const intro = await page.locator("#settings [data-setup-body]").innerText();
   assert.equal(/半套|half-installed|途中まで/.test(intro), false, `policy copy leaked: ${intro}`);
-  assert.match(intro, /先选你正在用的软件/);
+  assert.match(intro, /选择软件后/);
   assert.equal(/Choose the app you are using|使っているソフト/.test(intro), false);
   const components = await page.evaluate(() => ({
     names: [...document.querySelectorAll("#settings .setup-component-name")].map((el) => el.textContent?.replace(/\s+/g, " ").trim() ?? ""),
@@ -430,9 +430,8 @@ try {
   assert.match(components.names.join(" | "), /画布用法.*Skill/);
   assert.match(components.names.join(" | "), /本机连接.*MCP/);
   assert.match(components.desc.join("\n"), /旁念开了也不会自己出现/);
-  assert.match(components.observer, /主对话之外/);
-  assert.match(components.observer, /开：/);
-  assert.match(components.observer, /关：/);
+  assert.match(components.observer, /偶尔在桌面出现独立想法，不改动画布/);
+  assert.equal(/开：|关：/.test(components.observer), false);
   assert.equal(/观察者|observer with no chat history|観察者を/.test(components.observer), false, `aside copy still too technical: ${components.observer}`);
   await page.screenshot({ path: path.join(out, "settings-dark-1280.png") });
   const cursorSettings = await page.evaluate(() => ({

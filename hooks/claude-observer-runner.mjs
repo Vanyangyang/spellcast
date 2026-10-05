@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PROXY = "http://127.0.0.1:17891";
+const PROXY = "http://127.0.0.1:7897";
 const MODEL = "claude-opus-5-5";
 const MAX_INPUT = 16_384;
 const MAX_OUTPUT = 131_072;

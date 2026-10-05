@@ -79,7 +79,9 @@ fn references_in(session: &Session) -> Vec<ReferenceLocation<'_>> {
             }
             CanvasContent::Node { .. }
             | CanvasContent::WorkRecord { .. }
+            | CanvasContent::Sigil { .. }
             | CanvasContent::SourceTable { .. }
+            | CanvasContent::SourceSkeleton { .. }
             | CanvasContent::Text { .. }
             | CanvasContent::Image { .. }
             | CanvasContent::Shape { .. } => {}

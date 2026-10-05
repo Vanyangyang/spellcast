@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
+    io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::SystemTime,
@@ -17,7 +18,9 @@ const WORLD_ROOTS: [&str; 3] = ["Assets/Resources/Configs/Worlds", "Assets/Resou
 // The document board inventories the whole game-document tree. Mentions still carry exact
 // source paths and are leads for review, never a claim that a document is current.
 const DESIGN_ROOTS: [&str; 1] = ["Assets/Documents"];
-pub const LOOP_SOURCE: &str = "Assets/Documents/Atlas/domains/cycle.md";
+pub const LOOP_SOURCE: &str = "Assets/Documents/GameDesign/Overview.md";
+const LEGACY_LOOP_SOURCE: &str = "Assets/Documents/Atlas/domains/cycle.md";
+const SKELETON_SOURCE: &str = "Assets/Documents/GameDesign/Skeleton.json";
 const CODE_ROOTS: [&str; 1] = ["Assets/Scripts"];
 /// Configuration fields whose consumers the object view points at. A text match in C# is a
 /// static lead to read, never proof that a player path works.
@@ -26,6 +29,8 @@ pub const CODE_FIELDS: [&str; 14] = [
     "BossGateContentId", "UnlocksZoneId", "LootPoints", "LootTableId", "AssociatedDataId", "RestContentId", "ShopConfigId", "EliteEncounterRules",
 ];
 const MAX_FILE: u64 = 2 * 1024 * 1024;
+const MAX_SKELETON_FILE: u64 = 8 * 1024 * 1024;
+const MAX_SKELETON_TEXT: usize = 4 * 1024 * 1024;
 const MAX_MENTIONS: usize = 8;
 const MAX_CODE_HITS: usize = 8;
 
@@ -33,6 +38,266 @@ const MAX_CODE_HITS: usize = 8;
 struct Stamp {
     len: u64,
     modified: Option<SystemTime>,
+}
+
+#[cfg(test)]
+mod loop_source_tests {
+    use super::*;
+
+    #[test]
+    fn current_overview_takes_precedence_and_legacy_repository_falls_back() {
+        let root = std::env::temp_dir().join(format!("spellcast-loop-{}", uuid::Uuid::new_v4()));
+        let legacy = root.join(LEGACY_LOOP_SOURCE);
+        let current = root.join(LOOP_SOURCE);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::create_dir_all(current.parent().unwrap()).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        fs::write(&legacy, "# 旧循环\n## 四层循环\n| 层级 | 内容 |\n|---|---|\n| 旧 | 旧值 |\n").unwrap();
+        let cache = ProjectionCache::default();
+        let old = cache.read(&root, true).unwrap().player_loop();
+        assert_eq!(old["source"]["path"], LEGACY_LOOP_SOURCE);
+        fs::write(&current, "# 新全景\n## 核心循环\n| 层级 | 内容 |\n|---|---|\n| 新 | 新值 |\n").unwrap();
+        let new = cache.read(&root, true).unwrap().player_loop();
+        assert_eq!(new["source"]["path"], LOOP_SOURCE);
+        assert_eq!(new["rows"][0][1], "新值");
+        fs::remove_file(current).unwrap();
+        assert_eq!(cache.read(&root, true).unwrap().player_loop()["source"]["path"], LEGACY_LOOP_SOURCE);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod skeleton_tests {
+    use super::*;
+
+    const DOC_SOURCE: &str = "Assets/Documents/GameDesign/Guide.md";
+
+    fn fixture() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("spellcast-skeleton-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join(game_config::CONFIG_ROOT)).unwrap();
+        fs::create_dir_all(root.join("Assets/Documents/GameDesign")).unwrap();
+        fs::write(root.join(DOC_SOURCE), "# Guide\n").unwrap();
+        fs::canonicalize(root).unwrap()
+    }
+
+    fn model() -> Value {
+        json!({
+            "schema_version": 1,
+            "title": "Game structure",
+            "description": "Design map",
+            "entry_ids": ["core"],
+            "loop": [{"id": "explore", "title": "Explore", "summary": "Travel", "node_ids": ["core", "map"]}],
+            "nodes": [
+                {"id": "core", "kind": "system", "title": "Core", "summary": "Start", "state": "rules_preserved", "sources": [DOC_SOURCE]},
+                {"id": "map", "kind": "structure", "title": "Map", "summary": "Browse", "parent_id": "core", "state": "structure_only", "sources": []}
+            ],
+            "relations": [{"from": "core", "to": "map", "label": "opens"}]
+        })
+    }
+
+    fn projected(root: &Path, cache: &ProjectionCache, refresh: bool) -> Value {
+        let indexes = cache.read(root, refresh).unwrap();
+        let repository = Repository::read(root).unwrap();
+        overview(&repository, &indexes)
+    }
+
+    #[test]
+    fn optional_skeleton_loads_and_refreshes_source_revision() {
+        let root = fixture();
+        let cache = ProjectionCache::default();
+        let missing = projected(&root, &cache, false);
+        assert!(missing["skeleton"].is_null());
+        assert!(!missing["issues"].as_array().unwrap().iter().any(|issue| issue["path"] == SKELETON_SOURCE));
+
+        let source = root.join(SKELETON_SOURCE);
+        fs::write(&source, model().to_string()).unwrap();
+        let first = projected(&root, &cache, true);
+        assert_eq!(first["skeleton"]["source"]["path"], SKELETON_SOURCE);
+        assert_eq!(first["skeleton"]["model"]["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(first["runtime_verified"], false);
+        let first_hash = first["skeleton"]["source"]["hash"].as_str().unwrap();
+        assert_eq!(first_hash.len(), 64);
+
+        let mut changed = model();
+        changed["description"] = json!("Design map updated");
+        fs::write(&source, changed.to_string()).unwrap();
+        let second = projected(&root, &cache, true);
+        assert_ne!(second["skeleton"]["source"]["hash"], first["skeleton"]["source"]["hash"]);
+        assert_ne!(second["source_revision"], first["source_revision"]);
+        assert_eq!(second["skeleton"]["model"]["description"], "Design map updated");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_or_invalid_skeleton_is_null_with_visible_issue() {
+        let root = fixture();
+        let source = root.join(SKELETON_SOURCE);
+        let cache = ProjectionCache::default();
+        fs::write(&source, "{").unwrap();
+        let malformed = projected(&root, &cache, true);
+        assert!(malformed["skeleton"].is_null());
+        assert!(malformed["issues"].as_array().unwrap().iter().any(|issue| issue["path"] == SKELETON_SOURCE
+            && issue["severity"] == "error" && issue["message"].as_str().unwrap().contains("JSON")));
+
+        let mut bad = model();
+        bad["nodes"][1]["parent_id"] = json!("missing");
+        fs::write(&source, bad.to_string()).unwrap();
+        let invalid = projected(&root, &cache, true);
+        assert!(invalid["skeleton"].is_null());
+        assert!(invalid["issues"].as_array().unwrap().iter().any(|issue| issue["path"] == SKELETON_SOURCE
+            && issue["severity"] == "error" && issue["message"].as_str().unwrap().contains("parent_id")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_broken_graph_and_unindexed_or_traversal_sources() {
+        let indexed_docs = BTreeSet::from([DOC_SOURCE.to_string()]);
+        let cases: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
+            ("entry_ids", Box::new(|value| value["entry_ids"] = json!(["map"]))),
+            ("重复", Box::new(|value| value["nodes"][1]["id"] = json!("core"))),
+            ("无效", Box::new(|value| value["nodes"][1]["kind"] = json!("unknown"))),
+            ("无效", Box::new(|value| value["nodes"][1]["state"] = json!("complete"))),
+            ("环", Box::new(|value| value["nodes"][0]["parent_id"] = json!("map"))),
+            ("不存在", Box::new(|value| value["loop"][0]["node_ids"] = json!(["lost"]))),
+            ("不存在", Box::new(|value| value["relations"][0]["to"] = json!("lost"))),
+            ("索引", Box::new(|value| value["nodes"][0]["sources"] = json!(["Assets/Documents/GameDesign/Absent.md"]))),
+            ("索引", Box::new(|value| value["nodes"][0]["sources"] = json!(["Assets/Documents/../GameDesign/Guide.md"]))),
+            ("schema_version", Box::new(|value| value["schema_version"] = json!(2))),
+            ("字节", Box::new(|value| value["nodes"][0]["summary"] = json!("x".repeat(2_001)))),
+            ("数量", Box::new(|value| value["nodes"] = Value::Array((0..4_097).map(|_| json!({})).collect()))),
+            ("数量", Box::new(|value| value["relations"] = Value::Array((0..8_193).map(|_| json!({})).collect()))),
+            ("数量", Box::new(|value| value["nodes"][0]["sources"] = json!(vec![DOC_SOURCE; 97]))),
+        ];
+        for (expected, mutate) in cases {
+            let mut value = model();
+            mutate(&mut value);
+            let error = parse_skeleton(SKELETON_SOURCE, &value.to_string(), &indexed_docs).unwrap_err();
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn markdown_index_removal_invalidates_unchanged_skeleton() {
+        let root = fixture();
+        fs::write(root.join(SKELETON_SOURCE), model().to_string()).unwrap();
+        let cache = ProjectionCache::default();
+        assert!(!projected(&root, &cache, false)["skeleton"].is_null());
+        fs::remove_file(root.join(DOC_SOURCE)).unwrap();
+        let updated = projected(&root, &cache, false);
+        assert!(updated["skeleton"].is_null());
+        assert!(updated["issues"].as_array().unwrap().iter().any(|issue| issue["path"] == SKELETON_SOURCE
+            && issue["message"].as_str().unwrap().contains("索引")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn enriched_model() -> Value {
+        let mut value = model();
+        value["nodes"][1]["kind"] = json!("reference");
+        value["nodes"][1]["state"] = json!("supporting_reference");
+        value["nodes"][1]["sources"] = json!([DOC_SOURCE]);
+        value["nodes"][1]["rule"] = json!({"trigger": ["Player enters"], "effects": ["Map opens"]});
+        value["nodes"][1]["provenance"] = json!([
+            {"path": DOC_SOURCE, "hash": "a".repeat(64), "start_line": 1, "end_line": 2, "quote": "Guide excerpt"},
+            {"path": "Assets/Documents/Archive/Never.md", "hash": "b".repeat(64), "start_line": 10, "end_line": 11,
+                "quote": "Historical excerpt", "archived": true}
+        ]);
+        value
+    }
+
+    #[test]
+    fn accepts_rule_and_active_or_unopened_archived_provenance() {
+        let root = fixture();
+        fs::write(root.join(SKELETON_SOURCE), enriched_model().to_string()).unwrap();
+        // Archive/Never.md does not exist. An archived citation is data, not a file to open.
+        let overview = projected(&root, &ProjectionCache::default(), true);
+        assert_eq!(overview["skeleton"]["model"]["nodes"][1]["kind"], "reference");
+        assert_eq!(overview["skeleton"]["model"]["nodes"][1]["provenance"][1]["archived"], true);
+        assert!(!root.join("Assets/Documents/Archive/Never.md").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_rule_or_provenance_without_opening_history() {
+        let indexed_docs = BTreeSet::from([DOC_SOURCE.to_string()]);
+        let cases: Vec<(&str, Box<dyn Fn(&mut Value)>)> = vec![
+            ("未知字段", Box::new(|value| value["nodes"][1]["rule"]["body"] = json!(["hidden"]))),
+            ("数组", Box::new(|value| value["nodes"][1]["rule"]["trigger"] = json!("not array"))),
+            ("数量", Box::new(|value| value["nodes"][1]["rule"]["trigger"] = json!(vec!["x"; 65]))),
+            ("字节", Box::new(|value| value["nodes"][1]["rule"]["trigger"] = json!(["x".repeat(8_001)]))),
+            ("path", Box::new(|value| value["nodes"][1]["provenance"][1]["path"] = json!("Assets/Documents/../Secret.md"))),
+            ("path", Box::new(|value| value["nodes"][1]["provenance"][1]["path"] = json!("C:\\Secret.md"))),
+            ("hash", Box::new(|value| value["nodes"][1]["provenance"][0]["hash"] = json!("short"))),
+            ("hash", Box::new(|value| value["nodes"][1]["provenance"][0]["hash"] = json!("z".repeat(64)))),
+            ("start_line", Box::new(|value| value["nodes"][1]["provenance"][0]["start_line"] = json!(0))),
+            ("end_line", Box::new(|value| value["nodes"][1]["provenance"][0]["end_line"] = json!(0))),
+            ("end_line", Box::new(|value| value["nodes"][1]["provenance"][0]["end_line"] = json!(0.5))),
+            ("end_line", Box::new(|value| value["nodes"][1]["provenance"][0]["start_line"] = json!(3))),
+            ("quote", Box::new(|value| value["nodes"][1]["provenance"][0]["quote"] = json!(""))),
+            ("数量", Box::new(|value| value["nodes"][1]["provenance"] = Value::Array((0..129).map(|_| json!({})).collect()))),
+            ("布尔值", Box::new(|value| value["nodes"][1]["provenance"][1]["archived"] = json!("true"))),
+            ("sources", Box::new(|value| value["nodes"][1]["sources"] = json!([]))),
+            ("索引", Box::new(|value| value["nodes"][1]["provenance"][0]["path"] = json!("Assets/Documents/GameDesign/Absent.md"))),
+            ("未知字段", Box::new(|value| value["nodes"][1]["body"] = json!("unbudgeted body"))),
+        ];
+        for (expected, mutate) in cases {
+            let mut value = enriched_model();
+            mutate(&mut value);
+            let error = parse_skeleton(SKELETON_SOURCE, &value.to_string(), &indexed_docs).unwrap_err();
+            assert!(error.contains(expected), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn skeleton_has_own_file_cap_and_total_rule_text_budget() {
+        let root = fixture();
+        let path = root.join(SKELETON_SOURCE);
+        let indexed_docs = BTreeSet::from([DOC_SOURCE.to_string()]);
+        let padded = format!("{}{}", model(), " ".repeat((MAX_FILE + 1) as usize));
+        fs::write(&path, padded).unwrap();
+        let stamp = Stamp { len: fs::metadata(&path).unwrap().len(), modified: None };
+        assert!(read_one(&root, SKELETON_SOURCE, &stamp, &|relative, text| parse_skeleton(relative, text, &indexed_docs)).1.is_ok());
+        assert!(read_one(&root, DOC_SOURCE, &stamp, &parse_doc).1.is_err());
+        let oversized = Stamp { len: MAX_SKELETON_FILE + 1, modified: None };
+        assert!(read_one(&root, SKELETON_SOURCE, &oversized, &|relative, text| parse_skeleton(relative, text, &indexed_docs)).1.is_err());
+
+        let mut large = model();
+        let rule = json!({"trigger": vec!["x".repeat(8_000); 48], "conditions": vec!["x".repeat(8_000); 48],
+            "effects": vec!["x".repeat(8_000); 48], "exceptions": vec!["x".repeat(8_000); 48],
+            "formulas": vec!["x".repeat(8_000); 48], "conflicts": vec!["x".repeat(8_000); 48]});
+        large["nodes"][0]["rule"] = rule.clone();
+        large["nodes"][1]["rule"] = rule;
+        let error = parse_skeleton(SKELETON_SOURCE, &large.to_string(), &indexed_docs).unwrap_err();
+        assert!(error.contains("4 MiB"), "unexpected error: {error}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn expanded_node_and_relation_counts_remain_valid_within_bounds() {
+        let mut value = model();
+        for index in 0..255 {
+            value["nodes"].as_array_mut().unwrap().push(json!({"id": format!("reference_{index}"), "kind": "reference",
+                "title": "Reference", "summary": "Source", "state": "supporting_reference", "sources": []}));
+        }
+        value["relations"] = Value::Array((0..513).map(|_| json!({"from": "core", "to": "map", "label": "opens"})).collect());
+        let indexed_docs = BTreeSet::from([DOC_SOURCE.to_string()]);
+        assert!(parse_skeleton(SKELETON_SOURCE, &value.to_string(), &indexed_docs).is_ok());
+    }
+
+    #[test]
+    fn supplied_repository_skeleton_passes_read_and_validation() {
+        let Ok(root) = std::env::var("SPELLCAST_SKELETON_REPOSITORY") else { return };
+        let root = fs::canonicalize(root).unwrap();
+        let docs = refresh_set(&root, None, inventory(&root, &DESIGN_ROOTS, "md", Limits { files: 3_000, bytes: 32 << 20 }), true, parse_doc);
+        let indexed_docs: BTreeSet<String> = docs.files.iter().filter(|(_, cached)| cached.value.is_ok()).map(|(path, _)| path.clone()).collect();
+        let (files, issues) = skeleton_inventory(&root);
+        assert!(issues.is_empty(), "skeleton inventory issues: {:?}", issues);
+        let stamp = files.get(SKELETON_SOURCE).expect("supplied repository needs Skeleton.json");
+        let (hash, parsed) = read_one(&root, SKELETON_SOURCE, stamp, &|path, text| parse_skeleton(path, text, &indexed_docs));
+        let model = parsed.expect("supplied repository skeleton must validate");
+        assert_eq!(hash.len(), 64);
+        assert!(!model["nodes"].as_array().unwrap().is_empty());
+        assert!(!model["loop"].as_array().unwrap().is_empty());
+    }
 }
 
 struct Cached<T> {
@@ -94,8 +359,13 @@ fn inventory(root: &Path, roots: &[&str], extension: &str, limits: Limits) -> (B
 
 fn read_one<T>(root: &Path, relative: &str, stamp: &Stamp, parse: &(impl Fn(&str, &str) -> Result<T, String> + Sync)) -> (String, Result<Arc<T>, String>) {
     let read = game_config::checked_path(root, relative, false).and_then(|path| {
-        if stamp.len > MAX_FILE { return Err(format!("来源过大：{relative}")); }
-        fs::read(path).map_err(|error| error.to_string())
+        let max_file = if relative == SKELETON_SOURCE { MAX_SKELETON_FILE } else { MAX_FILE };
+        if stamp.len > max_file { return Err(format!("来源过大：{relative}")); }
+        let mut bytes = Vec::with_capacity(stamp.len as usize);
+        fs::File::open(path).map_err(|error| error.to_string())?.take(max_file + 1)
+            .read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+        if bytes.len() as u64 > max_file { return Err(format!("来源过大：{relative}")); }
+        Ok(bytes)
     });
     match read {
         Ok(bytes) => {
@@ -203,10 +473,195 @@ fn parse_json(relative: &str, text: &str) -> Result<Value, String> {
     serde_json::from_str(text).map_err(|error| format!("JSON 无法解析 {relative}：{error}"))
 }
 
+fn skeleton_inventory(root: &Path) -> (BTreeMap<String, Stamp>, Vec<GameIssue>) {
+    let mut files = BTreeMap::new();
+    let mut issues = Vec::new();
+    match fs::symlink_metadata(root.join(SKELETON_SOURCE)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(error) => issues.push(GameIssue { severity: "error".into(), message: format!("骨架来源无法检查：{error}"), path: SKELETON_SOURCE.into() }),
+        Ok(meta) if game_config::linked(&meta) || !meta.is_file() => issues.push(GameIssue {
+            severity: "error".into(), message: "骨架来源不是普通文件，或是链接/重解析路径。".into(), path: SKELETON_SOURCE.into(),
+        }),
+        Ok(meta) => { files.insert(SKELETON_SOURCE.into(), Stamp { len: meta.len(), modified: meta.modified().ok() }); },
+    }
+    (files, issues)
+}
+
+fn skeleton_array<'a>(value: &'a Value, key: &str, context: &str, max: usize, nonempty: bool) -> Result<&'a Vec<Value>, String> {
+    let array = value.get(key).and_then(Value::as_array).ok_or_else(|| format!("{context}.{key} 必须是数组"))?;
+    if array.len() > max || (nonempty && array.is_empty()) { return Err(format!("{context}.{key} 数量必须在 {}..={max} 内", usize::from(nonempty))); }
+    Ok(array)
+}
+
+fn skeleton_fields(value: &Value, allowed: &[&str], context: &str) -> Result<(), String> {
+    let fields = value.as_object().ok_or_else(|| format!("{context} 必须是对象"))?;
+    for key in fields.keys() {
+        if !allowed.contains(&key.as_str()) { return Err(format!("{context} 有未知字段：{key}")); }
+    }
+    Ok(())
+}
+
+fn skeleton_document_path(path: &str) -> bool {
+    path.starts_with("Assets/Documents/") && path.ends_with(".md")
+        && !path.chars().any(|character| character.is_control() || matches!(character, '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+        && path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn skeleton_text<'a>(value: &'a Value, key: &str, context: &str, max: usize, total: &mut usize) -> Result<&'a str, String> {
+    let text = value.get(key).and_then(Value::as_str).ok_or_else(|| format!("{context}.{key} 必须是字符串"))?;
+    if text.trim().is_empty() || text.len() > max { return Err(format!("{context}.{key} 必须为非空文本且不超过 {max} 字节")); }
+    *total += text.len();
+    if *total > MAX_SKELETON_TEXT { return Err("骨架文本总量超过 4 MiB".into()); }
+    Ok(text)
+}
+
+fn skeleton_id<'a>(value: &'a Value, key: &str, context: &str, total: &mut usize) -> Result<&'a str, String> {
+    let id = skeleton_text(value, key, context, 120, total)?;
+    if !game_config::valid_id(id) { return Err(format!("{context}.{key} 不是稳定 ID（只允许字母、数字、_、-、.）")); }
+    Ok(id)
+}
+
+fn skeleton_string_items(value: &Value, key: &str, context: &str, max_items: usize, max_text: usize, total: &mut usize) -> Result<Vec<String>, String> {
+    let items = skeleton_array(value, key, context, max_items, false)?;
+    items.iter().enumerate().map(|(index, item)| {
+        let text = item.as_str().ok_or_else(|| format!("{context}.{key}[{index}] 必须是字符串"))?;
+        if text.trim().is_empty() || text.len() > max_text { return Err(format!("{context}.{key}[{index}] 必须为非空文本且不超过 {max_text} 字节")); }
+        *total += text.len();
+        if *total > MAX_SKELETON_TEXT { return Err("骨架文本总量超过 4 MiB".into()); }
+        Ok(text.to_string())
+    }).collect()
+}
+
+fn parse_skeleton(relative: &str, text: &str, indexed_docs: &BTreeSet<String>) -> Result<Value, String> {
+    let model = parse_json(relative, text)?;
+    skeleton_fields(&model, &["schema_version", "title", "description", "entry_ids", "loop", "nodes", "relations"], "骨架")?;
+    if model.get("schema_version").and_then(Value::as_u64) != Some(1) { return Err("骨架 schema_version 必须为 1".into()); }
+    let mut total = 0;
+    skeleton_text(&model, "title", "骨架", 160, &mut total)?;
+    skeleton_text(&model, "description", "骨架", 4_000, &mut total)?;
+    let nodes = skeleton_array(&model, "nodes", "骨架", 4_096, true)?;
+    let loop_stages = skeleton_array(&model, "loop", "骨架", 32, true)?;
+    let relations = skeleton_array(&model, "relations", "骨架", 8_192, false)?;
+    let entries = skeleton_string_items(&model, "entry_ids", "骨架", 64, 120, &mut total)?;
+    if entries.is_empty() { return Err("骨架.entry_ids 至少需要一个系统入口".into()); }
+    if entries.iter().collect::<BTreeSet<_>>().len() != entries.len() { return Err("骨架.entry_ids 存在重复 ID".into()); }
+
+    let mut ids = BTreeSet::new();
+    let mut parents = BTreeMap::new();
+    let mut kinds = BTreeMap::new();
+    for (index, node) in nodes.iter().enumerate() {
+        let context = format!("骨架.nodes[{index}]");
+        skeleton_fields(node, &["id", "kind", "title", "summary", "parent_id", "state", "notes", "steps", "rule", "provenance", "sources"], &context)?;
+        let id = skeleton_id(node, "id", &context, &mut total)?.to_string();
+        if !ids.insert(id.clone()) { return Err(format!("节点 ID 重复：{id}")); }
+        let kind = skeleton_text(node, "kind", &context, 32, &mut total)?;
+        if !matches!(kind, "system" | "region" | "structure" | "rule" | "world" | "reference") { return Err(format!("{context}.kind 无效：{kind}")); }
+        kinds.insert(id.clone(), kind.to_string());
+        let state = skeleton_text(node, "state", &context, 32, &mut total)?;
+        if !matches!(state, "rules_preserved" | "structure_only" | "world_basis" | "supporting_reference" | "needs_reconciliation") { return Err(format!("{context}.state 无效：{state}")); }
+        skeleton_text(node, "title", &context, 160, &mut total)?;
+        skeleton_text(node, "summary", &context, 2_000, &mut total)?;
+        if node.get("parent_id").is_some() {
+            let parent = skeleton_id(node, "parent_id", &context, &mut total)?;
+            parents.insert(id.clone(), parent.to_string());
+        }
+        if node.get("notes").is_some() {
+            skeleton_string_items(node, "notes", &context, 32, 4_000, &mut total)?;
+        }
+        if node.get("steps").is_some() {
+            let steps = skeleton_array(node, "steps", &context, 32, false)?;
+            for (step_index, step) in steps.iter().enumerate() {
+                let step_context = format!("{context}.steps[{step_index}]");
+                skeleton_fields(step, &["title", "text"], &step_context)?;
+                skeleton_text(step, "title", &step_context, 160, &mut total)?;
+                skeleton_text(step, "text", &step_context, 4_000, &mut total)?;
+            }
+        }
+        let sources = skeleton_string_items(node, "sources", &context, 96, 512, &mut total)?;
+        for source in &sources {
+            if !skeleton_document_path(source) || !indexed_docs.contains(source) {
+                return Err(format!("{context}.sources 中的路径未在设计文档索引中：{source}"));
+            }
+        }
+        if let Some(rule) = node.get("rule") {
+            let rule_context = format!("{context}.rule");
+            skeleton_fields(rule, &["trigger", "conditions", "effects", "exceptions", "formulas", "conflicts"], &rule_context)?;
+            for key in rule.as_object().unwrap().keys() {
+                total += key.len();
+                if total > MAX_SKELETON_TEXT { return Err("骨架文本总量超过 4 MiB".into()); }
+                skeleton_string_items(rule, key, &rule_context, 64, 8_000, &mut total)?;
+            }
+        }
+        if node.get("provenance").is_some() {
+            let records = skeleton_array(node, "provenance", &context, 128, false)?;
+            for (evidence_index, evidence) in records.iter().enumerate() {
+                let evidence_context = format!("{context}.provenance[{evidence_index}]");
+                skeleton_fields(evidence, &["path", "hash", "start_line", "end_line", "quote", "archived"], &evidence_context)?;
+                let path = skeleton_text(evidence, "path", &evidence_context, 512, &mut total)?;
+                if !skeleton_document_path(path) { return Err(format!("{evidence_context}.path 不是正常的设计文档相对路径：{path}")); }
+                let hash = skeleton_text(evidence, "hash", &evidence_context, 64, &mut total)?;
+                if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(format!("{evidence_context}.hash 必须是 64 位十六进制 SHA-256"));
+                }
+                let line = |key: &str| evidence.get(key).and_then(Value::as_u64).filter(|line| *line > 0 && *line <= u32::MAX as u64)
+                    .ok_or_else(|| format!("{evidence_context}.{key} 必须是正整数行号"));
+                let start = line("start_line")?;
+                let end = line("end_line")?;
+                if end < start { return Err(format!("{evidence_context}.end_line 不能小于 start_line")); }
+                skeleton_text(evidence, "quote", &evidence_context, 8_000, &mut total)?;
+                let archived = match evidence.get("archived") {
+                    None => false,
+                    Some(value) => value.as_bool().ok_or_else(|| format!("{evidence_context}.archived 必须是布尔值"))?,
+                };
+                if !archived && (!indexed_docs.contains(path) || !sources.iter().any(|source| source == path)) {
+                    return Err(format!("{evidence_context}.path 必须在当前文档索引和节点 sources 中：{path}"));
+                }
+            }
+        }
+    }
+    for (id, parent) in &parents {
+        if !ids.contains(parent) { return Err(format!("节点 {id} 的 parent_id 不存在：{parent}")); }
+        let mut seen = BTreeSet::new();
+        let mut cursor = id.as_str();
+        while let Some(next) = parents.get(cursor) {
+            if !seen.insert(cursor) { return Err(format!("节点 parent_id 存在环：{id}")); }
+            cursor = next;
+        }
+    }
+    for entry in entries {
+        if !game_config::valid_id(&entry) || kinds.get(&entry).map(String::as_str) != Some("system") {
+            return Err(format!("entry_ids 必须引用现有 system 节点：{entry}"));
+        }
+    }
+    let mut stage_ids = BTreeSet::new();
+    for (index, stage) in loop_stages.iter().enumerate() {
+        let context = format!("骨架.loop[{index}]");
+        skeleton_fields(stage, &["id", "title", "summary", "node_ids"], &context)?;
+        let id = skeleton_id(stage, "id", &context, &mut total)?;
+        if ids.contains(id) || !stage_ids.insert(id.to_string()) { return Err(format!("循环阶段 ID 重复：{id}")); }
+        skeleton_text(stage, "title", &context, 160, &mut total)?;
+        skeleton_text(stage, "summary", &context, 2_000, &mut total)?;
+        for node_id in skeleton_string_items(stage, "node_ids", &context, 128, 120, &mut total)? {
+            if !ids.contains(&node_id) { return Err(format!("{context}.node_ids 引用不存在的节点：{node_id}")); }
+        }
+    }
+    for (index, relation) in relations.iter().enumerate() {
+        let context = format!("骨架.relations[{index}]");
+        skeleton_fields(relation, &["from", "to", "label"], &context)?;
+        for key in ["from", "to"] {
+            let id = skeleton_id(relation, key, &context, &mut total)?;
+            if !ids.contains(id) { return Err(format!("{context}.{key} 引用不存在的节点：{id}")); }
+        }
+        skeleton_text(relation, "label", &context, 160, &mut total)?;
+    }
+    Ok(model)
+}
+
 pub struct Indexes {
     world: SourceSet<Value>,
     docs: SourceSet<Doc>,
     code: SourceSet<Code>,
+    skeleton: SourceSet<Value>,
 }
 
 /// Process-local and bounded like the configuration cache: each read re-inventories, and an
@@ -221,10 +676,16 @@ impl ProjectionCache {
         let mut entries = self.entries.lock().map_err(|_| "来源索引不可用。")?;
         let previous = entries.iter().position(|(path, _)| path == root).and_then(|index| entries.remove(index)).map(|(_, value)| value);
         let old = previous.as_deref();
+        let docs = refresh_set(root, old.map(|value| &value.docs), inventory(root, &DESIGN_ROOTS, "md", Limits { files: 3_000, bytes: 32 << 20 }), refresh, parse_doc);
+        let indexed_docs: BTreeSet<String> = docs.files.iter().filter(|(_, cached)| cached.value.is_ok()).map(|(path, _)| path.clone()).collect();
+        let doc_paths_changed = old.is_some_and(|previous| previous.docs.files.iter().filter(|(_, cached)| cached.value.is_ok())
+            .map(|(path, _)| path.clone()).collect::<BTreeSet<_>>() != indexed_docs);
         let indexes = Arc::new(Indexes {
             world: refresh_set(root, old.map(|value| &value.world), inventory(root, &WORLD_ROOTS, "json", Limits { files: 2_000, bytes: 16 << 20 }), refresh, parse_json),
-            docs: refresh_set(root, old.map(|value| &value.docs), inventory(root, &DESIGN_ROOTS, "md", Limits { files: 3_000, bytes: 32 << 20 }), refresh, parse_doc),
             code: refresh_set(root, old.map(|value| &value.code), inventory(root, &CODE_ROOTS, "cs", Limits { files: 6_000, bytes: 64 << 20 }), refresh, parse_code),
+            skeleton: refresh_set(root, old.map(|value| &value.skeleton), skeleton_inventory(root), refresh || doc_paths_changed,
+                |path, text| parse_skeleton(path, text, &indexed_docs)),
+            docs,
         });
         entries.push_back((root.to_path_buf(), indexes.clone()));
         while entries.len() > 4 { entries.pop_front(); }
@@ -312,9 +773,10 @@ impl Indexes {
         hits
     }
 
-    /// The four-layer loop table of the cycle design domain, verbatim. Unknown when absent.
+    /// The four-layer loop table from the current design overview, or a legacy repository.
     fn player_loop(&self) -> Value {
-        let Some(cached) = self.docs.files.get(LOOP_SOURCE) else { return Value::Null };
+        let path = if self.docs.files.contains_key(LOOP_SOURCE) { LOOP_SOURCE } else { LEGACY_LOOP_SOURCE };
+        let Some(cached) = self.docs.files.get(path) else { return Value::Null };
         let Ok(doc) = &cached.value else { return Value::Null };
         let Some((start, heading)) = doc.headings.iter().find(|(_, text)| text.contains("四层循环")).or_else(|| doc.headings.iter().find(|(_, text)| text.contains("核心循环"))) else {
             return Value::Null;
@@ -332,12 +794,16 @@ impl Indexes {
             .take(12)
             .collect();
         if rows.is_empty() { return Value::Null; }
-        json!({"source": {"path": LOOP_SOURCE, "hash": cached.hash, "heading": heading, "line": header_line + 1}, "columns": columns, "rows": rows, "basis": "design"})
+        json!({"source": {"path": path, "hash": cached.hash, "heading": heading, "line": header_line + 1}, "columns": columns, "rows": rows, "basis": "design"})
     }
 
     fn issues(&self) -> Vec<GameIssue> {
-        let mut issues: Vec<GameIssue> = self.world.issues.iter().chain(&self.docs.issues).chain(&self.code.issues).cloned().collect();
+        let mut issues: Vec<GameIssue> = self.world.issues.iter().chain(&self.docs.issues).chain(&self.code.issues)
+            .chain(&self.skeleton.issues).cloned().collect();
         for (path, cached) in self.world.files.iter() {
+            if let Err(message) = &cached.value { issues.push(GameIssue { severity: "error".into(), message: message.clone(), path: path.clone() }); }
+        }
+        for (path, cached) in &self.skeleton.files {
             if let Err(message) = &cached.value { issues.push(GameIssue { severity: "error".into(), message: message.clone(), path: path.clone() }); }
         }
         issues
@@ -410,10 +876,15 @@ pub fn overview(repository: &Repository, indexes: &Indexes) -> Value {
     if let Some(source) = player_loop.get("source") {
         used.push((source["path"].as_str().unwrap_or_default().into(), source["hash"].as_str().unwrap_or_default().into()));
     }
+    let skeleton = indexes.skeleton.files.get(SKELETON_SOURCE).map(|cached| {
+        if !cached.hash.is_empty() { used.push((SKELETON_SOURCE.into(), cached.hash.clone())); }
+        cached.value.as_ref().ok().map(|model| json!({"source": {"path": SKELETON_SOURCE, "hash": cached.hash}, "model": model.as_ref()}))
+    }).flatten();
     for id in repository.duplicate_ids("zone") { issues.push(GameIssue { severity: "error".into(), message: format!("配置 ID 重复：{id}"), path: String::new() }); }
     json!({
         "world": world,
         "loop": player_loop,
+        "skeleton": skeleton,
         "regions": regions,
         "routed_zones": routed,
         "counts": {"regions": regions.len(), "dungeons": dungeons.len(), "zones": zones.len(), "routed_zones": routed.len(),

@@ -1,22 +1,66 @@
-import type { BoardSnapshot, CanvasObject, CodexBinding, TaskTarget, TaskTargetStatus } from "./types";
+import type { BoardSnapshot, CanvasObject, CodexBinding, HostSessionStatus, TaskTarget, TaskTargetStatus } from "./types";
 import type { CanvasSelection } from "./canvas";
 import { ct } from "./i18n/canvas";
 import { workspaceIdentity } from "./content-origin";
+import { hostTarget, canReturnHost, hostPinKey, recentHostTarget } from "./host-routing";
 
 type Source = { id: string; label: string };
 type RecipientView = { root: HTMLElement; summary: HTMLElement; toggle: HTMLButtonElement; picker: HTMLElement };
 type Reconnect = (target: TaskTarget & { thread_id: string }) => Promise<CodexBinding>;
-const CODEX_SOURCE = /^codex:([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/i;
+const CODEX_SOURCE = /^(?:codex:)?([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})$/i;
+function sourceThread(source?: string) { return source && CODEX_SOURCE.exec(source)?.[1].toLowerCase(); }
+function sameSource(a?: string | null, b?: string | null): boolean {
+  return Boolean(a && b && (a === b || sourceThread(a) && sourceThread(a) === sourceThread(b)));
+}
+function bindingForSource(source: string, bindings: CodexBinding[]): CodexBinding | undefined {
+  if (source.startsWith("claude:")) return undefined;
+  const thread = sourceThread(source), exact = bindings.find(binding => binding.source_id === source);
+  if (exact) return !thread || exact.thread_id.toLowerCase() === thread ? exact : undefined;
+  return thread ? bindings.find(binding => sourceThread(binding.source_id) === thread && binding.thread_id.toLowerCase() === thread) : undefined;
+}
+
+/** Presentation only: derive the client from existing explicit identities/bindings. */
+export function recipientClient(target?: TaskTarget, bindings: CodexBinding[] = []): "codex" | "claude" | undefined {
+  if (!target) return;
+  if (target.source_id.startsWith("claude:")) {
+    const suffix = target.source_id.slice(7), thread = sourceThread(suffix);
+    if (!thread || suffix.toLowerCase() !== thread || target.thread_id && target.thread_id.toLowerCase() !== thread) return;
+    if (target.host_pin && (target.host_pin.client !== "ccgui" || target.host_pin.engine !== "claude"
+      || target.host_pin.source_id !== target.source_id || target.host_pin.native_session_id.toLowerCase() !== thread)) return;
+    return "claude";
+  }
+  if (target.host_pin) return;
+  const thread = sourceThread(target.source_id);
+  if (thread) return !target.thread_id || target.thread_id.toLowerCase() === thread ? "codex" : undefined;
+  const binding = bindingForSource(target.source_id, bindings);
+  return binding && sourceThread(binding.thread_id) === binding.thread_id.toLowerCase() && target.thread_id === binding.thread_id ? "codex" : undefined;
+}
+
+export function shortProjectName(cwd?: string | null): string {
+  return cwd ? cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "/" : "";
+}
+
+export function readableRecipientLabel(target: TaskTarget, label = target.label): string {
+  const explicitSuffix = target.source_id.startsWith("claude:") ? target.source_id.slice(7) : undefined;
+  const parsedSuffix = sourceThread(explicitSuffix);
+  const claudeSuffix = parsedSuffix && explicitSuffix?.toLowerCase() === parsedSuffix ? parsedSuffix : undefined;
+  const ids = [target.source_id, target.thread_id, target.host_pin?.native_session_id, sourceThread(target.source_id), claudeSuffix].filter((id): id is string => Boolean(id));
+  const aliases = ids.flatMap(id => [id, id.slice(0, 8)].flatMap(value => [value,
+    ...["Codex", "Claude", "Claude Code", "CC GUI", "CCGUI", "CC GUI · CC GUI", "Claude / CC GUI"].flatMap(prefix =>
+      [" · ", "·", "-", ":", ": ", " "].map(separator => prefix + separator + value))]));
+  if (target.cwd && label.trim() === target.cwd.trim()) return "";
+  return aliases.some(alias => alias.toLowerCase() === label.trim().toLowerCase()) ? "" : label;
+}
 function objectTarget(object: CanvasObject, board: BoardSnapshot, bindings: CodexBinding[], sources: Source[]): TaskTarget | undefined {
   const content = object.content;
   const note = content.type === "node" ? board.nodes.find(n => n.id === content.id) : undefined;
   const reply = content.type === "reply" ? board.replies?.find(r => r.id === content.id) : undefined;
-  const original = reply?.origin_node_id ? board.nodes.find(n => n.id === reply.origin_node_id && n.source_id === reply.source_id) : undefined;
+  const original = reply?.origin_node_id ? board.nodes.find(n => n.id === reply.origin_node_id && sameSource(n.source_id, reply.source_id)) : undefined;
   const captured = note?.captured_context || original?.captured_context;
   const source_id = note?.source_id || reply?.source_id || object.source_id || object.origin?.source_id || captured?.source_id;
   if (!source_id) return;
-  const binding = bindings.find(b => b.source_id === source_id);
-  const thread_id = captured?.thread_id || object.origin?.thread_id || binding?.thread_id;
+  const binding = bindingForSource(source_id, bindings);
+  const thread_id = captured?.thread_id || object.origin?.thread_id || sourceThread(source_id) || binding?.thread_id;
   const current = binding && (!thread_id || binding.thread_id === thread_id) ? binding : undefined;
   return { source_id, thread_id, cwd: captured?.cwd || object.origin?.cwd || current?.cwd,
     label: current?.label || object.origin?.label || captured?.goal || reply?.source_label || sources.find(s => s.id === source_id)?.label || source_id };
@@ -24,7 +68,7 @@ function objectTarget(object: CanvasObject, board: BoardSnapshot, bindings: Code
 
 /** Canvas send-back currently needs a bound desktop task. MCP-only hosts stay visible but cannot receive it yet. */
 export function canReturnCanvas(sourceId: string | undefined, bindings: CodexBinding[]): boolean {
-  return Boolean(sourceId && bindings.some(binding => binding.source_id === sourceId));
+  return Boolean(sourceId && bindingForSource(sourceId, bindings));
 }
 
 /** The selected idea owns the destination; referenced components are context, not votes. */
@@ -36,8 +80,8 @@ export function originalTask(board: BoardSnapshot, selection: CanvasSelection | 
   if (owner) {
     const captured = selected.map(o => objectTarget(o, board, bindings, sources)).find(target => target?.source_id === owner);
     if (captured) return captured;
-    const binding = bindings.find(b => b.source_id === owner);
-    return { source_id: owner, thread_id: binding?.thread_id, cwd: binding?.cwd, label: binding?.label || sources.find(s => s.id === owner)?.label || owner };
+    const binding = bindingForSource(owner, bindings);
+    return { source_id: owner, thread_id: sourceThread(owner) || binding?.thread_id, cwd: binding?.cwd, label: binding?.label || sources.find(s => s.id === owner)?.label || owner };
   }
   const primary = objects.find(o => o.id === selection.object_id) || selected[0];
   const own = primary && objectTarget(primary, board, bindings, sources);
@@ -50,6 +94,7 @@ export class CanvasRecipient {
   private board: BoardSnapshot | undefined;
   private selection: CanvasSelection | null = null;
   private bindings: CodexBinding[] = [];
+  private hosts: HostSessionStatus[] = [];
   private sources: Source[] = [];
   private manual: string | null = null;
   private workspaceChoice: string | null = null;
@@ -60,7 +105,25 @@ export class CanvasRecipient {
   private reconnectButton = document.createElement("button");
   private reconnecting = false;
   private reconnectError: string | null = null;
+  private pinned: string | null = null;
+  private pinButton = document.createElement("button");
+  private recipientDetails = document.createElement("details");
+  private recipientDetailsTitle = document.createElement("summary");
+  private recipientDetailsBody = document.createElement("div");
   constructor(private select: HTMLSelectElement, private workspace: HTMLSelectElement, private notice: HTMLElement, private lookup: (target: TaskTarget) => Promise<TaskTargetStatus>, private onState: (blocked: boolean) => void, private view: RecipientView, private reconnect?: Reconnect) {
+    try { this.pinned = localStorage.getItem("spellcast.canvas.recipient.pin.v1"); } catch { /* Optional local preference. */ }
+    this.pinButton.type = "button"; this.pinButton.className = "ghost recipient-pin";
+    view.toggle.after(this.pinButton);
+    this.recipientDetails.className = "recipient-diagnostics";
+    this.recipientDetails.dataset.recipientDiagnostics = "true";
+    this.recipientDetails.append(this.recipientDetailsTitle, this.recipientDetailsBody); view.picker.append(this.recipientDetails);
+    this.pinButton.addEventListener("click", () => {
+      if (this.origin || this.switching) return;
+      this.pinned = this.pinned ? null : this.target()?.source_id || null;
+      this.manual = null;
+      try { if (this.pinned) localStorage.setItem("spellcast.canvas.recipient.pin.v1", this.pinned); else localStorage.removeItem("spellcast.canvas.recipient.pin.v1"); } catch { /* Current window retains the choice. */ }
+      this.paint(); this.select.dispatchEvent(new Event("recipient-change"));
+    });
     this.reconnectButton.type = "button";
     this.reconnectButton.className = "ghost recipient-reconnect";
     this.reconnectButton.hidden = true;
@@ -89,44 +152,58 @@ export class CanvasRecipient {
     });
   }
   resetChoice(value?: string) { this.confirmation?.cancel(); this.manual = value ?? null; this.workspaceChoice = null; this.editing = false; }
-  update(board: BoardSnapshot, selection: CanvasSelection | null, bindings: CodexBinding[], sources: Source[]) {
+  update(board: BoardSnapshot, selection: CanvasSelection | null, bindings: CodexBinding[], sources: Source[], hosts: HostSessionStatus[] = []) {
     if (this.selection?.object_id !== selection?.object_id) this.reconnectError = null;
-    this.board = board; this.selection = selection; this.bindings = bindings; this.sources = sources;
+    this.board = board; this.selection = selection; this.bindings = bindings; this.sources = sources; this.hosts = hosts;
     if (!selection) { this.editing = false; this.workspaceChoice = null; }
-    this.origin = originalTask(board, selection, bindings, sources); this.paint();
+    this.origin = originalTask(board, selection, bindings, sources);
+    if (this.origin?.source_id.startsWith("claude:")) this.origin = hostTarget(this.origin.source_id, hosts, this.origin) || this.origin;
+    this.paint();
     if (this.confirmation && this.confirmation.signature !== this.choiceSignature(this.confirmation.source)) this.confirmation.cancel();
   }
   target(): TaskTarget | undefined {
     const target = this.committedTarget();
     return target && this.workspaceKey(target) === this.chosenWorkspace() ? target : undefined;
   }
-  private committedTarget() { return this.sourceTarget(this.manual ?? this.origin?.source_id); }
+  private committedTarget() {
+    if (!this.selection) return undefined;
+    const source = this.manual ?? this.origin?.source_id ?? this.pinned;
+    return source ? this.sourceTarget(source) : recentHostTarget(this.hosts);
+  }
   private workspaceKey(target: TaskTarget) { return workspaceIdentity(target.cwd || ""); }
   private chosenWorkspace() { const target = this.committedTarget(); return this.workspaceChoice ?? (target ? this.workspaceKey(target) : ""); }
   private availableTargets() {
     const targets = new Map<string, TaskTarget>();
-    if (this.origin) targets.set(this.origin.source_id, this.origin);
     const committed = this.committedTarget();
+    if (this.manual && committed && sameSource(committed.source_id, this.origin?.source_id)) targets.set(committed.source_id, committed);
+    if (this.origin) targets.set(this.origin.source_id, this.origin);
     if (committed) targets.set(committed.source_id, committed);
-    for (const binding of this.bindings) if (!targets.has(binding.source_id) && workspaceIdentity(binding.cwd) !== "unsorted") targets.set(binding.source_id, { ...binding });
+    for (const binding of this.bindings) if (!binding.source_id.startsWith("claude:") && !targets.has(binding.source_id) && workspaceIdentity(binding.cwd) !== "unsorted") targets.set(binding.source_id, { ...binding });
+    for (const host of this.hosts) {
+      const source = host.host_pin.source_id;
+      if (!targets.has(source)) { const target = hostTarget(source, this.hosts); if (target) targets.set(source, target); }
+    }
     // Prefer the original or explicit source when one task has several sources.
     const seen = new Set<string>();
     return [...targets.values()].filter(target => {
-      const key = JSON.stringify([this.workspaceKey(target), target.thread_id || target.source_id]);
+      const namespace = target.host_pin?.engine || (target.source_id.startsWith("claude:") ? "claude" : bindingForSource(target.source_id, this.bindings) || sourceThread(target.source_id) ? "codex" : target.source_id);
+      const key = JSON.stringify([this.workspaceKey(target), namespace, target.thread_id || target.source_id]);
       if (seen.has(key)) return false; seen.add(key); return true;
     });
   }
   private sourceTarget(source?: string): TaskTarget | undefined {
     if (!source) return;
-    if (source === this.origin?.source_id) {
-      const original = this.origin;
-      const inferred = CODEX_SOURCE.exec(source)?.[1];
+    if (sameSource(source, this.origin?.source_id)) {
+      const original = this.origin && { ...this.origin, source_id: source };
+      const inferred = sourceThread(source);
       return original && !original.thread_id && inferred ? { ...original, thread_id: inferred } : original;
     }
-    const binding = this.bindings.find(b => b.source_id === source);
-    return { source_id: source, thread_id: binding?.thread_id, cwd: binding?.cwd, label: binding?.label || this.sources.find(s => s.id === source)?.label || source };
+    const host = hostTarget(source, this.hosts);
+    if (host) return host;
+    const binding = bindingForSource(source, this.bindings);
+    return { source_id: source, thread_id: sourceThread(source) || binding?.thread_id, cwd: binding?.cwd, label: binding?.label || this.sources.find(s => s.id === source)?.label || source };
   }
-  private key(target: TaskTarget) { return JSON.stringify([target.source_id, target.thread_id || "", target.cwd || ""]); }
+  private key(target: TaskTarget) { return JSON.stringify([target.source_id, target.thread_id || "", target.cwd || "", hostPinKey(target.host_pin)]); }
   private choiceSignature(source: string) {
     return JSON.stringify([this.selection, this.origin && this.key(this.origin), this.committedTarget() && this.key(this.committedTarget()!), this.sourceTarget(source) && this.key(this.sourceTarget(source)!)]);
   }
@@ -137,7 +214,7 @@ export class CanvasRecipient {
     this.paint();
     if (this.confirmation) return;
     if (source === (current?.source_id || "")) { this.editing = false; this.workspaceChoice = null; this.paint(); return; }
-    if (next && (this.origin || current) && next.source_id !== this.origin?.source_id) {
+    if (next && (this.origin || current) && !sameSource(next.source_id, this.origin?.source_id)) {
       // Browsing a workspace cannot commit a different recipient.
       this.workspaceChoice = this.workspaceKey(current || this.origin!);
       const signature = this.choiceSignature(source);
@@ -156,9 +233,14 @@ export class CanvasRecipient {
       const route = document.createElement("div"); route.className = "recipient-confirm-route";
       for (const [target, label] of [[original, this.status(original)?.status === "deleted" ? ct("originalTaskDeleted") : ct("originalTask")], [next, ct("recipientSwitchTarget")]] as const) {
         const item = document.createElement("section"), caption = document.createElement("small"), name = document.createElement("strong"), detail = document.createElement("small");
-        caption.textContent = label; name.textContent = this.status(target)?.label || target.label;
-        detail.textContent = [target.cwd, target.thread_id || target.source_id].filter(Boolean).join(" · ");
-        item.append(caption, name, detail); route.append(item);
+        const client = recipientClient(target, this.bindings);
+        caption.textContent = label; name.textContent = [ct(client === "codex" ? "recipientCodex" : client === "claude" ? "recipientClaude" : "recipientUnknownClient"),
+          readableRecipientLabel(target, this.status(target)?.label || target.label) || ct("hostLinkConversation")].join(" · ");
+        detail.textContent = shortProjectName(target.cwd);
+        const identity = document.createElement("details"), identityTitle = document.createElement("summary"), identityBody = document.createElement("code");
+        identity.className = "recipient-diagnostics"; identityTitle.textContent = ct("recipientDetails");
+        identityBody.textContent = [target.source_id, target.thread_id, target.cwd].filter(Boolean).join("\n"); identity.append(identityTitle, identityBody);
+        item.append(caption, name, detail, identity); route.append(item);
       }
       const actions = document.createElement("div"); actions.className = "recipient-confirm-actions";
       const cancel = document.createElement("button"), confirm = document.createElement("button");
@@ -196,7 +278,7 @@ export class CanvasRecipient {
   }
   private reconnectThread(target?: TaskTarget): string | undefined {
     if (!target) return;
-    const thread = CODEX_SOURCE.exec(target.source_id)?.[1];
+    const thread = sourceThread(target.source_id);
     return thread && (!target.thread_id || target.thread_id.toLowerCase() === thread.toLowerCase()) ? thread.toLowerCase() : undefined;
   }
   private async reconnectOriginal() {
@@ -235,31 +317,48 @@ export class CanvasRecipient {
     return status;
   }
   refresh() { const target = this.target(); if (target && this.canReturn(target)) void this.check(target, true); }
+  matches(status: TaskTargetStatus) {
+    const target = this.target();
+    return Boolean(target && target.source_id === status.source_id && target.thread_id === status.thread_id && hostPinKey(target.host_pin) === hostPinKey(status.host_pin));
+  }
   private paint() {
     if (!this.board) return;
     const committed = this.committedTarget(), committedStatus = this.status(committed);
-    const original = committed?.source_id === this.origin?.source_id;
+    const original = sameSource(committed?.source_id, this.origin?.source_id);
     const returnable = this.canReturn(committed);
-    const name = committedStatus?.label || committed?.label || ct("noOriginalTask");
-    const label = committedStatus?.status === "deleted" ? `${ct(original ? "originalTaskDeleted" : "taskDeleted")} · ${name}` : `${name}${committed && original ? ` · ${ct("originalTask")}` : ""}`;
+    const client = recipientClient(committed, this.bindings);
+    const chat = committed && readableRecipientLabel(committed, committedStatus?.label || committed.label);
+    const name = committed ? [ct(client === "codex" ? "recipientCodex" : client === "claude" ? "recipientClaude" : "recipientUnknownClient"),
+      chat, shortProjectName(committed.cwd)].filter(Boolean).join(" · ") : ct("noOriginalTask");
+    const mode = original ? ct("originalTask") : !this.origin && this.pinned ? ct("recipientPinned") : !this.origin && !this.manual && committed?.host_pin ? ct("recipientFollowing") : "";
+    const label = committedStatus?.status === "deleted" ? `${ct(original ? "originalTaskDeleted" : "taskDeleted")} · ${name}` : `${name}${committed && mode ? ` · ${mode}` : ""}`;
     this.view.root.hidden = !this.selection;
     this.view.summary.textContent = ct("recipientSummary", { task: label });
-    this.view.summary.title = committed?.cwd || "";
+    this.view.summary.title = label;
     this.view.summary.classList.toggle("is-unavailable", Boolean(this.selection && committed && !returnable));
     this.view.toggle.textContent = this.editing ? ct("recipientCancelChange") : committed ? ct("recipientChange") : ct("recipientChooseTask");
     this.view.toggle.setAttribute("aria-expanded", String(this.editing));
     this.view.toggle.disabled = Boolean(this.confirmation);
+    this.pinButton.hidden = !this.selection || Boolean(this.origin);
+    this.pinButton.textContent = ct(this.pinned ? "recipientUnpin" : "recipientPin");
+    this.pinButton.disabled = this.switching || (!this.pinned && !committed);
     this.view.picker.hidden = !this.selection || !this.editing;
     this.select.hidden = false; this.workspace.hidden = false; this.notice.hidden = true;
     const options = this.availableTargets(), chosen = this.chosenWorkspace();
     const workspaces = new Map(options.map(target => [this.workspaceKey(target), target.cwd || ""]));
     this.workspace.replaceChildren();
     const firstWorkspace = document.createElement("option"); firstWorkspace.value = ""; firstWorkspace.textContent = ct("recipientChooseWorkspace"); this.workspace.append(firstWorkspace);
+    const workspaceLabels = new Map<string, string>();
     for (const [key, cwd] of workspaces) {
-      const option = document.createElement("option"); option.value = key; option.textContent = cwd || ct("recipientWorkspaceUnknown"); option.title = cwd; this.workspace.append(option);
+      const short = shortProjectName(cwd) || ct("recipientWorkspaceUnknown");
+      const duplicate = [...workspaces.values()].filter(path => shortProjectName(path) === short).length > 1;
+      const parent = cwd.replace(/[\\/]+$/, "").split(/[\\/]/).slice(-2, -1)[0];
+      const readable = duplicate && parent ? `${short} · ${parent}` : short;
+      workspaceLabels.set(key, readable);
+      const option = document.createElement("option"); option.value = key; option.textContent = readable; option.title = readable; this.workspace.append(option);
     }
     this.workspace.value = workspaces.has(chosen) ? chosen : "";
-    this.workspace.title = workspaces.get(chosen) || "";
+    this.workspace.title = workspaceLabels.get(chosen) || "";
     const target = this.target(), status = this.status(target);
     const reconnectable = Boolean(this.selection && target && !returnable && this.reconnect && this.reconnectThread(target) && status?.status !== "deleted" && status?.status !== "changed");
     this.reconnectButton.hidden = !reconnectable;
@@ -268,22 +367,45 @@ export class CanvasRecipient {
     const scoped = this.workspace.value ? options.filter(option => this.workspaceKey(option) === this.workspace.value) : [];
     this.select.replaceChildren();
     const blank = document.createElement("option"); blank.value = ""; blank.textContent = ct(!this.workspace.value ? "recipientWorkspaceFirst" : scoped.length ? "recipientChooseTask" : "recipientNoTasks"); this.select.append(blank);
+    const groups = new Map<string, HTMLOptGroupElement>();
+    for (const key of ["codex", "claude", "unknown"]) {
+      const group = document.createElement("optgroup"); group.label = ct(key === "codex" ? "recipientCodex" : key === "claude" ? "recipientClaude" : "recipientUnknownClient"); groups.set(key, group);
+    }
     for (const optionTarget of scoped) {
       const known = this.status(optionTarget), option = document.createElement("option"); option.value = optionTarget.source_id;
-      const original = optionTarget.source_id === this.origin?.source_id;
-      const label = known?.label || optionTarget.label;
+      const original = sameSource(optionTarget.source_id, this.origin?.source_id);
+      const label = readableRecipientLabel(optionTarget, known?.label || optionTarget.label) || ct("hostLinkConversation");
       option.textContent = known?.status === "deleted" ? `${ct(original ? "originalTaskDeleted" : "taskDeleted")} · ${label}` : `${label}${original ? ` · ${ct("originalTask")}` : ""}`;
-      option.title = [optionTarget.thread_id, optionTarget.cwd, optionTarget.source_id].filter(Boolean).join("\n");
-      option.disabled = known?.status === "deleted" || !this.canReturn(optionTarget); this.select.append(option);
+      option.title = [label, shortProjectName(optionTarget.cwd)].filter(Boolean).join(" · ");
+      option.disabled = known?.status === "deleted" || !this.canReturn(optionTarget);
+      groups.get(recipientClient(optionTarget, this.bindings) || "unknown")!.append(option);
     }
+    for (const group of groups.values()) if (group.childElementCount) this.select.append(group);
+    this.recipientDetailsTitle.textContent = ct("recipientDetails");
+    this.recipientDetailsBody.replaceChildren(...options.map(optionTarget => {
+      const row = document.createElement("section"), name = document.createElement("strong"), body = document.createElement("code");
+      const client = recipientClient(optionTarget, this.bindings);
+      name.textContent = [ct(client === "codex" ? "recipientCodex" : client === "claude" ? "recipientClaude" : "recipientUnknownClient"),
+        readableRecipientLabel(optionTarget, this.status(optionTarget)?.label || optionTarget.label) || ct("hostLinkConversation"), shortProjectName(optionTarget.cwd)].filter(Boolean).join(" · ");
+      body.textContent = [optionTarget.source_id, optionTarget.thread_id, optionTarget.cwd,
+        optionTarget.host_pin?.window_id].filter(Boolean).join("\n"); row.append(name, body); return row;
+    }));
+    this.recipientDetails.hidden = !options.length;
     this.select.value = target?.source_id || "";
     this.select.disabled = !this.selection || !this.workspace.value || !scoped.length || Boolean(this.confirmation);
     this.workspace.disabled = !this.selection || Boolean(this.confirmation);
     if (this.selection && target && this.reconnectError) { this.notice.textContent = this.reconnectError; this.notice.hidden = false; }
-    else if (this.selection && target && !this.canReturn(target)) { this.notice.textContent = ct(this.reconnectThread(target) ? "taskTarget.unlinked" : "taskTarget.noReturn"); this.notice.hidden = false; }
     else if (this.selection && status && status.status !== "available") { this.notice.textContent = ct(`taskTarget.${status.status}`); this.notice.hidden = false; }
+    else if (this.selection && target && !this.canReturn(target)) { this.notice.textContent = ct(this.reconnectThread(target) ? "taskTarget.unlinked" : "taskTarget.noReturn"); this.notice.hidden = false; }
     this.onState(!this.selection || !target || this.switching || !this.canReturn(target) || status?.status !== "available");
+    window.dispatchEvent(new CustomEvent("spellcast:recipient-evidence", { detail: {
+      bindings: this.bindings, target: committed, status: committedStatus,
+      confirmed: !this.switching, canReturn: this.canReturn(committed),
+    } }));
     if (this.selection && target && (this.canReturn(target) || this.reconnectThread(target))) { const entry = this.cache.get(this.key(target)); if (!entry?.pending && (!entry?.value || Date.now() - entry.at > 30000)) void this.check(target); }
   }
-  private canReturn(target?: TaskTarget) { return canReturnCanvas(target?.source_id, this.bindings); }
+  private canReturn(target?: TaskTarget) {
+    if (target?.host_pin || target?.source_id.startsWith("claude:")) return canReturnHost(target, this.hosts);
+    return canReturnCanvas(target?.source_id, this.bindings);
+  }
 }

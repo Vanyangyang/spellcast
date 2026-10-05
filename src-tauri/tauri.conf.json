@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Spellcast",
-  "version": "0.4.13",
+  "version": "0.4.28",
   "identifier": "com.spellcast.board",
   "build": {
     "beforeDevCommand": "node scripts/ensure-vite.mjs",
     "devUrl": "http://127.0.0.1:47193",
-    "beforeBuildCommand": "node scripts/prepare-codex-plugin-resource.mjs && npm run build",
+    "beforeBuildCommand": "node scripts/prepare-codex-plugin-resource.mjs && node scripts/package-claude-plugin.mjs && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -28,7 +28,14 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "nsis", "appimage", "deb"],
-    "resources": ["resources/codex-plugin/**/*"],
+    "resources": ["resources/codex-plugin/**/*", "resources/claude-plugin/**/*", "resources/ccgui-spellcast/**/*"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/autostart.nsh",
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": true
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

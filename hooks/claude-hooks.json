@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/spellcast-hook.exe",
+            "args": ["--host", "claude", "--endpoint", "http://127.0.0.1:47194/api/observer/status"],
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/spellcast-hook.exe",
+            "args": ["--host", "claude", "--endpoint", "http://127.0.0.1:47194/api/observer/status"],
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

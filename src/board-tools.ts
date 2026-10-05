@@ -210,7 +210,7 @@ export function mountBoardTools(options: Options) {
       });
       details.append(node("summary", ct("details")));
       details.append(node("p", `${ct("sourceId")}: ${row.source_id || ""}`));
-      for (const [key, time] of [["timelineSaved", row.at_ms], ["timelineQueued", row.receipt.queued_at_ms], ["timelineRead", row.receipt.received_at_ms], ["timelineReply", row.receipt.responded_at_ms], ["timelineHandled", row.receipt.handled_at_ms]] as const) {
+      for (const [key, time] of [["timelineSaved", row.at_ms], ["timelineQueued", row.receipt.queued_at_ms], [row.receipt.event.host_pin ? "timelineAcceptedHost" : "timelineRead", row.receipt.received_at_ms], ["phase.executing", row.receipt.executing_at_ms], ["phase.awaiting_permission", row.receipt.awaiting_permission_at_ms], ["phase.completed", row.receipt.completed_at_ms], ["timelineReply", row.receipt.responded_at_ms], ["timelineHandled", row.receipt.handled_at_ms]] as const) {
         if (time != null) details.append(node("p", `${ct(key)}: ${new Date(time).toLocaleTimeString(currentLocale())} · +${((time - row.at_ms) / 1000).toFixed(2)}s`));
       }
       if (row.receipt.error) details.append(node("p", row.receipt.error));
@@ -238,7 +238,8 @@ export function mountBoardTools(options: Options) {
     const header = node("header");
     const title = node("h3", entry.title || bt("contentUnavailable"));
     title.title = entry.title;
-    const status = node("span", entry.view === "activity" ? bt("historicalRecord") : row.status === "handled" ? bt("handledStatus") : row.status === "responded" ? bt("repliedStatus") : row.unbound ? bt("taskUnlinked") : phaseLabel(row.status));
+    const hostPhase = row.receipt?.event.host_pin && row.status === "queued" ? ct("phase.queuedHost") : row.receipt?.event.host_pin && row.status === "received" ? ct("phase.receivedHost") : undefined;
+    const status = node("span", entry.view === "activity" ? bt("historicalRecord") : row.status === "handled" ? bt("handledStatus") : row.status === "responded" ? bt("repliedStatus") : row.unbound ? bt("taskUnlinked") : hostPhase || phaseLabel(row.status));
     status.className = "feedback-status"; status.dataset.tone = entry.view === "activity" ? "quiet" : entry.view === "replied" ? "done" : entry.attention ? "attention" : "active";
     header.append(title, status); card.append(header);
     const meta = node("div"); meta.className = "feedback-meta";

@@ -26,7 +26,7 @@ test("removes credential and provider overrides while pinning the local proxy", 
   assert.equal(env.ANTHROPIC_BASE_URL, undefined);
   assert.equal(env.ANTHROPIC_CUSTOM_HEADERS, undefined);
   assert.equal(env.CLAUDE_CODE_SIMPLE, undefined);
-  assert.equal(env.HTTPS_PROXY, "http://127.0.0.1:17891");
+  assert.equal(env.HTTPS_PROXY, "http://127.0.0.1:7897");
   assert.equal(env.CLAUDE_SUPERVISOR_CLAUDE_BIN, "C:\\Claude\\claude.exe");
 });
 

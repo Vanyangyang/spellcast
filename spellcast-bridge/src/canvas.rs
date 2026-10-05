@@ -165,39 +165,87 @@ pub struct CanvasOutcome {
     pub board: spellcast_core::BoardSnapshot,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasOrganizeRequest {
+    pub expected_canvas_revision: u64,
+    pub expected_feedback: CanvasOrganizeFeedback,
+    pub batch: CanvasBatchRequest,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasOrganizeFeedback {
+    pub pending: Vec<u64>,
+    pub deliveries: Vec<CanvasOrganizeDelivery>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasOrganizeDelivery {
+    pub sequence: u64,
+    pub phase: DeliveryPhase,
+}
+
 impl Bridge {
     pub fn canvas_batch(&self, request: CanvasBatchRequest, source_id: Option<&str>) -> Result<CanvasOutcome, SpellcastError> {
         if let Some(source) = source_id { spellcast_core::reply::validate_id(source)?; }
         if source_id.is_none() && !request.feedback_sequences.is_empty() {
             return Err(SpellcastError::user("只有接收反馈的任务可以关联处理结果。"));
         }
+        let outcome = self.update(|state| self.apply_canvas_batch_in_state(state, request, source_id))?;
+        self.notify.notify_waiters();
+        self.surface.board_changed();
+        Ok(outcome)
+    }
+
+    pub fn organize_canvas(&self, request: CanvasOrganizeRequest) -> Result<CanvasOutcome, SpellcastError> {
+        validate_organize_batch(&request.batch)?;
         let outcome = self.update(|state| {
-            if state.session.board.canvas.proposal(&request.request_id).is_some() {
-                let result = state.session.apply_canvas_batch(request, source_id)?;
-                return Ok(CanvasOutcome { result, board: state.session.snapshot() });
+            // Stored retries still go through the core's full request/source fingerprint check.
+            if state.session.board.canvas.proposal(&request.batch.request_id).is_some() {
+                return self.apply_canvas_batch_in_state(state, request.batch, None);
             }
-            if let Some(source) = source_id {
-                validate_feedback(state, source, &request)?;
+            let expected_feedback = normalize_organize_feedback(request.expected_feedback)?;
+            let current_feedback = CanvasOrganizeFeedback {
+                pending: state.pending.iter().map(|event| event.seq).collect(),
+                deliveries: state.deliveries.iter().filter(|receipt| receipt.phase != DeliveryPhase::Local)
+                    .map(|receipt| CanvasOrganizeDelivery { sequence: receipt.event.seq, phase: receipt.phase }).collect(),
+            };
+            if state.session.board.canvas.revision != request.expected_canvas_revision
+                || normalize_organize_feedback(current_feedback)? != expected_feedback {
+                return Err(SpellcastError::user("画布内容、注释或反馈状态已改变，请重新预览整理。"));
             }
-            let mut candidate = state.session.clone();
-            let mut result = candidate.apply_canvas_batch(request.clone(), source_id)?;
-            let issues = self.canvas_resource_issues(&candidate, &state.session, &request);
-            if issues.is_empty() {
-                state.session = candidate;
-            } else {
-                resource_failure(&mut result, issues);
-                state.session.board.canvas.proposals.push(CanvasProposal { request: request.clone(), source_id: source_id.map(String::from), result: result.clone() });
-            }
-            if result.status == "applied" {
-                capture_origins(state, &request, source_id)?;
-                if let Some(source) = source_id { mark_response(state, source, &request); }
-            }
-            state.session.sync_canvas();
-            Ok(CanvasOutcome { result, board: state.session.snapshot() })
+            self.apply_canvas_batch_in_state(state, request.batch, None)
         })?;
         self.notify.notify_waiters();
         self.surface.board_changed();
         Ok(outcome)
+    }
+
+    fn apply_canvas_batch_in_state(&self, state: &mut PersistedState, request: CanvasBatchRequest, source_id: Option<&str>) -> Result<CanvasOutcome, SpellcastError> {
+        if state.session.board.canvas.proposal(&request.request_id).is_some() {
+            let result = state.session.apply_canvas_batch(request, source_id)?;
+            return Ok(CanvasOutcome { result, board: state.session.snapshot() });
+        }
+        if let Some(source) = source_id {
+            validate_feedback(state, source, &request)?;
+        }
+        let mut candidate = state.session.clone();
+        let mut result = candidate.apply_canvas_batch(request.clone(), source_id)?;
+        let issues = self.canvas_resource_issues(&candidate, &state.session, &request);
+        if issues.is_empty() {
+            state.session = candidate;
+        } else {
+            resource_failure(&mut result, issues);
+            state.session.board.canvas.proposals.push(CanvasProposal { request: request.clone(), source_id: source_id.map(String::from), result: result.clone() });
+        }
+        if result.status == "applied" {
+            capture_origins(state, &request, source_id)?;
+            if let Some(source) = source_id { mark_response(state, source, &request); }
+        }
+        state.session.sync_canvas();
+        Ok(CanvasOutcome { result, board: state.session.snapshot() })
     }
 
     pub fn canvas_proposal(&self, request_id: &str, action: CanvasProposalAction) -> Result<CanvasOutcome, SpellcastError> {
@@ -316,6 +364,34 @@ impl Bridge {
     }
 }
 
+fn validate_organize_batch(request: &CanvasBatchRequest) -> Result<(), SpellcastError> {
+    if !request.feedback_sequences.is_empty() {
+        return Err(SpellcastError::user("整理不能关联反馈处理结果。"));
+    }
+    for operation in &request.operations {
+        let allowed = match operation {
+            CanvasOperation::Create { content: CanvasContent::Text { .. }, bindings, .. } => bindings.is_empty(),
+            CanvasOperation::Place { fields, .. } => fields.removed.is_some()
+                && *fields == CanvasPlacementFields { removed: fields.removed, ..Default::default() },
+            _ => false,
+        };
+        if !allowed {
+            return Err(SpellcastError::user("整理只能新建纯文本卡片，或软收起、恢复卡片。"));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_organize_feedback(mut feedback: CanvasOrganizeFeedback) -> Result<CanvasOrganizeFeedback, SpellcastError> {
+    feedback.pending.sort_unstable();
+    feedback.deliveries.sort_unstable_by_key(|receipt| receipt.sequence);
+    if feedback.pending.windows(2).any(|pair| pair[0] == pair[1])
+        || feedback.deliveries.windows(2).any(|pair| pair[0].sequence == pair[1].sequence) {
+        return Err(SpellcastError::user("整理预览的反馈序号不能重复。"));
+    }
+    Ok(feedback)
+}
+
 fn resource_failure(result: &mut CanvasBatchResult, issues: Vec<CanvasTargetStatus>) {
     result.status = CanvasBatchStatus::Proposed;
     for issue in issues {
@@ -394,6 +470,14 @@ fn capture_origins(
     for operation in &request.operations {
         if let CanvasOperation::Annotate { id, anchor, .. } = operation {
             let copied = effective_origin(state, &anchor.object_id);
+            let target_source = copied.as_ref().and_then(|origin| origin.source_id.clone())
+                .or_else(|| {
+                    if copied.as_ref().is_some_and(|origin| origin.thread_id.is_some() && !origin.cwd.is_empty()) {
+                        None
+                    } else {
+                        state.session.board.canvas.object(&anchor.object_id).and_then(|object| object.source_id.clone())
+                    }
+                });
             if let Some(annotation) = state
                 .session
                 .board
@@ -404,6 +488,9 @@ fn capture_origins(
             {
                 if copied.is_some() {
                     annotation.origin = copied;
+                }
+                if annotation.target_source_id.is_none() {
+                    annotation.target_source_id = target_source;
                 }
                 if serde_json::to_vec(annotation)?.len() > 3 * 1024 * 1024 {
                     return Err(SpellcastError::user(
@@ -466,8 +553,10 @@ fn mark_response(state: &mut PersistedState, source: &str, request: &CanvasBatch
             receipt.responded_at_ms.get_or_insert_with(now_ms);
             receipt.response_request_id = Some(request.request_id.clone());
             receipt.response_object_ids = ids.clone();
-            if receipt.phase != DeliveryPhase::Handled { receipt.phase = DeliveryPhase::Responded; }
-            receipt.error = None;
+            if receipt.event.host_pin.is_none() {
+                if receipt.phase != DeliveryPhase::Handled { receipt.phase = DeliveryPhase::Responded; }
+                receipt.error = None;
+            }
         }
     }
 }

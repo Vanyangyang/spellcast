@@ -366,6 +366,7 @@ function titleForObject(board: BoardSnapshot, objectId: string) {
     return board.replies?.find((item) => item.id === contentId)?.title || "";
   }
   if (content.type === "source_table") return content.table.title;
+  if (content.type === "source_skeleton") return content.skeleton.title;
   if ("title" in content) return content.title || (content.type === "text" ? textLabel(content.text) : "");
   return "";
 }
@@ -521,6 +522,12 @@ export function overviewItemFromObject(
     const table = object.content.table;
     return { objectId: object.id, contentType: "source_table", title: table.title,
       excerpt: excerpt(table.rows.map(row => row.join(" · ")).join("\n")), background: `${table.path} · sha ${table.hash.slice(0, 8)}`,
+      project: overviewProject(undefined, object.source_id, bindings), origin, revision: object.content_revision };
+  }
+  if (object.content.type === "source_skeleton") {
+    const skeleton = object.content.skeleton;
+    return { objectId: object.id, contentType: "source_skeleton", title: skeleton.title,
+      excerpt: excerpt(skeleton.model.nodes.map(node => `${node.title} · ${node.summary}`).join("\n")), background: `${skeleton.path} · sha ${skeleton.hash.slice(0, 8)}`,
       project: overviewProject(undefined, object.source_id, bindings), origin, revision: object.content_revision };
   }
   const title = "title" in object.content ? object.content.title : object.id;

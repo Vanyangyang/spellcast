@@ -1,0 +1,31 @@
+/* Canvas-only list presentation. The project workspace keeps its existing map. */
+.canvas-source-skeleton .gs-map { display: grid; align-content: start; gap: 10px; }
+.canvas-source-skeleton .gs-group-header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; padding: 3px 2px 8px; border-bottom: 1px solid var(--line); }
+.canvas-source-skeleton .gs-group-title { min-height: 32px; padding: 3px 7px; border-color: transparent; background: transparent; color: var(--paper); font: 650 18px/1.35 var(--font); text-align: left; overflow-wrap: anywhere; }
+.canvas-source-skeleton .gs-group-title:hover, .canvas-source-skeleton .gs-group-title[aria-pressed="true"] { color: var(--mint); }
+.canvas-source-skeleton .gs-group-count, .canvas-source-skeleton .gs-group-needs-reconciliation { color: var(--mute); font-size: 13px; }
+.canvas-source-skeleton .gs-group-needs-reconciliation { color: var(--warn); }
+.canvas-source-skeleton .gs-node-list { display: grid; gap: 5px; min-width: 0; }
+.canvas-source-skeleton .gs-node-entry { min-width: 0; }
+.canvas-source-skeleton .gs-map .gs-node-row.gs-system-card,
+.canvas-source-skeleton .gs-map .gs-node-row.gs-branch-card { display: grid; align-content: center; gap: 3px; width: 100%; min-width: 0; min-height: 0; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--project-panel); text-align: left; transform: none; }
+.canvas-source-skeleton .gs-map .gs-node-row[aria-pressed="true"] { border-color: var(--mint); background: var(--project-selected); box-shadow: inset 3px 0 0 var(--mint); }
+.canvas-source-skeleton .gs-node-row .gs-card-title { font: 650 15px/1.35 var(--font); }
+.canvas-source-skeleton .gs-node-row .gs-card-summary { flex: none; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; color: var(--mute); font: 14px/1.4 var(--font); }
+.canvas-source-skeleton .gs-node-row .gs-card-footer { justify-content: flex-start; gap: 8px; font-size: 13px; }
+.canvas-source-skeleton .gs-needs-reconciliation { border-color: var(--warn); color: var(--warn); }
+.canvas-source-skeleton .gs-structure-only,
+.canvas-source-skeleton .gs-detail-header .gs-state:not(.gs-needs-reconciliation) { border-color: var(--line-strong); color: var(--mute); }
+.canvas-source-skeleton .gs-detail { gap: 12px; padding: 12px 14px; border-color: var(--line); border-radius: 10px; background: var(--project-detail); }
+.canvas-source-skeleton .gs-detail-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; }
+.canvas-source-skeleton .gs-detail .gs-detail-title { font-size: 20px; }
+.canvas-source-skeleton .gs-detail-lead { color: var(--paper); font-size: 15px; line-height: 1.5; }
+.canvas-source-skeleton .gs-detail-section { gap: 6px; padding-top: 10px; }
+.canvas-source-skeleton .gs-detail .gs-detail-section h3 { font-size: 16px; }
+.canvas-source-skeleton .gs-rule-section[data-gs-rule="conflicts"] { border-top-color: var(--warn); }
+.canvas-source-skeleton .gs-rule-section[data-gs-rule="conflicts"] h3 { color: var(--warn); }
+.canvas-source-skeleton .gs-result { align-items: start; }
+.canvas-source-skeleton .gs-result span { overflow-wrap: anywhere; }
+.canvas-source-skeleton .gs-loop { gap: 7px; }
+.canvas-source-skeleton .gs-stage { padding: 8px; }
+.canvas-source-skeleton .gs-stage-title { font-size: 15px; }

@@ -19,6 +19,7 @@ import {
   fetchEvents,
   fetchForms,
   fetchStatus,
+  fetchHostSessions,
 
   keepBubble,
   patchNode,
@@ -39,12 +40,14 @@ import {
 } from "./api";
 import { mountCanvas, type CanvasSelection } from "./canvas";
 import { CanvasRecipient, originalTask } from "./canvas-recipient";
+import { newChatText, showNewChatDialog, openCanvasNewChat } from "./canvas-new-chat";
 import type { DeliveryReceipt } from "./types";
 import { createCanvasNav } from "./canvas-nav";
 import { resolveNavObjectId, textLabel, type ContentNavTarget } from "./content-organization";
 import "./canvas-studio.css";
 import "./theme.css";
 import { mountTheme } from "./theme";
+import { mountAutostart } from "./autostart";
 import { mountDisplayTarget } from "./display-target";
 import "./top-bar";
 import { canvasTypography, onCanvasTypographyChange, resetCanvasTypography, setCanvasFontPercent, type CanvasFontKind, type CanvasTypography } from "./canvas-typography";
@@ -75,18 +78,27 @@ import type {
 } from "./types";
 import { FORMS, formLabel, formReason, kindLabel, KINDS, weightLabel, WEIGHTS } from "./types";
 import { createSetupController } from "./complete-setup-ui";
+import { mountHostLinkSettings } from "./host-link-ui";
+import { ageText, paintClientSummary, watchClientLinks } from "./connection-summary";
 import type { ProjectWorkspace } from "./project-workspace";
-import { ensureGameLoopOnCanvas } from "./project-game-canvas";
+import { ensureGameLoopOnCanvas, ensureGameSkeletonOnCanvas } from "./project-game-canvas";
 import { pt } from "./i18n/projects";
+import { st } from "./i18n/sigil";
+import type { mountSigilWorkspace } from "./sigil-workspace";
 // Night Desk visual layer: last static stylesheet so it settles shared roles; remove to roll back.
 import "./night-desk.css";
+import { gameDesignCheckRequest, resolveGameDesignSelection, verifyGameDesignSources } from "./canvas-game-design";
+import { cgd } from "./i18n/canvas-game-design";
+import "./canvas-game-tools.css";
+import { mountComposerEditor } from "./composer-editor";
+import "./composer-editor.css";
 
 mountTheme();
 
 let projectWorkspace: Promise<ProjectWorkspace> | undefined;
 function gameWorkspace() {
   projectWorkspace ??= import("./project-workspace")
-    .then(module => module.createProjectWorkspace({ onChanged: () => { void refreshBoard(); }, onOpenSourceTable: ensureGameLoopOnCanvas }))
+    .then(module => module.createProjectWorkspace({ onChanged: () => { void refreshBoard(); }, onOpenSourceTable: ensureGameLoopOnCanvas, onOpenSkeleton: ensureGameSkeletonOnCanvas }))
     .catch(error => { projectWorkspace = undefined; throw error; });
   return projectWorkspace;
 }
@@ -94,7 +106,16 @@ const projectsOpen = document.querySelector<HTMLButtonElement>("#projects-open")
 function paintProjectEntry() { projectsOpen.textContent = pt("gameDevelopment"); }
 paintProjectEntry();
 onLocale(paintProjectEntry);
-projectsOpen.addEventListener("click", () => { void (async () => { await setMode("focus"); await (await gameWorkspace()).open(); })().catch(error => flash(String(error))); });
+projectsOpen.addEventListener("click", () => {
+  projectsOpen.disabled = true;
+  void (async () => { await setMode("focus"); await (await gameWorkspace()).openOnCanvas(); })()
+    .catch(error => flash(String(error))).finally(() => { projectsOpen.disabled = false; });
+});
+window.addEventListener("spellcast:open-game-workspace", event => {
+  const { projectId } = (event as CustomEvent<{ projectId: string }>).detail;
+  replyBoard.closeReading();
+  void gameWorkspace().then(workspace => workspace.open(projectId)).catch(error => flash(String(error)));
+});
 window.addEventListener("spellcast:open-project-record", event => {
   const { projectId, recordId } = (event as CustomEvent<{projectId:string;recordId:string}>).detail;
   void gameWorkspace().then(workspace => workspace.open(projectId, recordId)).catch(error => flash(String(error)));
@@ -107,8 +128,8 @@ window.addEventListener("spellcast:locate-project-record", event => {
   }).catch(error => flash(String(error)));
 });
 window.addEventListener("spellcast:locate-canvas-object", event => {
-  const { objectId } = (event as CustomEvent<{ objectId: string }>).detail;
-  void (async () => { await refreshBoard(); await navigateContent({ objectId }); })().catch(error => flash(String(error)));
+  const { objectId, nodeId, open, activate } = (event as CustomEvent<{ objectId: string; nodeId?: string; open?: boolean; activate?: boolean }>).detail;
+  void (async () => { await refreshBoard(); await navigateContent({ objectId }); if (open || activate) await replyBoard.openObject(objectId, nodeId, !!activate); })().catch(error => flash(String(error)));
 });
 
 const plane = document.querySelector<HTMLElement>("#plane")!;
@@ -121,6 +142,10 @@ const logEl = document.querySelector<HTMLOListElement>("#log")!;
 const inspector = document.querySelector<HTMLElement>("#inspector")!;
 const input = document.querySelector<HTMLTextAreaElement>("#input")!;
 const talk = document.querySelector<HTMLFormElement>("#talk")!;
+const composerEditor = mountComposerEditor(document.querySelector<HTMLElement>(".composer")!, input, document.querySelector<HTMLButtonElement>("#composer-expand")!);
+const gameDesignMenu = document.querySelector<HTMLDetailsElement>("#canvas-game-design")!;
+const gameDesignCheck = document.querySelector<HTMLButtonElement>("#canvas-game-check")!;
+let gameDesignBusy = false;
 const insTitle = document.querySelector<HTMLInputElement>("#ins-title")!;
 const insBody = document.querySelector<HTMLTextAreaElement>("#ins-body")!;
 const insKind = document.querySelector<HTMLSelectElement>("#ins-kind")!;
@@ -130,7 +155,7 @@ const peekTitle = document.querySelector<HTMLElement>("#peek-title")!;
 const peekBody = document.querySelector<HTMLElement>("#peek-body")!;
 const peekNote = document.querySelector<HTMLTextAreaElement>("#peek-note")!;
 const activityEl = document.querySelector<HTMLOListElement>("#activity")!;
-const activityEmpty = document.querySelector<HTMLElement>("#activity-empty")!;
+const activityPanel = document.querySelector<HTMLElement>(".agent-activity")!;
 const agentUrl = document.querySelector<HTMLInputElement>("#agent-mcp-url")!;
 const settings = document.querySelector<HTMLDialogElement>("#settings")!;
 const settingsUrl = document.querySelector<HTMLInputElement>("#settings-mcp-url")!;
@@ -154,10 +179,16 @@ settings.querySelector("#settings-font-reset")?.addEventListener("click", resetC
 onCanvasTypographyChange(paintCanvasFontSettings);
 paintCanvasFontSettings(canvasTypography());
 const replyHost = document.querySelector<HTMLElement>("#reply-stage")!;
+const sigilHost = document.querySelector<HTMLElement>("#sigil-stage")!;
+const sigilsOpen = document.querySelector<HTMLButtonElement>("#sigils-open")!;
+let sigilWorkspace: ReturnType<typeof mountSigilWorkspace> | undefined;
+let sigilWorkspaceLoading = false;
+let sigilReturnView: "replies" | "ideas" = "replies";
 const recipient = document.querySelector<HTMLSelectElement>("#recipient")!;
 const recipientNotice = document.createElement("p"); recipientNotice.className = "composer-recipient-status"; recipientNotice.id = "recipient-status"; recipientNotice.setAttribute("role", "status"); recipientNotice.hidden = true;
 document.querySelector(".composer-context")!.after(recipientNotice);
 const recipientWorkspace = document.querySelector<HTMLSelectElement>("#recipient-workspace")!;
+let hostSessions: import("./types").HostSessionStatus[] = [];
 let recipientBlocked = true;
 const recipientControl = new CanvasRecipient(recipient, recipientWorkspace, recipientNotice, checkTaskTarget, blocked => { recipientBlocked = blocked; document.querySelector<HTMLButtonElement>("#send")!.disabled = blocked || sending || (boardView !== "replies" && !input.value.trim()); }, {
   root: document.querySelector<HTMLElement>("#recipient-route")!, summary: document.querySelector<HTMLElement>("#recipient-summary")!,
@@ -211,7 +242,7 @@ const setupController = createSetupController({
   setLocked: (locked) => setSetupLocked(locked),
 });
 let urlDebounce = 0;
-let boardView: "replies" | "ideas" = "replies";
+let boardView: "replies" | "ideas" | "sigils" = "replies";
 let awaitingOrigin: string | null = null;
 let noticeTimer = 0;
 let canvasTargetKey = "";
@@ -278,8 +309,9 @@ const replyBoard = mountCanvas(replyHost, {
     return board;
   },
   onReload: async () => { board = await fetchBoard(); return board; },
+  onOrganized: snapshot => { board = snapshot; void boardTools.refreshFeedback(); },
   onRestoreComposer: (record) => { composerDraft = record; input.value = record.text ?? ""; recipientControl.resetChoice(record.target_source_id); paintComposerContext(); input.focus(); },
-  onSelect: (selection) => {
+  onSelect: (selection, options) => {
     selected = selection?.node_id ?? null;
     const key = JSON.stringify(selection);
     const routeKey = selectionRouteKey(selection);
@@ -301,19 +333,30 @@ const replyBoard = mountCanvas(replyHost, {
           block_id: "canvas", block_type: "text", kind: "ask", channel: "composer", expected_revision: selection.anchors[0].content_revision,
           anchors: structuredClone(selection.anchors), target_source_id: recipient.value || preferredCanvasSource(selection) || undefined, updated_at: 0, text: "" };
       }
-      const recovered = !sameRoute && composerDraft ? replyDrafts.getComposer(composerDraft) : undefined;
-      input.value = sameRoute ? retainedText : recovered?.text ?? "";
-      if (recovered) { composerDraft = recovered; recipientControl.resetChoice(recovered.target_source_id); }
-      if (sameRoute && composerDraft && retainedText.trim()) {
-        const saved = replyDrafts.put({ ...composerDraft, text: retainedText, updated_at: Date.now() });
+      const recovered = composerDraft && (!sameRoute || options?.preserveDraft) ? replyDrafts.getComposer(composerDraft, !!options?.preserveDraft) : undefined;
+      const preserveDraft = !!options?.preserveDraft && !!retainedText.trim();
+      const recoveredText = recovered?.text ?? "";
+      const anotherDraft = preserveDraft && !!recoveredText.trim() && recoveredText !== retainedText;
+      const carriedText = anotherDraft
+        ? retainedText.includes(recoveredText) ? retainedText
+          : recoveredText.includes(retainedText) ? recoveredText
+          : `${recoveredText}\n\n${cgd("previousDraft")}\n${retainedText}`
+        : retainedText;
+      input.value = preserveDraft ? carriedText : sameRoute ? retainedText : recovered?.text ?? "";
+      if (recovered && !preserveDraft) { composerDraft = recovered; recipientControl.resetChoice(recovered.target_source_id); }
+      if ((sameRoute || preserveDraft) && composerDraft && retainedText.trim()) {
+        const saved = replyDrafts.put({ ...composerDraft, text: input.value, updated_at: Date.now() });
         if (!saved) flash(ct("draftUnsafe"));
-        else if (previousKey && previousDraft && previousKey !== draftKey(composerDraft)) replyDrafts.remove(previousKey, previousDraft.updated_at);
+        else if (sameRoute && !options?.preserveDraft && previousKey && previousDraft && previousKey !== draftKey(composerDraft)) replyDrafts.remove(previousKey, previousDraft.updated_at);
       }
+      if (preserveDraft && anotherDraft) flash(cgd("mergedDrafts"));
+      else if (preserveDraft && !sameRoute) flash(cgd("refreshSelection"));
     }
     canvasTargetKey = key; canvasRouteKey = routeKey; paintComposerContext();
   },
   onHumanSelect: () => canvasNav.discardIntent(),
-  onDiscussSelection: () => {
+  onDiscussSelection: (text) => {
+    if (text && !input.value.trim()) { input.value = text; input.dispatchEvent(new Event("input", { bubbles: true })); }
     paintComposerContext();
     talk.scrollIntoView({ block: "nearest", behavior: "smooth" });
     input.focus({ preventScroll: true });
@@ -499,8 +542,8 @@ const shell = createShell({
 
 type ConfigClient = "cursor" | "claude-code" | "codex" | "grok" | "windsurf" | "generic";
 
-function isCompleteClient(client: string | undefined): client is "codex" {
-  return client === "codex";
+function isCompleteClient(client: string | undefined): client is "codex" | "claude-code" {
+  return client === "codex" || client === "claude-code";
 }
 
 function setupButtons() {
@@ -564,11 +607,6 @@ async function copyUrl(button: HTMLButtonElement) {
   window.setTimeout(() => (button.textContent = t("agent.copy")), 1200);
 }
 
-function ageText(seconds: number) {
-  if (seconds < 60) return t("agent.ago.seconds", { n: Math.max(1, Math.floor(seconds)) });
-  return t("agent.ago.minutes", { n: Math.floor(seconds / 60) });
-}
-
 function paintConnection() {
   const allAgents = bridgeStatus?.agents?.length
     ? bridgeStatus.agents
@@ -580,18 +618,26 @@ function paintConnection() {
   const namedAgents = allAgents.filter(
     ({ client }) => !/^rmcp(?:\s+\d+\.\d+\.\d+(?:[-+][\w.-]+)?)?$/i.test(client.trim()),
   );
+  const empty = allAgents.length > 0 ? t("agent.ready") : t("agent.none");
   for (const prefix of ["agent", "settings-agent", "settings-agent-details"]) {
-    const agents = prefix === "settings-agent-details" ? allAgents : namedAgents;
-    const state = !bridgeReachable ? "away"
-      : agents.length === 0 ? "ready"
-      : agents.some((agent) => (Date.now() - agent.last_call_ms) / 1000 <= 45) ? "live" : "stale";
     const dot = document.querySelector<HTMLElement>(`#${prefix}-dot`)!;
     const label = document.querySelector<HTMLElement>(`#${prefix}-seen`)!;
-    dot.className = `agent-dot ${state}`;
     label.replaceChildren();
-    if (!bridgeReachable || agents.length === 0) {
-      label.textContent = !bridgeReachable ? t("agent.unreachable")
-        : allAgents.length > 0 ? t("agent.ready") : t("agent.none");
+    if (!bridgeReachable) {
+      dot.className = "agent-dot away";
+      label.textContent = t("agent.unreachable");
+      continue;
+    }
+    // Home and the settings card show one entry per client; connection details keep every raw MCP identity.
+    if (prefix !== "settings-agent-details") {
+      dot.className = `agent-dot ${paintClientSummary(label, namedAgents, empty)}`;
+      continue;
+    }
+    const agents = allAgents;
+    dot.className = `agent-dot ${agents.length === 0 ? "ready"
+      : agents.some((agent) => (Date.now() - agent.last_call_ms) / 1000 <= 45) ? "live" : "stale"}`;
+    if (agents.length === 0) {
+      label.textContent = empty;
       continue;
     }
     const chips = document.createElement("div");
@@ -670,6 +716,15 @@ async function refreshStatus() {
     const health = await fetchStatus();
     bridgeReachable = true;
     bridgeStatus = health;
+    if (isDesktopShell()) {
+      try {
+        hostSessions = await fetchHostSessions();
+        window.dispatchEvent(new CustomEvent("spellcast:host-sessions", { detail: hostSessions }));
+      } catch {
+        hostSessions = [];
+        window.dispatchEvent(new CustomEvent("spellcast:host-sessions-error"));
+      }
+    }
     applyObserverSlice({
       enabled: Boolean(health.observer_enabled),
       provider: health.observer_provider === "claude" ? "claude" : "codex",
@@ -680,6 +735,10 @@ async function refreshStatus() {
     }, "health");
   } catch {
     bridgeReachable = false;
+    if (isDesktopShell()) {
+      hostSessions = [];
+      window.dispatchEvent(new CustomEvent("spellcast:host-sessions-error"));
+    }
   }
   paintConnection();
   paintObserver();
@@ -692,7 +751,8 @@ function applyMode() {
   document.body.classList.toggle("mode-focus", mode === "focus");
 }
 
-function selectBoardView(next: "replies" | "ideas") {
+function selectBoardView(next: "replies" | "ideas" | "sigils") {
+  if (next === "sigils" && boardView !== "sigils") sigilReturnView = boardView;
   if (next !== "replies") canvasNav.invalidateActive();
   boardView = next;
   awaitingOrigin = null;
@@ -767,6 +827,10 @@ async function boot() {
   document.querySelector("#mode-desktop")?.addEventListener("click", () => void setMode("ambient"));
   document.querySelector("#view-replies")?.addEventListener("click", () => selectBoardView("replies"));
   document.querySelector("#view-ideas")?.addEventListener("click", () => selectBoardView("ideas"));
+  sigilsOpen.addEventListener("click", () => {
+    selectBoardView("sigils");
+    void setMode("focus").catch(error => flash(String(error)));
+  });
   onLocale(() => {
     applyDom();
     fillKindWeight();
@@ -806,31 +870,6 @@ async function boot() {
     topMore.open = false;
     topMore.querySelector("summary")?.focus();
   });
-  // Keep the native details state in sync with its wide layout, so its content is also exposed
-  // to assistive technology. Remember a reader's narrow-window choice across width changes.
-  const observerDetails = document.querySelector<HTMLDetailsElement>("#agent-observer-details");
-  const observerSummary = observerDetails?.querySelector<HTMLElement>("summary");
-  const wideObserver = window.matchMedia("(min-width: 1101px)");
-  let narrowObserverOpen = false;
-  let observerSummaryFocused = false;
-  if (observerDetails) {
-    observerSummary?.addEventListener("focus", () => { observerSummaryFocused = true; });
-    observerSummary?.addEventListener("blur", () => {
-      // Hiding the summary at the wide breakpoint can blur it before the media-query callback.
-      if (!wideObserver.matches) observerSummaryFocused = false;
-    });
-    if (wideObserver.matches) observerDetails.open = true;
-    wideObserver.addEventListener("change", event => {
-      if (event.matches) {
-        narrowObserverOpen = observerDetails.open;
-        if (observerSummaryFocused || document.activeElement === observerSummary) document.querySelector<HTMLElement>("#agent-observer-enabled")?.focus();
-        observerSummaryFocused = false;
-        observerDetails.open = true;
-      } else {
-        observerDetails.open = narrowObserverOpen;
-      }
-    });
-  }
   // A folded menu closes like other menus: a click elsewhere, or keyboard focus moving past it.
   document.addEventListener("pointerdown", event => {
     if (topMore?.classList.contains("is-compact") && topMore.open && !topMore.contains(event.target as Node)) topMore.open = false;
@@ -998,6 +1037,10 @@ async function saveObserverProvider(event: Event) {
 const settingsTabs = [...settings.querySelectorAll<HTMLButtonElement>("[data-settings-tab]")];
 const settingsPanels = [...settings.querySelectorAll<HTMLElement>(".settings-panel")];
 const displayTarget = mountDisplayTarget(settings.querySelector<HTMLElement>("#settings-panel-display")!);
+const autostart = mountAutostart(settings.querySelector<HTMLElement>("#settings-panel-appearance")!);
+mountHostLinkSettings(document.querySelector<HTMLElement>("#agent-result")!);
+mountHostLinkSettings(settings.querySelector<HTMLElement>("#settings-panel-connection")!);
+watchClientLinks(paintConnection);
 function selectSettingsTab(id: string, focus = false) {
   const selectedTab = settingsTabs.find(tab => tab.dataset.settingsTab === id);
   if (!selectedTab) return;
@@ -1011,6 +1054,7 @@ function selectSettingsTab(id: string, focus = false) {
   if (scrollArea) scrollArea.scrollTop = 0;
   if (focus) selectedTab.focus();
   if (id === "display") void displayTarget.refresh();
+  if (id === "appearance") void autostart.refresh();
 }
 for (const [index, tab] of settingsTabs.entries()) {
   tab.addEventListener("click", () => selectSettingsTab(tab.dataset.settingsTab!));
@@ -1130,7 +1174,7 @@ function note(key: MessageKey, vars: Record<string, string | number>) {
 }
 
 function paintActivity() {
-  activityEmpty.hidden = activity.length > 0;
+  activityPanel.hidden = activity.length === 0;
   activityEl.innerHTML = activity
     .map((a) => `<li><time>${clock(a.at)}</time><span>${escape(t(a.key, a.vars))}</span></li>`)
     .join("");
@@ -1210,16 +1254,19 @@ function topToolsWrap(more: HTMLDetailsElement) {
 
 function paint() {
   document.body.classList.toggle("view-replies", boardView === "replies");
+  document.body.classList.toggle("view-sigils", boardView === "sigils");
   syncTopMore();
   topicEl.textContent = board.topic || t("topic.empty");
   reasonEl.textContent = formReason(board.form);
-  empty.hidden = board.nodes.length > 0 || mode !== "focus" || boardView === "replies";
+  empty.hidden = board.nodes.length > 0 || mode !== "focus" || boardView !== "ideas";
   document.querySelector("#empty h1")!.textContent = bt("boardEmpty");
   document.querySelector("#empty > p:last-of-type")!.textContent = bt("boardEmptyBody");
   document.querySelector("#view-replies")!.setAttribute("aria-pressed", String(boardView === "replies"));
   document.querySelector("#view-ideas")!.setAttribute("aria-pressed", String(boardView === "ideas"));
   document.querySelector("#view-replies")!.textContent = ct("canvas");
   document.querySelector("#view-ideas")!.textContent = ct("layouts");
+  sigilsOpen.textContent = st("kind");
+  sigilsOpen.setAttribute("aria-pressed", String(boardView === "sigils"));
   paintLog();
   paintInspector();
   paintFormsState();
@@ -1236,7 +1283,21 @@ function paintComposerContext() {
   document.querySelector("#send")!.textContent = boardView === "replies" ? bt("continue") : t("action.say");
   document.querySelector<HTMLElement>("#recipient-label")!.textContent = ct("recipientTaskLabel");
   document.querySelector<HTMLElement>("#recipient-workspace-label")!.textContent = ct("recipientWorkspaceLabel");
+  const newChatButton = document.querySelector<HTMLButtonElement>("#recipient-new-chat")!;
+  newChatButton.textContent = newChatText("entry");
+  newChatButton.disabled = sending || mode !== "focus" || boardView !== "replies";
   const focus = mode === "focus" && boardView === "replies" ? replyBoard.getSelection() : null;
+  gameDesignMenu.hidden = mode !== "focus" || boardView !== "replies";
+  if (gameDesignMenu.hidden) gameDesignMenu.open = false;
+  const gameContext = resolveGameDesignSelection(board, focus);
+  document.querySelector("#canvas-game-design-toggle")!.textContent = cgd("design");
+  document.querySelector<HTMLElement>("#canvas-game-design-toggle")!.title = cgd("designHint");
+  document.querySelector("#canvas-game-design-help")!.textContent = cgd("help");
+  document.querySelector("#canvas-game-context")!.textContent = gameContext.status === "ready"
+    ? cgd("context", { project: gameContext.label, count: gameContext.count })
+    : cgd(gameContext.status === "mixed" ? "mixed" : gameContext.status === "stale" ? "stale" : "pickContext");
+  gameDesignCheck.textContent = cgd(gameDesignBusy ? "preparing" : "check");
+  gameDesignCheck.disabled = sending || gameDesignBusy || !focus?.anchors?.length || gameContext.status !== "ready";
   const reply = focus ? board.replies?.find((item) => item.id === focus.reply_id) : null;
   const node = !reply && selected ? board.nodes.find((item) => item.id === selected) : null;
   const nativeTitles = focus?.anchors?.map(anchor => {
@@ -1247,7 +1308,9 @@ function paintComposerContext() {
     const content = object.content;
     if (content.type === "block") return targetLabel(content.block, anchor.target) || content.block.title || (content.block.type === "text" ? textLabel(content.block.text) : "") || ct("untitledBlock");
     if (content.type === "work_record") return content.record_id;
+    if (content.type === "sigil") return content.sigil_id;
     if (content.type === "source_table") return content.table.title;
+    if (content.type === "source_skeleton") return content.skeleton.model.nodes.find(node => node.id === anchor.block_id)?.title || content.skeleton.title;
     if ("title" in content) return content.title || (content.type === "text" ? textLabel(content.text) : "") || ct("untitledBlock");
     if (content.type === "reply") {
       const reply = board.replies?.find(reply => reply.id === content.id);
@@ -1261,20 +1324,23 @@ function paintComposerContext() {
   reasonEl.textContent = title ? bt("about", { title }) : bt("noTarget");
   const nodeObject = !focus && boardView !== "replies" && node ? board.canvas?.objects.find(object => object.content.type === "node" && object.content.id === node.id) : undefined;
   const routingSelection = focus || (nodeObject ? { object_id: nodeObject.id, node_id: node!.id } : null);
-  recipientControl.update(board, routingSelection, codexBindings, bridgeStatus?.sources || []);
+  recipientControl.update(board, routingSelection, codexBindings, bridgeStatus?.sources || [], hostSessions);
   input.disabled = !routingSelection;
   paintDeliveryStatus(focus);
+  composerEditor.sync();
 }
 
 function paintDeliveryStatus(focus: CanvasSelection | null) {
   const anchors = focus?.anchors || [];
-  const receipt = focus ? deliveries.filter(receipt => receipt.desktop && receipt.event.source_id === recipient.value &&
+  const receipt = focus ? deliveries.filter(receipt => (receipt.desktop || receipt.event.host_pin) && receipt.event.source_id === recipient.value &&
     (receipt.event.anchors?.some(sent => anchors.some(current => current.object_id === sent.object_id && (!current.block_id || current.block_id === sent.block_id)))
       || receipt.event.object_id === focus.object_id && (!focus.block_id || !receipt.event.block_id || receipt.event.block_id === focus.block_id)))
     .sort((a, b) => b.event.seq - a.event.seq)[0] : undefined;
   deliveryNotice.hidden = !receipt;
   if (!receipt) return;
-  const label = receipt.phase === "submitted" && receipt.desktop?.host_status === "active" ? ct("desktopWorking") : ct(`phase.${receipt.phase}`);
+  const label = receipt.event.host_pin && receipt.phase === "queued" ? ct("phase.queuedHost")
+    : receipt.event.host_pin && receipt.phase === "received" ? ct("phase.receivedHost")
+    : receipt.phase === "submitted" && receipt.desktop?.host_status === "active" ? ct("desktopWorking") : ct(`phase.${receipt.phase}`);
   deliveryNotice.textContent = [label, receipt.error || receipt.desktop?.attention].filter(Boolean).join(" · ");
   deliveryNotice.dataset.phase = receipt.phase;
 }
@@ -1294,7 +1360,7 @@ function paintLog() {
 }
 
 function paintInspector() {
-  if (boardView === "replies") { inspector.hidden = true; return; }
+  if (boardView !== "ideas") { inspector.hidden = true; return; }
   const node = board.nodes.find((n) => n.id === selected);
   inspector.hidden = !node;
   if (!node) {
@@ -1315,6 +1381,11 @@ function paintInspector() {
 
 function paintStage() {
   replyHost.hidden = mode !== "focus" || boardView !== "replies";
+  sigilHost.hidden = mode !== "focus" || boardView !== "sigils";
+  if (sigilHost.hidden && sigilWorkspace) {
+    sigilWorkspace.destroy();
+    sigilWorkspace = undefined;
+  }
   if (mode !== "focus") {
     spatial.hidden = true;
     plane.hidden = true;
@@ -1325,6 +1396,28 @@ function paintStage() {
     if (spatialHandle) { spatialHandle.destroy(); spatialHandle = null; }
     replyDrafts.bindObjects(board.canvas?.objects ?? [], board.replies ?? []);
     replyBoard.update(board);
+    return;
+  }
+  if (boardView === "sigils") {
+    spatial.hidden = true; plane.hidden = true;
+    if (spatialHandle) { spatialHandle.destroy(); spatialHandle = null; }
+    if (!sigilWorkspace && !sigilWorkspaceLoading) {
+      sigilWorkspaceLoading = true;
+      sigilsOpen.disabled = true;
+      const loading = document.createElement("p");
+      loading.className = "sigil-workspace-loading";
+      loading.setAttribute("role", "status");
+      loading.textContent = st("loading");
+      sigilHost.replaceChildren(loading);
+      void import("./sigil-workspace").then(module => {
+        if (mode !== "focus" || boardView !== "sigils") return;
+        sigilHost.replaceChildren();
+        sigilWorkspace = module.mountSigilWorkspace(sigilHost, { onBack: () => selectBoardView(sigilReturnView) });
+      }).catch(error => {
+        flash(String(error));
+        if (boardView === "sigils") selectBoardView(sigilReturnView);
+      }).finally(() => { sigilWorkspaceLoading = false; sigilsOpen.disabled = false; });
+    }
     return;
   }
   const isSpatial = board.form === "spatial";
@@ -1377,7 +1470,7 @@ talk.addEventListener("submit", async (event) => {
   const targetKey = canvasTargetKey;
   if (await tell(text, null, selected)) {
     if (draft) replyDrafts.remove(draftKey(draft), draft.updated_at);
-    if (canvasTargetKey === targetKey && input.value.trim() === text) input.value = "";
+    if (canvasTargetKey === targetKey && input.value.trim() === text) { input.value = ""; composerEditor.sync(); }
   }
 });
 
@@ -1386,6 +1479,39 @@ input.addEventListener("input", () => {
   if (!composerDraft) return;
   if (!input.value.trim()) { replyDrafts.remove(draftKey(composerDraft)); return; }
   if (!replyDrafts.put({ ...composerDraft, text: input.value, updated_at: Date.now() })) flash(ct("draftUnsafe"));
+});
+
+gameDesignMenu.addEventListener("keydown", event => {
+  if (event.key !== "Escape" || !gameDesignMenu.open) return;
+  event.preventDefault(); event.stopPropagation(); gameDesignMenu.open = false;
+  document.querySelector<HTMLElement>("#canvas-game-design-toggle")!.focus();
+});
+window.addEventListener("pointerdown", event => {
+  if (gameDesignMenu.open && event.target instanceof Node && !gameDesignMenu.contains(event.target)) gameDesignMenu.open = false;
+});
+gameDesignCheck.addEventListener("click", async () => {
+  if (gameDesignBusy || sending || mode !== "focus" || boardView !== "replies") return;
+  const selection = replyBoard.getSelection(), context = resolveGameDesignSelection(board, selection);
+  if (!selection?.anchors?.length || context.status !== "ready") return;
+  const selectionKey = JSON.stringify(selection), originalText = input.value;
+  gameDesignBusy = true; paintComposerContext();
+  try {
+    await verifyGameDesignSources(context);
+    if (mode !== "focus" || boardView !== "replies" || sending || input.value !== originalText || JSON.stringify(replyBoard.getSelection()) !== selectionKey) {
+      throw new Error(cgd("changed"));
+    }
+    const current = resolveGameDesignSelection(board, replyBoard.getSelection());
+    if (current.status !== "ready" || current.projectId !== context.projectId || JSON.stringify(current.sources) !== JSON.stringify(context.sources)) throw new Error(cgd("changed"));
+    const request = gameDesignCheckRequest(context);
+    const requestOffset = originalText.includes(request) ? originalText.indexOf(request) : originalText ? originalText.length + 2 : 0;
+    if (!originalText.includes(request)) input.value = originalText ? `${originalText}\n\n${request}` : request;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    gameDesignMenu.open = false;
+    composerEditor.reveal(requestOffset);
+    flash(cgd("ready"));
+  } catch (error) {
+    flash(error instanceof Error && [cgd("changed"), cgd("stale")].includes(error.message) ? error.message : cgd("unavailable"));
+  } finally { gameDesignBusy = false; paintComposerContext(); }
 });
 
 recipient.addEventListener("recipient-change", () => {
@@ -1402,6 +1528,34 @@ recipient.addEventListener("recipient-change", () => {
 });
 recipientWorkspace.addEventListener("change", () => paintDeliveryStatus(replyBoard.getSelection()));
 window.addEventListener("focus", () => recipientControl.refresh());
+
+document.querySelector("#recipient-new-chat")!.addEventListener("click", () => {
+  const selection = replyBoard.getSelection(), text = input.value.trim();
+  if (!selection || sending) return;
+  if (!text) { flash(newChatText("noRequest")); input.focus(); return; }
+  const route = selectionRouteKey(selection), startMode = mode, startView = boardView;
+  const selectedObject = board.canvas?.objects.find(object => object.id === selection.object_id);
+  const gameContext = resolveGameDesignSelection(board, selection);
+  const contentPath = gameContext.status === "ready" ? gameContext.root
+    : selectedObject?.content.type === "source_skeleton" ? selectedObject.content.skeleton.root
+    : selectedObject?.content.type === "source_table" ? selectedObject.content.table.root : selectedObject?.origin?.cwd;
+  const preferredPath = recipientWorkspace.selectedOptions[0]?.title || recipientControl.target()?.cwd || contentPath || undefined;
+  const workspaces = codexBindings.map(binding => ({ path: binding.cwd, label: binding.cwd.split(/[\\/]/).pop() || binding.cwd }));
+  if (contentPath) workspaces.push({ path: contentPath, label: contentPath.split(/[\\/]/).pop() || contentPath });
+  void showNewChatDialog({
+    text, preferredPath, workspaces,
+    open: async workspace => {
+      const unchanged = () => mode === startMode && boardView === startView && input.value.trim() === text && selectionRouteKey(replyBoard.getSelection()) === route;
+      if (!unchanged()) throw new Error(ct("sendCancelled"));
+      await replyBoard.prepareFeedback();
+      if (!unchanged()) throw new Error(ct("sendCancelled"));
+      const anchors = replyBoard.getSelection()?.anchors;
+      if (!anchors?.length) throw new Error(ct("noTarget"));
+      return openCanvasNewChat(workspace, text, anchors, composerDraft ? { ...composerDraft, text: input.value, updated_at: Date.now() } : null);
+    },
+    done: result => flash(newChatText(result.draft_saved === false ? "openedWithBackup" : "opened")),
+  });
+});
 
 input.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -1437,7 +1591,7 @@ async function tell(text: string, bubbleId: string | null, nodeId: string | null
       await replyBoard.prepareFeedback();
       const stillCanvas = mode === startMode && boardView === startView;
       const latest = stillCanvas ? replyBoard.getSelection() : null;
-      if (!stillCanvas || recipientControl.switching || recipient.value !== frozenRecipient || selectionRouteKey(latest) !== startRoute) {
+      if (!stillCanvas || recipientControl.switching || !recipientControl.matches(checkedTarget) || recipient.value !== frozenRecipient || selectionRouteKey(latest) !== startRoute) {
         flash(ct("sendCancelled"));
         return false;
       }
@@ -1445,10 +1599,11 @@ async function tell(text: string, bubbleId: string | null, nodeId: string | null
       const reply = board.replies?.find((item) => item.id === target.reply_id) ?? null;
       const anchored = Boolean(target.anchors?.length);
       const sent = await say(text, null, anchored ? null : reply ? reply.origin_node_id : target.node_id ?? null, anchored ? {
-        source_id: startSource, anchors: target.anchors, target_thread_id: checkedTarget.thread_id,
+        source_id: startSource, anchors: target.anchors, target_thread_id: checkedTarget.thread_id, host_pin: checkedTarget.host_pin,
       } : {
         source_id: startSource,
         target_thread_id: checkedTarget.thread_id,
+        host_pin: checkedTarget.host_pin,
         object_id: target.object_id,
         reply_id: target.reply_id,
         block_id: target.block_id,
@@ -1597,7 +1752,7 @@ document.querySelector("#clear-btn")!.addEventListener("click", async () => {
 
 window.addEventListener("keydown", (event) => {
   if (document.querySelector("dialog[open]")) return;
-  if (boardView === "replies" && mode === "focus") return;
+  if (boardView !== "ideas" && mode === "focus") return;
   const typing =
     event.target instanceof HTMLInputElement ||
     event.target instanceof HTMLTextAreaElement ||

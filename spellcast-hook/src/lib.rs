@@ -1,4 +1,4 @@
-//! Loopback-only Codex hook helper. Never reads prompts, transcripts, or project files.
+//! Loopback-only native hook helper. Never reads prompts, transcripts, or project files.
 
 mod cache;
 mod diag;
@@ -24,20 +24,28 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Host {
+    #[default]
+    Codex,
+    Claude,
+    Invalid,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub host: Host,
     pub endpoint: String,
     pub state_dir: Option<PathBuf>,
-    pub runner_path: Option<PathBuf>,
     pub timeout: Duration,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            host: Host::Codex,
             endpoint: DEFAULT_ENDPOINT.into(),
             state_dir: None,
-            runner_path: None,
             timeout: Duration::from_millis(HTTP_TIMEOUT_MS),
         }
     }
@@ -69,13 +77,17 @@ pub fn parse_config(
     } else if let Some(dir) = env_val(&env, "CLAUDE_PLUGIN_DATA") {
         cfg.state_dir = Some(PathBuf::from(dir).join("spellcast-hook"));
     }
-    if let Some(root) = env_val(&env, "PLUGIN_ROOT") {
-        cfg.runner_path = Some(PathBuf::from(root).join("hooks").join("claude-observer-runner.mjs"));
-    }
     let mut args = args.into_iter();
     let _exe = args.next();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--host" => {
+                cfg.host = match args.next().as_deref() {
+                    Some("codex") => Host::Codex,
+                    Some("claude") => Host::Claude,
+                    _ => Host::Invalid,
+                };
+            }
             "--endpoint" => {
                 if let Some(value) = args.next() {
                     cfg.endpoint = value;
@@ -97,6 +109,22 @@ pub fn parse_config(
         }
     }
     cfg
+}
+
+/// Only the native hyphenated UUID form is an origin. Never trim or infer an ID.
+fn claude_source_id(session_id: &str) -> Option<String> {
+    if session_id.len() != 36
+        || !session_id.bytes().enumerate().all(|(i, b)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                b == b'-'
+            } else {
+                b.is_ascii_hexdigit()
+            }
+        })
+    {
+        return None;
+    }
+    Some(format!("claude:{}", session_id.to_ascii_lowercase()))
 }
 
 pub fn hook_json(event_name: &str, context: &str) -> String {
@@ -154,7 +182,7 @@ fn run_inner(
         diag.parse = diag::ParseOutcome::EmptyStdin;
         return None;
     }
-    let event = match classify_event(&buf) {
+    let mut event = match classify_event(&buf) {
         EventParse::Ok(event) => event,
         EventParse::Unsupported { event_name } => {
             diag.parse = diag::ParseOutcome::Unsupported;
@@ -176,6 +204,22 @@ fn run_inner(
         diag.child_skip = Some(skip);
         return None;
     }
+    let source_id = match cfg.host {
+        Host::Codex => None,
+        Host::Claude => {
+            let Some(source_id) = claude_source_id(&event.session_id) else {
+                diag.parse = diag::ParseOutcome::Fail;
+                return None;
+            };
+            // Preserve the Codex cache key; Claude has a separate canonical namespace.
+            event.session_id = source_id.clone();
+            Some(source_id)
+        }
+        Host::Invalid => {
+            diag.parse = diag::ParseOutcome::Fail;
+            return None;
+        }
+    };
     let status = match fetch_status(&cfg.endpoint, cfg.timeout) {
         Ok(status) => {
             diag.http = diag::HttpOutcome::Ok;
@@ -205,9 +249,10 @@ fn run_inner(
         }
         (Action::Bootstrap, _) => {
             let mut context = BOOTSTRAP.trim().to_string();
-            if let Some(path) = cfg.runner_path.as_ref().filter(|path| path.is_file()) {
-                context.push_str("\nCLAUDE_OBSERVER_RUNNER_PATH=");
-                context.push_str(&serde_json::to_string(&path.to_string_lossy()).ok()?);
+            if let Some(source_id) = source_id {
+                context.push_str("\nSPELLCAST_SOURCE_ID=");
+                context.push_str(&serde_json::to_string(&source_id).ok()?);
+                context.push_str("\n当前宿主为 Claude。checkpoint、Canvas 与其他 Spellcast 原生 MCP 调用均使用上述稳定 SPELLCAST_SOURCE_ID 作为 source_id；仅在需要 source_id 的参数中填写。Observer 的判断 provider 与宿主来源相互独立：无论 provider=claude 或 provider=codex，都不得改写该 source_id。不要从 cwd、模型、最新会话或历史推断其他来源。");
             }
             Some((event.hook_event_name.clone(), context))
         }
@@ -236,9 +281,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = Config {
+            host: Host::Codex,
             endpoint: "http://127.0.0.1:1/api/observer/status".into(),
             state_dir: Some(dir.clone()),
-            runner_path: None,
             timeout: Duration::from_millis(50),
         };
         let mut logged = 0;
@@ -290,9 +335,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = Config {
+            host: Host::Codex,
             endpoint: "http://127.0.0.1:1/api/observer/status".into(),
             state_dir: Some(dir.clone()),
-            runner_path: None,
             timeout: Duration::from_millis(50),
         };
         let parent = br#"{"hook_event_name":"SessionStart","session_id":"s","parent_session_id":"PARENT-SECRET-XYZ","source":"startup"}"#;
@@ -364,9 +409,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = Config {
+            host: Host::Codex,
             endpoint: serve_on_status(),
             state_dir: Some(dir.clone()),
-            runner_path: None,
             timeout: Duration::from_millis(400),
         };
         let start = br#"{"hook_event_name":"SessionStart","session_id":"s","source":"startup"}"#;

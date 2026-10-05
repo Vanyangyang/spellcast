@@ -10,7 +10,7 @@ Running a **prebuilt** plugin package with the default Codex observer does not r
 - MCP `.mcp.json` points at the same Spellcast instance as the hook `--endpoint`.
 - Canonical Skill: `skills/spellcast/SKILL.md`.
 - Hooks: `hooks/hooks.json` for `SessionStart` and `UserPromptSubmit` only.
-- Optional `hooks/claude-observer-runner.mjs` starts a fresh, headless Claude Code print-mode process. It uses no Herdr workspace or Claude Supervisor session. The installed guard verifies the dedicated `127.0.0.1:17891` route and the exact `claude.exe` firewall rule before and after the run; failures produce no bubble.
+- Optional `hooks/claude-observer-runner.mjs` starts a fresh, headless Claude Code print-mode process. It uses no Herdr workspace or Claude Supervisor session. The installed guard verifies the configured `127.0.0.1:7897` proxy and the exact `claude.exe` firewall rule before and after the run; failures produce no bubble. Verge controls the exit through its normal rules.
 
 Hook stdout is native context output only. It is not a `spellcast_checkpoint` receipt, not observer complete, and not proof the model read the text.
 

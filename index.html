@@ -6,13 +6,14 @@
     <title>Spellcast</title>
     <!-- Fonts ship with the app (src/fonts.css) so online and offline render the same. -->
   </head>
-  <body class="mode-ambient">
+  <body class="mode-ambient" data-theme="light">
     <div id="desktop" class="desktop" aria-hidden="true"></div>
     <div id="app">
       <div id="stage">
         <canvas id="spatial" hidden></canvas>
         <div id="plane"></div>
         <div id="reply-stage" hidden></div>
+        <div id="sigil-stage" hidden></div>
         <div id="empty" class="empty chrome-focus">
           <p class="eyebrow" data-i18n="empty.eyebrow"></p>
           <h1 data-i18n="empty.title"></h1>
@@ -33,6 +34,7 @@
           <button type="button" id="view-ideas" class="ghost" data-board-text="ideas"></button>
         </nav>
         <button type="button" id="projects-open" class="ghost"></button>
+        <button type="button" id="sigils-open" class="ghost" aria-pressed="false" aria-controls="sigil-stage"></button>
         <nav id="forms" class="forms chrome-focus" data-i18n-aria="forms.aria"></nav>
         <p id="topic" class="topic chrome-focus"></p>
         <div class="top-tools">
@@ -89,7 +91,19 @@
             <div class="composer-route-options" id="recipient-picker" hidden>
               <label class="composer-route-field"><span id="recipient-workspace-label"></span><select id="recipient-workspace"></select></label>
               <label class="composer-route-field"><span id="recipient-label"></span><select id="recipient" disabled></select></label>
+              <button type="button" class="ghost" id="recipient-new-chat"></button>
             </div>
+          </div>
+          <div class="composer-actions">
+          <details id="canvas-game-design" class="composer-game-design" hidden>
+            <summary id="canvas-game-design-toggle"></summary>
+            <div class="composer-game-design-panel">
+              <p id="canvas-game-context"></p>
+              <button type="button" id="canvas-game-check"></button>
+              <p id="canvas-game-design-help"></p>
+            </div>
+          </details>
+          <button type="button" id="composer-expand" class="ghost" aria-controls="input" aria-expanded="false" disabled></button>
           </div>
         </div>
         <form id="talk">
@@ -106,11 +120,11 @@
 
       <!-- Left: choose the app, install, verify. Right: live connection, asides, recent activity. -->
       <div class="agent-connect">
-      <p class="hint agent-connect-lead" data-i18n="settings.body" data-setup-body></p>
+      <p class="hint agent-connect-lead" data-i18n="settings.body" data-setup-body hidden></p>
 
       <div id="agent-clients" class="agent-clients" data-i18n-aria="agent.connect">
         <button type="button" data-client="cursor">Cursor</button>
-        <button type="button" data-client="claude-code" disabled>Claude Code</button>
+        <button type="button" data-client="claude-code">Claude Code</button>
         <button type="button" data-client="codex">Codex</button>
         <button type="button" data-client="grok" disabled data-i18n="setup.client.grokSoon" data-i18n-title="setup.grokComing">Grok Build</button>
         <button type="button" data-client="windsurf" disabled>Windsurf</button>
@@ -130,6 +144,7 @@
             <li><span data-i18n="setup.mcpName"></span><span data-setup-component="mcp" class="setup-component-status">—</span></li>
             <li><span data-i18n="setup.skillName"></span><span data-setup-component="skill" class="setup-component-status">—</span></li>
             <li><span data-i18n="setup.hooksName"></span><span data-setup-component="hooks" class="setup-component-status">—</span></li>
+            <li data-setup-ccgui-row hidden><span data-i18n="setup.ccguiName"></span><span data-setup-component="ccgui" class="setup-component-status">—</span></li>
           </ul>
           <p class="agent-setup-checks-note" data-i18n="setup.checksScope"></p>
           <!-- Opened from the checks heading; the text it reveals follows the checks. -->
@@ -145,7 +160,7 @@
       <div class="agent-live">
         <div class="agent-status">
           <span id="agent-dot" class="agent-dot"></span>
-          <span id="agent-seen" data-i18n="agent.none"></span>
+          <div id="agent-seen" data-i18n="agent.none"></div>
         </div>
 
         <div class="agent-url">
@@ -170,22 +185,12 @@
           </span>
         </label>
         <p class="agent-observer-hint" data-i18n="observer.lead"></p>
-        <!-- The rest repeats Settings. Narrow windows fold it here; wide windows show it without the toggle. -->
-        <details id="agent-observer-details" class="observer-details">
-          <summary data-i18n="observer.details"></summary>
-          <ul class="observer-points">
-            <li data-i18n="observer.onMeans"></li>
-            <li data-i18n="observer.offMeans"></li>
-          </ul>
-          <p class="agent-observer-hint" data-i18n="observer.body"></p>
-        </details>
         <p id="agent-observer-error" class="hint has-warning" role="alert" hidden></p>
       </div>
 
-      <div class="agent-activity">
+      <div class="agent-activity" hidden>
         <span class="eyebrow" data-i18n="agent.activity"></span>
         <ol id="activity"></ol>
-        <p id="activity-empty" class="hint" data-i18n="agent.quiet"></p>
       </div>
       </div>
     </section>
@@ -270,14 +275,32 @@
         </section>
 
         <section class="settings-panel" id="settings-panel-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance" tabindex="0" hidden>
+        <section class="settings-startup" aria-labelledby="settings-startup-title">
+          <h3 id="settings-startup-title" data-i18n="startup.title"></h3>
+          <label class="startup-setting" for="autostart-enabled">
+            <input id="autostart-enabled" type="checkbox" aria-describedby="autostart-help autostart-status" disabled />
+            <span data-i18n="startup.label"></span>
+          </label>
+          <p id="autostart-help" class="hint" data-i18n="startup.help"></p>
+          <div class="startup-feedback">
+            <p id="autostart-status" class="hint" role="status"></p>
+            <button id="autostart-retry" class="ghost" type="button" data-i18n="startup.retry" hidden></button>
+          </div>
+        </section>
+
         <label class="theme-setting" for="theme-preference">
           <span data-i18n="theme.label"></span>
           <select id="theme-preference" data-theme-select>
-            <option value="dark" data-i18n="theme.dark"></option>
             <option value="light" data-i18n="theme.light"></option>
+            <option value="dark" data-i18n="theme.dark"></option>
             <option value="system" data-i18n="theme.system"></option>
           </select>
         </label>
+
+        <div class="theme-feedback">
+          <p id="theme-status" class="hint" role="status" hidden></p>
+          <button id="theme-retry" class="ghost" type="button" data-i18n="theme.retry" hidden></button>
+        </div>
 
         <section class="settings-typography" aria-labelledby="settings-typography-title">
           <h3 id="settings-typography-title" data-i18n="settings.fontTitle"></h3>
@@ -398,11 +421,6 @@
             </label>
           </div>
           <p class="settings-body" data-i18n="observer.lead"></p>
-          <ul class="observer-points">
-            <li data-i18n="observer.onMeans"></li>
-            <li data-i18n="observer.offMeans"></li>
-          </ul>
-          <p class="settings-body" data-i18n="observer.body"></p>
           <label class="observer-provider-label" for="settings-observer-provider" data-i18n="observer.provider"></label>
           <select id="settings-observer-provider" class="observer-provider-select">
             <option value="codex" data-i18n="observer.provider.codex"></option>
@@ -421,11 +439,12 @@
             <span id="settings-agent-dot" class="agent-dot" aria-hidden="true"></span>
             <div id="settings-agent-seen" data-i18n="agent.none"></div>
           </div>
-          <p class="settings-body" data-i18n="settings.body" data-setup-body></p>
+          <p class="settings-body" data-i18n="settings.body" data-setup-body hidden></p>
           <div class="setup-clients">
             <p class="setup-clients-label" data-i18n="agent.connect"></p>
             <div class="agent-clients">
               <button type="button" data-client="cursor">Cursor</button>
+              <button type="button" data-client="claude-code">Claude Code</button>
               <button type="button" data-client="codex">Codex</button>
               <button type="button" data-client="grok" disabled data-i18n="setup.client.grokSoon" data-i18n-title="setup.grokComing">Grok Build</button>
             </div>
@@ -464,6 +483,16 @@
               </div>
               <span data-setup-component="mcp" class="setup-component-status">—</span>
             </li>
+            <li data-setup-ccgui-row hidden>
+              <div>
+                <div class="setup-component-name">
+                  <strong data-i18n="setup.ccguiName"></strong>
+                  <span class="setup-component-term">CC GUI</span>
+                </div>
+                <p data-i18n="setup.ccguiDescription"></p>
+              </div>
+              <span data-setup-component="ccgui" class="setup-component-status">—</span>
+            </li>
           </ul>
           </details>
           <div class="setup-summary" aria-live="polite" aria-atomic="true">
@@ -492,7 +521,7 @@
         <label data-i18n="agent.connect"></label>
         <div id="settings-clients" class="agent-clients">
           <button type="button" data-client="cursor">Cursor</button>
-          <button type="button" data-client="claude-code" disabled>Claude Code</button>
+          <button type="button" data-client="claude-code">Claude Code</button>
           <button type="button" data-client="codex">Codex</button>
           <button type="button" data-client="grok" disabled data-i18n="setup.client.grokSoon" data-i18n-title="setup.grokComing">Grok Build</button>
           <button type="button" data-client="windsurf" disabled>Windsurf</button>

@@ -23,6 +23,47 @@ pub struct CodexBinding {
     pub bound_at_ms: u64,
 }
 
+/// Only the two historical Codex UUID namespaces identify the same native task.
+pub(crate) fn source_thread_id(source: &str) -> Option<&str> {
+    let id = if source.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("codex:")) {
+        &source[6..]
+    } else { source };
+    let bytes = id.as_bytes();
+    if bytes.len() != 36 || !bytes.iter().enumerate().all(|(i, byte)| {
+        if matches!(i, 8 | 13 | 18 | 23) { *byte == b'-' } else { byte.is_ascii_hexdigit() }
+    }) { return None; }
+    Some(id)
+}
+
+pub(crate) fn same_source(a: &str, b: &str) -> bool {
+    a == b || matches!((source_thread_id(a), source_thread_id(b)), (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
+}
+
+/// Prefer an exact binding, including rejecting a corrupt exact binding rather
+/// than falling through to another entry. Namespace aliases never select a
+/// binding for a different native thread and never create a stored binding.
+pub(crate) fn binding_for_source<'a>(bindings: &'a [CodexBinding], source: &str) -> Option<&'a CodexBinding> {
+    let valid = |binding: &&CodexBinding| source_thread_id(source)
+        .is_none_or(|thread| thread.eq_ignore_ascii_case(&binding.thread_id));
+    if let Some(binding) = bindings.iter().find(|binding| binding.source_id == source) {
+        return Some(binding).filter(valid);
+    }
+    let thread = source_thread_id(source)?;
+    bindings.iter().find(|binding| same_source(source, &binding.source_id)
+        && thread.eq_ignore_ascii_case(&binding.thread_id))
+}
+
+/// Feedback retains its original source spelling. Alias readers may consume it
+/// only when its captured native target does not contradict the UUID identity.
+pub(crate) fn event_for_source(event: &spellcast_core::AgentEvent, source: &str, bindings: &[CodexBinding]) -> bool {
+    let Some(event_source) = event.source_id.as_deref() else { return false; };
+    if event_source == source { return true; }
+    same_source(event_source, source) && match event.target_thread_id.as_deref() {
+        Some(target) => source_thread_id(source).is_some_and(|thread| thread.eq_ignore_ascii_case(target)),
+        None => binding_for_source(bindings, event_source).is_some(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CodexError {
     pub message: String,
@@ -248,6 +289,9 @@ pub async fn verify_binding(
     let thread_id = uuid::Uuid::parse_str(&thread_id)
         .map_err(|_| CodexError::new("需要原任务的实际 UUID，不能使用模型名或任务标签。", false))?
         .to_string();
+    if source_thread_id(&source_id).is_some_and(|encoded| !encoded.eq_ignore_ascii_case(&thread_id)) {
+        return Err(CodexError::new("来源 ID 与原任务 UUID 不一致，没有关联其他任务。", false));
+    }
     let executable = find_executable()?;
     let mut rpc = Rpc::open(&executable).await?;
     let result = async {

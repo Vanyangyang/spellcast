@@ -1,5 +1,6 @@
 import { currentLocale, onLocale } from "./i18n";
 import { gh } from "./i18n/game-home";
+import { csk } from "./i18n/canvas-source-skeleton";
 import { pt } from "./i18n/projects";
 import { bindCodexTask, fetchFeedbackState } from "./api";
 import type { CodexBinding } from "./types";
@@ -11,10 +12,14 @@ import {
 import { decideProjectAccess, fetchProjectAccess, fetchProjectObjects, fetchProjectRecords, type DevelopmentObject, type Project, type ProjectAccess, type WorkRecord } from "./project-record-api";
 import { createDocumentReview, documentFileUri, documentReviewRecords, DOCUMENT_DECISION_SCOPE, DOCUMENT_REVIEW_SCOPE, DOCUMENT_SELECTION_SCOPE, type DocumentMark } from "./project-document-review";
 import { badge, kindLabel, renderProposalCard, renderProposalReview, subjectLabel } from "./project-proposal-view";
+import { renderGameSkeleton } from "./project-game-skeleton";
+import type { GameSkeleton, SkeletonNode } from "./project-game-skeleton-model";
 import "./project-game-home.css";
 
 type Scale = "overview" | "experience" | "object";
-type Options = { openRecord(id: string): void; onChanged(): void; openTool(view: "planning" | "records"): void; openSourceTable(loop: import("./project-game-home-api").PlayerLoop, root: string): Promise<void> };
+type Options = { openRecord(id: string): void; onChanged(): void; openTool(view: "planning" | "records"): void;
+  openSkeleton(skeleton: GameSkeleton, documents: readonly GameDocument[], root: string, nodeId: string): Promise<void>;
+  openSourceTable(loop: import("./project-game-home-api").PlayerLoop, root: string): Promise<void> };
 type Draft = { text: string; target: string; withContext: boolean; pending?: { id: string; fingerprint: string } };
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text = "", className = "") => {
@@ -31,6 +36,10 @@ const readLocal = <T>(key: string): T | undefined => { try { const value = local
 const writeLocal = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* View state only. */ } };
 const date = (ms: number) => new Date(ms).toLocaleString(currentLocale() as string, { dateStyle: "short", timeStyle: "short" });
 const IN_FLIGHT = new Set(["waiting", "dispatching", "submitted", "received"]);
+const DESIGN_OVERVIEW = "Assets/Documents/GameDesign/Overview.md";
+const DESIGN_STRUCTURE = "Assets/Documents/GameDesign/ContentStructure.md";
+const DESIGN_MECHANICS = "Assets/Documents/GameDesign/Mechanics/README.md";
+const DESIGN_WORLDBUILDING = "Assets/Documents/GameDesign/Worldbuilding/README.md";
 
 function section(title: string, name: string, ...badges: HTMLElement[]) {
   const box = el("section", "", "gh-section"); box.dataset.ghSection = name;
@@ -57,14 +66,52 @@ export function createGameHome(options: Options) {
   let goals: Goal[] = [], proposals: ProjectProposal[] = [], objects: DevelopmentObject[] = [], records: WorkRecord[] = [], accesses: ProjectAccess[] = [], bindings: CodexBinding[] = [];
   let scale: Scale = "overview", zoneId = "", locationId = "", reviewing: string | undefined;
   let documentsOpen = false, documentQuery = "", documentFilter = "all";
+  let overviewMode: "design" | "implementation" = "design", skeletonSelectedId = "", skeletonQuery = "";
+  let skeletonView: ReturnType<typeof renderGameSkeleton> | undefined;
   let documentMarks: Record<string, DocumentMark> = {};
   let loading = false, zoneLoading = false, busy = false, error = "", zoneError = "", notice = "", epoch = 0, connectionOpen: boolean | undefined;
   let draft: Draft = { text: "", target: "", withContext: true };
+
+  const hasDesignOverview = () => !!overview?.documents?.some(item => item.path === DESIGN_OVERVIEW);
+  const designDocuments = () => overview?.documents || [];
+  const designEntry = (path: string, label: string, action: string) =>
+    button(label, () => void showDocument(path), action);
   let poll = 0;
+  let loadTask: Promise<void> | undefined;
   const key = (part: string) => `spellcast.game-home.v1.${project?.id}.${part}`;
   const setNotice = (text = "") => { notice = text; status.textContent = text; status.hidden = !text; };
   const saveDraft = () => writeLocal(key("composer"), draft);
-  const remember = () => writeLocal(key("view"), { scale, zoneId, locationId });
+  const remember = () => writeLocal(key("view"), { scale, zoneId, locationId, overviewMode, skeletonSelectedId, skeletonQuery });
+  const skeletonActive = () => scale === "overview" && overviewMode === "design" && !documentsOpen && !reviewing && !!overview?.skeleton;
+  const skeletonNode = (): SkeletonNode | undefined => overview?.skeleton?.model.nodes.find(node => node.id === skeletonSelectedId);
+  const proposalAtSkeleton = (proposal: ProjectProposal): boolean => {
+    if (!skeletonSelectedId) return false;
+    if (proposal.subject?.entity_kind === "design_node" && proposal.subject.entity_id === skeletonSelectedId) return true;
+    const goal = goals.find(item => item.id === proposal.goal_id);
+    return goal?.context.entity_kind === "design_node" && goal.context.entity_id === skeletonSelectedId;
+  };
+
+  function selectSkeleton(id: string) {
+    skeletonSelectedId = overview?.skeleton?.model.nodes.some(node => node.id === id) ? id : "";
+    remember(); render();
+    if (skeletonSelectedId) {
+      const heading = side.querySelector<HTMLElement>(".gs-detail-title");
+      if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+      side.scrollTop = 0;
+      if (window.matchMedia("(max-width: 1100px)").matches) side.scrollIntoView({ block: "start" });
+      else main.querySelector(".gs-branch")?.scrollIntoView({ block: "nearest" });
+    } else { main.scrollTop = 0; main.querySelector(".gs-map")?.scrollIntoView({ block: "start" }); }
+  }
+
+  function discussSkeleton(id: string, intent: "develop" | "question") {
+    const node = overview?.skeleton?.model.nodes.find(item => item.id === id); if (!node) return;
+    skeletonSelectedId = id; draft.withContext = true;
+    if (!draft.text.trim()) draft.text = gh(intent === "develop" ? "developSkeletonNode" : "questionSkeletonNode", { name: node.title });
+    remember(); saveDraft(); renderComposer();
+    const input = composer.querySelector<HTMLTextAreaElement>("[data-gh-goal]");
+    input?.focus(); input?.setSelectionRange(input.value.length, input.value.length);
+    composer.scrollIntoView({ block: "nearest" });
+  }
 
   function root(): string { return connection?.root || project?.aliases[0] || ""; }
   function sortedBindings(): CodexBinding[] {
@@ -77,6 +124,13 @@ export function createGameHome(options: Options) {
   function context(): GoalContext {
     const empty: GoalContext = { scale: "", zone_id: "", location_id: "", entity_kind: "", entity_id: "", label: "", source_revision: "", sources: [] };
     if (!draft.withContext) return empty;
+    if (skeletonActive() && overview?.skeleton) {
+      const node = skeletonNode();
+      const documents = (node?.sources || []).map(path => overview?.documents.find(item => item.path === path)).filter((item): item is GameDocument => !!item);
+      const sources = [overview.skeleton.source, ...documents.slice(0, 95).map(({ path, hash }) => ({ path, hash }))];
+      return { ...empty, scale: "overview", entity_kind: node ? "design_node" : "game_skeleton", entity_id: node?.id || "",
+        label: node?.title || gh("skeletonTitle"), source_revision: overview.skeleton.source.hash, sources };
+    }
     if (scale === "overview" || !zone) {
       const sources = [overview?.loop?.source, overview?.world?.source].filter((value): value is SourceStamp & { heading?: string } => !!value).map(({ path, hash }) => ({ path, hash }));
       return { ...empty, scale: "overview", label: gh("scaleOverview"), source_revision: overview?.source_revision || "", sources };
@@ -98,6 +152,7 @@ export function createGameHome(options: Options) {
       waiting: gh("waiting", { label }), dispatching: gh("dispatching"), submitted: gh("submitted"), received: gh("received"), responded: goal.context.entity_kind === "document_question" ? gh("respondedDocument") : gh("responded"),
       handled: gh("handled"), unanswered: gh("unanswered"), failed: gh("failed", { error: delivery.error || "—" }), unknown: gh("unknown", { error: delivery.error || "—" }),
       queued: gh("waiting", { label }),
+      executing: gh("executing"), awaiting_permission: gh("awaitingPermission"), completed: gh("completed"),
     }[delivery.phase] || delivery.phase;
     const tone = delivery.phase === "failed" || delivery.phase === "unknown" || delivery.phase === "unanswered" ? "warning" : delivery.phase === "responded" || delivery.phase === "handled" ? "done" : "live";
     return { text: delivery.attention ? `${text} · ${gh("attention", { text: delivery.attention })}` : text, tone };
@@ -119,7 +174,11 @@ export function createGameHome(options: Options) {
     if (failure) error = message(failure.reason);
   }
 
-  async function load(refresh = false) {
+  function load(refresh = false): Promise<void> {
+    loadTask = loadCurrent(refresh);
+    return loadTask;
+  }
+  async function loadCurrent(refresh = false) {
     if (!project) return;
     const version = ++epoch, projectId = project.id;
     loading = true; error = ""; render();
@@ -131,6 +190,7 @@ export function createGameHome(options: Options) {
       if (connection) {
         overview = await fetchGameOverview(projectId, refresh);
         if (version !== epoch) return;
+        if (skeletonSelectedId && !overview.skeleton?.model.nodes.some(node => node.id === skeletonSelectedId)) { skeletonSelectedId = ""; remember(); }
         // The overview just refreshed both caches; the zone reads the same snapshot incrementally.
         if (scale !== "overview" && zoneId) await loadZone(zoneId, false, version);
       } else { overview = undefined; zone = undefined; }
@@ -181,6 +241,7 @@ export function createGameHome(options: Options) {
     if (connectionOpen) { connectionOpen = false; renderTop(); top.querySelector<HTMLElement>("[data-gh-connection-toggle]")?.focus(); return true; }
     if (reviewing) { reviewing = undefined; render(); main.querySelector<HTMLElement>("h3")?.focus(); return true; }
     if (documentsOpen) { documentsOpen = false; render(); main.querySelector<HTMLElement>("h3")?.focus(); return true; }
+    if (skeletonActive() && skeletonSelectedId) { selectSkeleton(skeletonNode()?.parent_id || ""); return true; }
     if (scale === "object") { go("experience"); return true; }
     if (scale === "experience") { go("overview"); return true; }
     return false;
@@ -290,14 +351,25 @@ export function createGameHome(options: Options) {
     renderTop(); renderComposer(); renderMain(); renderSide();
     element.dataset.scale = reviewing ? "review" : scale;
     element.dataset.documents = String(documentsOpen);
+    element.dataset.skeleton = String(skeletonActive());
+    element.dataset.skeletonSelected = String(!!skeletonNode());
   }
   /** Background refreshes never replace what the user is typing or editing. */
   function renderQuiet() {
-    renderTop(); renderSide();
+    const mainScroll = main.scrollTop, sideScroll = side.scrollTop, bodyScroll = body.scrollTop;
+    const collaborationOpen = side.querySelector<HTMLDetailsElement>(".gh-skeleton-collaboration")?.open;
+    const sourceDisclosures = new Set([...side.querySelectorAll<HTMLDetailsElement>("details[data-gs-disclosure][open]")].map(element => element.dataset.gsDisclosure));
+    renderTop();
     if (!main.querySelector(".gh-proposal-editor, .gh-note") && !main.contains(document.activeElement)) renderMain();
+    renderSide();
     if (!composer.contains(document.activeElement)) renderComposer();
     element.dataset.scale = reviewing ? "review" : scale;
     element.dataset.documents = String(documentsOpen);
+    element.dataset.skeleton = String(skeletonActive());
+    element.dataset.skeletonSelected = String(!!skeletonNode());
+    if (collaborationOpen) { const panel = side.querySelector<HTMLDetailsElement>(".gh-skeleton-collaboration"); if (panel) panel.open = true; }
+    for (const panel of side.querySelectorAll<HTMLDetailsElement>("details[data-gs-disclosure]")) panel.open = sourceDisclosures.has(panel.dataset.gsDisclosure);
+    main.scrollTop = mainScroll; side.scrollTop = sideScroll; body.scrollTop = bodyScroll;
   }
 
   function renderTop() {
@@ -306,8 +378,8 @@ export function createGameHome(options: Options) {
     const crumb = (text: string, active: boolean, action: () => void, name: string) => {
       const node = button(text, action, name); node.setAttribute("aria-current", String(active)); return node;
     };
-    crumbs.append(crumb(`${gh("scaleOverview")}${overview?.world?.name ? ` · ${overview.world.name}` : ""}`, scale === "overview" && !reviewing && !documentsOpen, () => { documentsOpen = false; go("overview"); }, "scale-overview"));
-    if (documentsOpen) crumbs.append(el("span", "›"), crumb(gh("documentBoard"), true, () => {}, "documents"));
+    crumbs.append(crumb(overview?.skeleton ? gh("skeletonTitle") : `${gh("scaleOverview")}${overview?.world?.name ? ` · ${overview.world.name}` : ""}`, scale === "overview" && !reviewing && !documentsOpen, () => { documentsOpen = false; overviewMode = "design"; skeletonSelectedId = ""; go("overview"); }, "scale-overview"));
+    if (documentsOpen) crumbs.append(el("span", "›"), crumb(gh(overview?.skeleton ? "sourceLibrary" : hasDesignOverview() ? "designAndMechanics" : "documentBoard"), true, () => {}, "documents"));
     if (zone && scale !== "overview") crumbs.append(el("span", "›"), crumb(`${gh("scaleExperience")} · ${zone.view.zone.name}`, scale === "experience" && !reviewing, () => go("experience"), "scale-experience"));
     const node = location();
     if (node && scale === "object") crumbs.append(el("span", "›"), crumb(`${gh("scaleObject")} · ${node.name}`, !reviewing, () => go("object"), "scale-object"));
@@ -377,7 +449,7 @@ export function createGameHome(options: Options) {
     label.append(el("span", gh("composerLabel")), input);
     const row = el("div", "", "gh-composer-row");
     const ctx = context();
-    const chip = button(draft.withContext ? (ctx.scale === "overview" ? gh("contextOverview") : gh(ctx.scale === "object" ? "contextObject" : "contextExperience", { name: ctx.label })) : gh("contextNone"),
+    const chip = button(draft.withContext ? (ctx.entity_kind === "design_node" ? gh("contextObject", { name: ctx.label }) : ctx.scale === "overview" ? gh("contextOverview") : gh(ctx.scale === "object" ? "contextObject" : "contextExperience", { name: ctx.label })) : gh("contextNone"),
       () => { draft.withContext = !draft.withContext; saveDraft(); renderComposer(); }, "toggle-context", "gh-chip");
     chip.setAttribute("aria-pressed", String(draft.withContext)); chip.title = draft.withContext ? gh("dropContext") : gh("useContext");
     const available = sortedBindings();
@@ -417,6 +489,10 @@ export function createGameHome(options: Options) {
   /** Deterministic starting points from the projection. They only fill the input box. */
   function suggest(): string[] {
     if (!overview) return [];
+    if (skeletonActive()) {
+      const node = skeletonNode();
+      return node ? [gh("developSkeletonNode", { name: node.title }), gh("questionSkeletonNode", { name: node.title })] : [gh("suggestSkeleton")];
+    }
     const items: string[] = [];
     if (scale === "object" && location()) items.push(gh("suggestObject", { name: location()!.name }));
     else if (scale === "experience" && zone) items.push(gh("suggestZone", { zone: zone.view.zone.name }));
@@ -432,6 +508,7 @@ export function createGameHome(options: Options) {
 
   function renderMain() {
     main.replaceChildren();
+    skeletonView = undefined;
     if (!project) return;
     if (error) { const alert = el("p", error, "gh-alert"); alert.setAttribute("role", "alert"); main.append(alert, button(gh("retry"), () => void load(false), "retry")); }
     if (reviewing) {
@@ -467,6 +544,33 @@ export function createGameHome(options: Options) {
 
   function renderOverview() {
     const data = overview!;
+    const skeletonIssue = data.issues.find(issue => issue.path === "Assets/Documents/GameDesign/Skeleton.json" && issue.severity === "error");
+    if (data.skeleton || skeletonIssue) {
+      const tabs = el("nav", "", "gh-overview-modes"); tabs.setAttribute("aria-label", gh("overviewMode"));
+      if (data.skeleton) {
+        const open = button(csk("openCanvas"), () => {
+          open.disabled = true;
+          void options.openSkeleton(data.skeleton!, data.documents, root(), skeletonSelectedId)
+            .catch(failure => setNotice(`${gh("error")}：${message(failure)}`)).finally(() => { open.disabled = false; });
+        }, "open-skeleton-canvas", "primary");
+        tabs.append(open);
+      }
+      for (const [mode, title] of [["design", gh("skeletonTitle")], ["implementation", gh("implementationView")]] as const) {
+        const tab = button(title, () => { overviewMode = mode; documentsOpen = false; remember(); render(); main.scrollTop = 0; }, `overview-${mode}`);
+        tab.setAttribute("aria-pressed", String(overviewMode === mode)); tabs.append(tab);
+      }
+      main.append(tabs);
+      if (overviewMode === "design") {
+        if (data.skeleton) {
+          skeletonView = renderGameSkeleton({ skeleton: data.skeleton, documents: data.documents, selectedId: skeletonSelectedId, query: skeletonQuery,
+            onSelect: selectSkeleton, onQuery: value => { skeletonQuery = value; remember(); }, onDiscuss: discussSkeleton,
+            onSource: path => void showDocument(path) });
+          main.append(skeletonView.map);
+          if (skeletonSelectedId) proposalsFor(proposalAtSkeleton, main);
+        } else { const alert = el("p", `${gh("skeletonUnavailable")} ${skeletonIssue!.message}`, "gh-alert"); alert.setAttribute("role", "alert"); main.append(alert); }
+        return;
+      }
+    }
     const intro = el("section", "", "gh-intro");
     const title = el("h3", data.world?.name || project!.name); title.tabIndex = -1;
     intro.append(title, el("p", gh("scaleHint"), "gh-muted"));
@@ -476,9 +580,21 @@ export function createGameHome(options: Options) {
     }
     main.append(intro);
 
-    const documentEntry = section(gh("documentBoard"), "documents-entry", badge(String(data.documents?.length || 0), "design"));
-    documentEntry.append(el("p", gh("documentHelp"), "gh-muted"), button(gh("openDocuments", { count: data.documents?.length || 0 }), () => { documentsOpen = true; render(); main.scrollTop = 0; }, "open-documents", "primary"));
+    const currentDesign = hasDesignOverview();
+    if (!data.skeleton && !skeletonIssue) {
+    const documentEntry = section(gh(currentDesign ? "designAndMechanics" : "documentBoard"), "documents-entry", badge(String(data.documents?.length || 0), "design"));
+    documentEntry.append(el("p", gh(currentDesign ? "designEntryHelp" : "documentHelp"), "gh-muted"));
+    if (currentDesign) {
+      const links = el("div", "", "gh-design-links");
+      links.append(designEntry(DESIGN_OVERVIEW, gh("designOverview"), "read-design-overview"));
+      if (designDocuments().some(item => item.path === DESIGN_STRUCTURE)) links.append(designEntry(DESIGN_STRUCTURE, gh("designStructure"), "read-design-structure"));
+      if (designDocuments().some(item => item.path === DESIGN_MECHANICS)) links.append(designEntry(DESIGN_MECHANICS, gh("designMechanics"), "read-design-mechanic"));
+      if (designDocuments().some(item => item.path === DESIGN_WORLDBUILDING)) links.append(designEntry(DESIGN_WORLDBUILDING, gh("designWorldbuilding"), "read-design-worldbuilding"));
+      documentEntry.append(links);
+    }
+    documentEntry.append(button(currentDesign ? gh("browseDesignSources") : gh("openDocuments", { count: data.documents?.length || 0 }), () => { documentsOpen = true; render(); main.scrollTop = 0; }, "open-documents", "primary"));
     main.append(documentEntry);
+    }
 
     const loop = section(gh("loopTitle"), "loop", badge(gh("designBadge"), "design"));
     if (data.loop) {
@@ -492,7 +608,7 @@ export function createGameHome(options: Options) {
       const thead = el("thead"); thead.append(head); const tbody = el("tbody");
       for (const row of data.loop.rows) { const tr = el("tr"); row.forEach(cell => tr.append(el("td", cell))); tbody.append(tr); }
       table.append(thead, tbody); loop.append(table, sourceLine(data.loop.source), el("small", gh("designNote"), "gh-muted"));
-    } else loop.append(el("p", gh("loopNone", { path: "Assets/Documents/Atlas/domains/cycle.md" }), "gh-unknown"));
+    } else loop.append(el("p", gh("loopNone", { path: DESIGN_OVERVIEW }), "gh-unknown"));
     main.append(loop);
 
     const explorable = section(gh("explorable"), "explorable", badge(gh("configBadge"), "config"));
@@ -537,15 +653,17 @@ export function createGameHome(options: Options) {
 
   function renderDocuments() {
     const documents = overview?.documents || [];
-    const board = section(gh("documentBoard"), "documents", badge(gh("documentScope"), "design"));
-    board.append(el("p", gh("documentHelp"), "gh-muted"));
+    const currentDesign = hasDesignOverview();
+    const library = !!overview?.skeleton;
+    const board = section(gh(library ? "sourceLibrary" : currentDesign ? "designAndMechanics" : "documentBoard"), "documents", badge(gh("documentScope"), "design"));
+    board.append(el("p", gh(library ? "sourceLibraryHelp" : currentDesign ? "designEntryHelp" : "documentHelp"), "gh-muted"));
     const actions = el("div", "", "gh-actions");
     actions.append(button(gh("back"), () => { documentsOpen = false; render(); }, "back-overview"));
     board.append(actions, el("small", gh("documentLocal"), "gh-muted"));
     const controls = el("div", "", "gh-document-controls");
     const search = el("input"); search.type = "search"; search.placeholder = gh("documentSearch"); search.setAttribute("aria-label", gh("documentSearch"));
     search.value = documentQuery; search.dataset.ghDocumentSearch = "true";
-    const filter = el("select"); filter.setAttribute("aria-label", gh("documentBoard")); filter.dataset.ghDocumentFilter = "true";
+    const filter = el("select"); filter.setAttribute("aria-label", gh(library ? "sourceLibrary" : currentDesign ? "designAndMechanics" : "documentBoard")); filter.dataset.ghDocumentFilter = "true";
     for (const [value, label] of [["all", gh("documentAll")], ["comments", gh("documentWithComments")], ["discarded", gh("documentWithDiscarded")]]) {
       const option = el("option", label); option.value = value; filter.append(option);
     }
@@ -556,14 +674,21 @@ export function createGameHome(options: Options) {
     const byGroup = new Map<string, GameDocument[]>();
     for (const item of documents) {
       const parts = item.path.split("/");
-      const group = parts[2] === "Content" && parts[3] === "Regions" && parts.length > 5
+      const group = currentDesign && parts[2] === "GameDesign" ?
+        parts[3] === "Mechanics" ? gh("designMechanics") : parts[3] === "Worldbuilding" ? gh("designWorldbuilding") :
+          parts[3] === "ConfigReference" ? gh("designProduction") : gh("designContent")
+        : currentDesign && parts[2] === "Development" ? gh("designEngineering")
+        : parts[2] === "Content" && parts[3] === "Regions" && parts.length > 5
         ? `${parts[2]} / ${parts[3]} / ${parts[4]}`
         : parts.length > 4 ? `${parts[2]} / ${parts[3]}` : parts[2] || gh("documentScope");
       const rows = byGroup.get(group) || []; rows.push(item); byGroup.set(group, rows);
     }
     const indexed: Array<{ item: GameDocument; row: HTMLElement; group: HTMLDetailsElement }> = [];
     const empty = el("p", gh("documentEmpty"), "gh-muted"); empty.hidden = true;
-    for (const [name, items] of [...byGroup].sort(([left], [right]) => left.localeCompare(right))) {
+    const groupOrder = [gh("designMechanics"), gh("designWorldbuilding"), gh("designContent"), gh("designProduction"), gh("designEngineering")];
+    for (const [name, items] of [...byGroup].sort(([left], [right]) => currentDesign
+      ? (groupOrder.indexOf(left) < 0 ? groupOrder.length : groupOrder.indexOf(left)) - (groupOrder.indexOf(right) < 0 ? groupOrder.length : groupOrder.indexOf(right)) || left.localeCompare(right)
+      : left.localeCompare(right))) {
       const group = el("details", "", "gh-document-group");
       const summary = el("summary"); const visibleCount = el("small", String(items.length));
       summary.append(el("strong", name), visibleCount); group.append(summary);
@@ -808,6 +933,18 @@ export function createGameHome(options: Options) {
   function renderSide() {
     side.replaceChildren();
     if (!project) return;
+    if (skeletonActive() && skeletonView) {
+      const selected = skeletonNode();
+      if (selected) {
+        const nav = el("div", "", "gh-skeleton-detail-nav");
+        const parent = overview?.skeleton?.model.nodes.find(node => node.id === selected.parent_id);
+        nav.append(button(parent ? gh("skeletonUp", { name: parent.title }) : gh("skeletonAll"), () => selectSkeleton(parent?.id || ""), "skeleton-up"));
+        if (parent) nav.append(button(gh("skeletonAll"), () => selectSkeleton(""), "skeleton-root"));
+        side.append(nav);
+      }
+      if (selected) side.append(skeletonView.detail);
+      renderAdoptedSkeletonContent();
+    }
     const heading = el("h3", gh("currentWork")); side.append(heading);
     const review = el("section", "", "gh-side-section"); review.dataset.ghSide = "proposals";
     const open = proposals.filter(proposal => proposal.status === "open");
@@ -849,6 +986,27 @@ export function createGameHome(options: Options) {
       row.append(button(gh("openRecord"), () => options.openRecord(record.id), "open-record")); work.append(row);
     }
     side.append(work);
+    if (skeletonActive()) {
+      const collaboration = el("details", "", "gh-skeleton-collaboration");
+      collaboration.append(el("summary", gh("skeletonCollaboration", { count: open.length })));
+      collaboration.append(heading, review, goalBox, work); side.append(collaboration);
+    }
+  }
+
+  function renderAdoptedSkeletonContent() {
+    if (!skeletonSelectedId) return;
+    const adoptedIds = new Set(proposals.filter(proposalAtSkeleton)
+      .flatMap(proposal => proposal.items.filter(item => item.status === "adopted" && item.target === "object").map(item => item.target_id)));
+    const adopted = objects.filter(object => adoptedIds.has(object.id) && !object.archived);
+    if (!adopted.length) return;
+    const box = section(gh("skeletonAdopted"), "skeleton-adopted");
+    for (const object of adopted) {
+      const card = el("article", "", "gh-record"); card.append(el("strong", object.name));
+      if (object.planning?.body) card.append(el("p", object.planning.body, "gh-prose"));
+      for (const part of object.planning?.sections || []) card.append(el("p", part.text, "gh-prose"));
+      box.append(card);
+    }
+    side.append(box);
   }
 
   function decodeSafe(uri: string) { try { return decodeURI(uri).replaceAll("\\", "/"); } catch { return uri.replaceAll("\\", "/"); } }
@@ -864,15 +1022,23 @@ export function createGameHome(options: Options) {
 
   return {
     element,
+    async canvasSource() {
+      if (loadTask) await loadTask;
+      return overview?.skeleton && connection ? { skeleton: overview.skeleton, documents: overview.documents, root: connection.root } : null;
+    },
+    showSources() { reviewing = undefined; scale = "overview"; documentsOpen = true; render(); main.scrollTop = 0; },
+    showGame() { documentsOpen = false; render(); },
     async setProject(next: Project | undefined) {
       if (project?.id === next?.id) { project = next; if (next && connection === undefined && !loading) await load(false); return; }
       documentViewer?.dispose(); documentViewer = undefined; if (sourceDialog.open) sourceDialog.close();
       window.clearTimeout(poll); ++epoch;
       project = next; connection = undefined; overview = undefined; zone = undefined; goals = []; proposals = []; objects = []; records = []; accesses = []; bindings = [];
       reviewing = undefined; documentsOpen = false; documentQuery = ""; documentFilter = "all"; error = ""; zoneError = ""; setNotice("");
+      overviewMode = "design"; skeletonSelectedId = ""; skeletonQuery = ""; skeletonView = undefined;
       documentMarks = project ? readLocal<Record<string, DocumentMark>>(key("doc-marks")) || {} : {};
-      const saved = project ? readLocal<{ scale: Scale; zoneId: string; locationId: string }>(key("view")) : undefined;
+      const saved = project ? readLocal<{ scale: Scale; zoneId: string; locationId: string; overviewMode?: "design" | "implementation"; skeletonSelectedId?: string; skeletonQuery?: string }>(key("view")) : undefined;
       scale = saved?.scale || "overview"; zoneId = saved?.zoneId || ""; locationId = saved?.locationId || "";
+      overviewMode = saved?.overviewMode === "implementation" ? "implementation" : "design"; skeletonSelectedId = saved?.skeletonSelectedId || ""; skeletonQuery = saved?.skeletonQuery || "";
       if (scale !== "overview" && !zoneId) scale = "overview";
       draft = { text: "", target: "", withContext: true, ...(project ? readLocal<Draft>(key("composer")) : {}) };
       render();

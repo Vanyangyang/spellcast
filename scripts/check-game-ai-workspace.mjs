@@ -11,7 +11,8 @@
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {spawn} from 'node:child_process';
-import {mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {homedir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -34,6 +35,23 @@ const documents=[
   {...src('Assets/Documents/Content/Regions/YongshengForest/ZoneDesign.md','d'),title:'神祠设计<img src=x onerror="window.injected=9">',lines:84,headings:4,identifiers:8},
   {...src('Assets/Documents/Standards/Battle-Standards.md','e'),title:'战斗标准',lines:45,headings:3,identifiers:1},
 ];
+
+// A small authored shape exercises the map without copying private game material into this fixture.
+const skeletonSystems=['世界与地图','探索','战斗','角色成长','任务','经济','装备','社交','叙事','结算'].map((title,index)=>({
+  id:`system_${index+1}`,kind:'system',title,summary:`${title}的规则入口`,state:'rules_preserved',sources:['Assets/Documents/GameDesign/Mechanics/README.md']}));
+const syntheticSkeleton={schema_version:1,title:'游戏结构',description:'可选择的设计骨架',entry_ids:skeletonSystems.map(node=>node.id),
+  loop:['进入','探索','遭遇','成长','推进','结算'].map((title,index)=>({id:`stage_${index+1}`,title,summary:`${title}阶段`,node_ids:[skeletonSystems[index].id]})),
+  nodes:[...skeletonSystems,
+    {id:'region_fixture',kind:'region',title:'示例区域',summary:'区域结构',parent_id:'system_1',state:'world_basis',sources:['Assets/Documents/GameDesign/Worldbuilding/README.md']},
+    {id:'shape_fixture',kind:'structure',title:'示例关卡形状',summary:'关卡路径待填',parent_id:'region_fixture',state:'structure_only',sources:['Assets/Documents/GameDesign/ContentStructure.md']},
+    {id:'condition_fixture',kind:'rule',title:'深入条件',summary:'进入下一层的条件',parent_id:'shape_fixture',state:'needs_reconciliation',steps:[{title:'判定',text:'满足条件后开放路线'}],sources:['Assets/Documents/GameDesign/Mechanics/README.md'],
+      rule:{trigger:['到达入口'],conditions:['路线开放'],effects:['允许继续探索'],exceptions:['失败时不扣资源'],formulas:['stageScore = base + progress'],conflicts:['成功与领奖是两个时点，旧稿的描述有分歧。']},
+      provenance:[{path:'Assets/Documents/Content/RetiredExample.md',hash:H('8'),start_line:7,end_line:8,quote:'历史证据 <img src=x onerror="window.injected=10">',archived:true}]},
+    ...Array.from({length:30},(_,index)=>({id:`reference_fixture_${index}`,kind:'reference',title:`制作约束 ${index+1}`,summary:'辅助制作规则',parent_id:'system_10',state:'supporting_reference',sources:[]}))],
+  relations:[{from:'region_fixture',to:'shape_fixture',label:'包含'},{from:'shape_fixture',to:'condition_fixture',label:'约束'}]};
+const skeletonPath='Assets/Documents/GameDesign/Skeleton.json';
+const skeletonSource={path:skeletonPath,hash:H('a')};
+const addModelSources=model=>{for(const path of new Set(model.nodes.flatMap(node=>node.sources||[])))if(!documents.some(item=>item.path===path))documents.push({path,hash:createHash('sha256').update(path).digest('hex'),title:path.split('/').at(-1),lines:3,headings:1,identifiers:0});};
 
 const loop={source:{path:'Assets/Documents/Atlas/domains/cycle.md',hash:H('1'),heading:'四层循环',line:46},columns:['层级','时长','循环内容'],basis:'design',rows:[
   ['短期','5-10 分钟','进入地牢 → 选择 Zone/SubLocation → 触发 Content → 战斗/商店/休息/事件/宝藏 → 获得资源 → 继续或退出'],
@@ -96,7 +114,9 @@ let proposals=[{id:'outer-first-visit',project_id:project.id,revision:1,title:'�
   references:[],boundaries:'静态配置与设计文档；没有运行结果。',status:'open',created_at_ms:now-3600e3,updated_at_ms:now-3600e3,created_by:agent,updated_by:agent}];
 let bindings=[],accesses=[],goals=[],seq=0,decisions=[],returns=[],unexpected=[],pageErrors=[],bindCalls=[];
 /** Read and replay evidence: which snapshots were requested, and every attempted goal id. */
-let overviewRequests=[],viewRequests=[],goalPosts=[],forbidden=0,failNextGoal=false,failNextRecord=false;
+let overviewRequests=[],viewRequests=[],goalPosts=[],sayPosts=[],annotationOps=[],forbidden=0,failNextGoal=false,failNextRecord=false;
+// Faults and request counters for the Canvas game tools: every delivery and write remains mocked.
+let gameReadFault='',holdGameOverview,apiPosts=[],gameConnectionReads=0;
 
 function goalView(g){return {...g,delivery:g.delivery,proposal_ids:proposals.filter(p=>p.goal_id===g.id).map(p=>p.id)};}
 /** Scripted "agent": each poll advances a sent goal one step; on reading it asks for access, then proposes. */
@@ -139,20 +159,30 @@ async function routes(route,request){
   if(url.origin!==api){if(url.origin===origin)return route.continue();if(url.hostname.endsWith('googleapis.com')||url.hostname.endsWith('gstatic.com'))return route.fulfill({contentType:'text/css',body:''});unexpected.push(request.url());return route.abort();}
   if(request.method()==='OPTIONS')return send(route,{},204);
   const p=url.pathname,method=request.method(),body=method==='POST'?request.postDataJSON():undefined,key=request.headers()['x-spellcast-window'];
+  if(method==='POST')apiPosts.push({path:p,body:structuredClone(body)});
   const owner=p.includes('/game/')||p.includes('/goals')||p.includes('/proposals')||p.endsWith('/command');
   if(owner&&key!=='fixture-key'){forbidden++;return send(route,{error:'missing private window credential'},403);}
   if(p==='/api/board')return send(route,board);
   if(p==='/api/canvas/batch'&&method==='POST'){
     for(const operation of body.operations){
       if(operation.op==='create'){
-        assert.equal(board.canvas.objects.some(item=>item.id===operation.id),false,'source table create keeps one identity');
+        assert.equal(board.canvas.objects.some(item=>item.id===operation.id),false,'source-backed Canvas create keeps one identity');
         board.canvas.objects.push({id:operation.id,content:operation.content,content_revision:1,origin:operation.origin||null,bindings:[],source_id:null,user_edited:false});
         board.canvas.items.push({item_id:operation.id,revision:1,z:0,removed:false,appearance:operation.placement.appearance||'card',x:operation.placement.x,y:operation.placement.y,width:operation.placement.width,height:operation.placement.height});
       }else if(operation.op==='patch_content'){
         const item=board.canvas.objects.find(item=>item.id===operation.id);
         assert.equal(item.content_revision,operation.expected_revision);
-        assert.equal(item.content.type,'source_table');
-        item.content={type:'source_table',table:operation.fields.source_table};item.content_revision++;
+        assert(['source_table','source_skeleton'].includes(item.content.type),'only source-backed Canvas content is patched');
+        if(item.content.type==='source_table')item.content={type:'source_table',table:operation.fields.source_table};
+        else item.content={type:'source_skeleton',skeleton:operation.fields.source_skeleton};
+        item.content_revision++;
+      }else if(operation.op==='annotate'){
+        const object=board.canvas.objects.find(item=>item.id===operation.anchor.object_id);
+        assert(object,'annotation target exists');
+        assert.equal(operation.anchor.content_revision,object.content_revision,'annotation cites the current content revision');
+        annotationOps.push(structuredClone(operation));
+        board.canvas.annotations??=[];
+        board.canvas.annotations.push({id:operation.id,revision:1,anchor:operation.anchor,snapshot:structuredClone(object.content),text:operation.text,status:'pending',removed:false});
       }else throw Error(`unexpected canvas operation ${operation.op}`);
     }
     board.canvas.revision++;
@@ -164,12 +194,15 @@ async function routes(route,request){
   if(p==='/api/memories')return send(route,{memories:[]});
   if(p==='/api/observer/status')return send(route,{enabled:false,paused:false,allowed:true,reason:'fixture',policy_revision:1});
   if(p==='/api/feedback')return send(route,{pending:[],deliveries:[],bindings});
+  if(p==='/api/task-target'&&method==='POST')return send(route,{...body,label:'VESPERIX 主线',status:'available',message:'',checked_at_ms:now});
+  if(p==='/api/say'&&method==='POST'){sayPosts.push(body);return send(route,{seq:sayPosts.length,id:`say-${sayPosts.length}`,text:body.text,source_id:body.source_id,anchors:body.anchors||[],created_at_ms:now});}
   if(p==='/api/bindings/codex'&&method==='POST'){bindCalls.push(body);if(body.thread_id!==thread)return send(route,{error:'Codex 没有返回指定任务。'},400);const binding={source_id:body.source_id,thread_id:body.thread_id,cwd:body.cwd||'C:/fixture/VESPERIX',label:'VESPERIX 主线',protocol_agent:'fixture',bound_at_ms:now};bindings=[binding];return send(route,binding);}
   if(p==='/api/projects')return send(route,[project]);
+  if(p==='/api/projects/bbbbbbbb-0000-4000-8000-000000000001/records/game-tools-record')return send(route,record('game-tools-record','其他项目的工作记录','planned',{project_id:'bbbbbbbb-0000-4000-8000-000000000001'}));
   const base=`/api/projects/${project.id}`;
-  if(p===`${base}/game/connection`)return send(route,{connection});
-  if(p===`${base}/game/overview`){overviewRequests.push(url.search);return send(route,overview);}
-  if(p===`${base}/game/document`){const file=documents.find(item=>item.path===url.searchParams.get('path'));return file?send(route,{...file,text:`# ${file.title}\n文档原文，仅供审查。文档原文同词。\n<script>window.injected=10</script>` }):send(route,{error:'文档不在已连接仓库的索引中。'},400);}
+  if(p===`${base}/game/connection`){gameConnectionReads++;return send(route,{connection});}
+  if(p===`${base}/game/overview`){overviewRequests.push(url.search);if(holdGameOverview){const hold=holdGameOverview;holdGameOverview=undefined;await hold();}if(gameReadFault==='overview')return send(route,{error:'模拟游戏来源读取失败'},500);return send(route,overview);}
+  if(p===`${base}/game/document`){if(gameReadFault==='document')return send(route,{error:'模拟来源文档读取失败'},500);const file=documents.find(item=>item.path===url.searchParams.get('path'));return file?send(route,{...file,text:`# ${file.title}\n文档原文，仅供审查。文档原文同词。\n<script>window.injected=10</script>` }):send(route,{error:'文档不在已连接仓库的索引中。'},400);}
   if(p===`${base}/game/view`){viewRequests.push(url.search);const zone=url.searchParams.get('zone_id');if(zone&&zone!=='zone_forest_shrine_outer')return send(route,{connection,view:null,view_error:'这个 Zone 没有声明路线。',zones:[],selected_zone_id:zone,records:[],targets:[]});
     return send(route,{connection,view:zoneView,relations,records,targets:bindings,zone_object_id:'game-vesperix-zone',object_ids:locations.map((l,i)=>({location_id:l.id,object_id:`game-vesperix-${i}`})),zones:[overview.routed_zones[0]],selected_zone_id:'zone_forest_shrine_outer'});}
   if(p===`${base}/game/source`)return send(route,{path:url.searchParams.get('path'),hash:H('a'),json:{SubLocationId:'subloc_ancient_tree_root',DisplayName:'古树根部'}});
@@ -208,19 +241,30 @@ const vite=spawn(process.execPath,[path.join(root,'node_modules/vite/bin/vite.js
 let viteOutput='',browser;vite.stdout.on('data',b=>viteOutput+=b);vite.stderr.on('data',b=>viteOutput+=b);
 const report={scope:'isolated browser fixture: intercepted API, scripted agent state; no real task, repository or database',screenshots:[],checks:[]};
 const ok=name=>report.checks.push(name);
-async function openPage(theme,width,height){
+async function openPage(theme,width,height,entry='workspace'){
   const context=await browser.newContext({viewport:{width,height}});
   await context.addInitScript(([t,h,a])=>{localStorage.setItem('spellcast.locale','zh-CN');localStorage.setItem('spellcast.theme',t);
-    window.__TAURI_INTERNALS__={invoke:async command=>command==='project_window_key'?'fixture-key':command==='bridge_status'||command==='set_surface'?h:command==='get_board'?fetch(`${a}/api/board`).then(response=>response.json()):command==='list_forms'?{forms:[{id:'spatial',label:'Spatial',blurb:''}]}:undefined,transformCallback:()=>1,unregisterCallback:()=>{}};},[theme,health,api]);
+    window.__TAURI_INTERNALS__={invoke:async(command,args)=>command==='project_window_key'?'fixture-key':command==='bridge_status'||command==='set_surface'?h:command==='get_board'?fetch(`${a}/api/board`).then(response=>response.json()):command==='list_forms'?{forms:[{id:'spatial',label:'Spatial',blurb:''}]}:command==='say'?fetch(`${a}/api/say`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(args.req)}).then(response=>response.json()):undefined,transformCallback:()=>1,unregisterCallback:()=>{}};},[theme,health,api]);
   await context.route('**/*',routes);
   const page=await context.newPage();page.on('pageerror',error=>pageErrors.push(error.message));
+  if(entry==='workspace'&&overview.skeleton)page.on('dialog',dialog=>dialog.accept());
   // 400/404/500 are the fixture's intentional refusals and its one simulated transient failure.
   page.on('console',m=>{if(m.type()==='error'&&!/status of (400|404|500)/.test(m.text()))console.error('[console]',m.text());});
   await page.goto(origin,{waitUntil:'commit'});
   await page.waitForFunction(()=>document.querySelector('#projects-open')?.textContent?.includes('游戏开发'));
   await page.locator('#projects-open').evaluate(e=>e.click());
-  await page.waitForSelector('[data-game-home] [data-gh-section="loop"]');
+  if(overview.skeleton){
+    await page.locator('.canvas-source-skeleton').waitFor();
+    if(entry==='canvas')return {page,context};
+    await skeletonAction(page.locator('.canvas-source-skeleton'),'manage');
+    await page.locator('dialog.project-workspace[open][aria-busy="false"]').waitFor();
+  }
+  await page.waitForSelector('[data-game-home] [data-gh-section="loop"], [data-game-home] [data-game-skeleton="map"]');
   return {page,context};
+}
+async function skeletonAction(reader,action){
+  await reader.locator('summary[data-skeleton-tools-toggle]').click();
+  await reader.locator(`button[data-skeleton-action="${action}"]`).click();
 }
 async function shot(page,name){const file=path.join(out,`${name}.png`);await page.screenshot({path:file});report.screenshots.push(path.relative(root,file));}
 async function noOverflow(page,label){const overflow=await page.evaluate(()=>{const d=document.querySelector('.project-workspace');return {page:document.documentElement.scrollWidth>innerWidth+1,panel:d?d.scrollWidth>d.clientWidth+2:false};});assert.deepEqual(overflow,{page:false,panel:false},`horizontal overflow at ${label}`);}
@@ -648,6 +692,840 @@ try{
   assert.equal(board.canvas.annotations[0].anchor.content_revision,1,'old annotation stays tied to its original snapshot');
   await canvas.context.close();
   ok('player loop opens as one sourced Canvas table; a new source version refreshes without moving it or rewriting old annotations');
+
+  // A current design overview switches the entry while the legacy fixture above covers fallback.
+  documents.splice(0, documents.length,
+    {...src('Assets/Documents/GameDesign/Overview.md','a'),title:'全景骨架',lines:20},
+    {...src('Assets/Documents/GameDesign/ContentStructure.md','b'),title:'关卡与任务结构',lines:12},
+    {...src('Assets/Documents/GameDesign/Mechanics/README.md','c'),title:'机制规则索引',lines:15},
+    ...Array.from({length:15},(_,index)=>({...src(`Assets/Documents/GameDesign/Mechanics/Rule${String(index+1).padStart(2,'0')}.md`,'c'),title:`domain:mechanic_${index+1}`,lines:15})),
+    {...src('Assets/Documents/GameDesign/Worldbuilding/README.md','d'),title:'世界观基底',lines:10},
+    {...src('Assets/Documents/GameDesign/Worldbuilding/World.md','d'),title:'世界设定',lines:10},
+    {...src('Assets/Documents/GameDesign/ConfigReference/Config.md','f'),title:'配置映射',lines:8},
+    {...src('Assets/Documents/Development/Build.md','e'),title:'制作说明',lines:8});
+  loop.source={path:documents[0].path,hash:documents[0].hash,heading:'核心循环',line:3};
+  const current=await openPage('light',880,640);
+  const currentHome=current.page.locator('[data-game-home]');
+  assert.match(await currentHome.locator('[data-gh-section="documents-entry"]').innerText(),/设计与机制[\s\S]*机制规则保留[\s\S]*关卡与任务结构待填充[\s\S]*旧名称和数值已退役/);
+  assert.equal(await currentHome.getByText('文档审查大板').count(),0);
+  assert.equal(await currentHome.locator('.gh-design-links button').count(),4,'the overview keeps four stable reading links despite 16 mechanics documents');
+  assert.equal(await currentHome.locator('[data-gh-section="documents-entry"]').getByText('domain:mechanic_1').count(),0,'raw mechanism titles stay in the source browser');
+  assert.match(await currentHome.locator('[data-gh-section="loop"] .gh-source').innerText(),/Overview\.md/);
+  assert.match(await currentHome.locator('[data-gh-section="world"] header').innerText(),/配置事实/);
+  await currentHome.locator('[data-gh-action="read-design-overview"]').click();
+  assert.match(await currentHome.locator('[data-gh-document-text]').innerText(),/全景骨架/);
+  await currentHome.locator('[data-gh-action="close-source"]').click();
+  await currentHome.locator('[data-gh-action="read-design-structure"]').click();
+  assert.match(await currentHome.locator('[data-gh-document-text]').innerText(),/关卡与任务结构/);
+  await currentHome.locator('[data-gh-action="close-source"]').click();
+  await currentHome.locator('[data-gh-action="read-design-mechanic"]').click();
+  assert.match(await currentHome.locator('[data-gh-document-text]').innerText(),/机制规则索引/);
+  await currentHome.locator('[data-gh-action="close-source"]').click();
+  await currentHome.locator('[data-gh-action="read-design-worldbuilding"]').click();
+  assert.match(await currentHome.locator('[data-gh-document-text]').innerText(),/世界观基底/);
+  await currentHome.locator('[data-gh-action="close-source"]').click();
+  await currentHome.locator('[data-gh-action="open-documents"]').click();
+  assert.equal(await currentHome.locator('[data-gh-document]').count(),22,'all source documents remain in the browser');
+  assert.match(await currentHome.locator('.gh-document-groups').innerText(),/机制规则[\s\S]*世界观[\s\S]*内容结构[\s\S]*制作参考[\s\S]*工程参考（辅助）/);
+  await noOverflow(current.page,'current design light 880x640');
+  await current.context.close();
+  const currentDark=await openPage('dark',880,640);
+  assert.equal(await currentDark.page.locator('[data-game-home] .gh-design-links button').count(),4);
+  await noOverflow(currentDark.page,'current design dark 880x640');
+  await currentDark.context.close();
+  ok('current design entry: direct reader links, purpose groups, configuration labeling and 880x640 layouts in both themes');
+
+  // The authored skeleton is the default game-development surface; no Markdown reader opens by default.
+  addModelSources(syntheticSkeleton);
+  const trackedSource=documents.find(item=>item.path==='Assets/Documents/GameDesign/Mechanics/README.md');
+  const trackedHash=trackedSource.hash;
+  const trackedRule=syntheticSkeleton.nodes.find(node=>node.id==='condition_fixture');
+  trackedRule.provenance.push({path:trackedSource.path,hash:trackedHash,start_line:1,end_line:2,quote:'原有规则摘录：满足条件后继续探索。'});
+  const siblingRule={id:'condition_sibling_fixture',kind:'rule',title:'旁支条件',summary:'同组规则入口',parent_id:'shape_fixture',state:'structure_only',sources:[]};
+  const scrollSiblings=Array.from({length:14},(_,index)=>({id:`condition_scroll_fixture_${index+1}`,kind:'rule',title:`辅助条件 ${index+1}`,summary:'同组辅助规则',parent_id:'shape_fixture',state:'structure_only',sources:[]}));
+  syntheticSkeleton.nodes.push(siblingRule,...scrollSiblings);
+  overview.skeleton={source:skeletonSource,model:syntheticSkeleton};
+  const canvasGoalsBefore=goalPosts.length;
+  const canvasSkeleton=await openPage('dark',1600,900,'canvas');
+  const skeletonReader=canvasSkeleton.page.locator('.canvas-source-skeleton');
+  await skeletonReader.waitFor();
+  assert.equal(await canvasSkeleton.page.locator('dialog.project-workspace[open], dialog.canvas-reader[open]').count(),0,'Game Development enters the Canvas itself without opening a separate reader');
+  assert.equal(await skeletonReader.locator('.gs-system-card').count(),10);
+  assert.equal(await skeletonReader.locator('.gs-stage').count(),6,'the root keeps the loop');
+  assert.equal(await skeletonReader.locator('.gs-group-header[data-gs-group-id=""]').count(),1,'the root has one selectable group header');
+  const skeletonObject=board.canvas.objects.find(item=>item.content.type==='source_skeleton');
+  assert(skeletonObject,'one source skeleton object was created');
+  const skeletonObjectId=skeletonObject.id;
+  const skeletonFrame=canvasSkeleton.page.locator(`.canvas-frame[data-item-id="${skeletonObjectId}"]`);
+  await canvasSkeleton.page.waitForFunction(id=>document.querySelector(`.canvas-frame[data-item-id="${id}"]`)?.classList.contains('is-active'),skeletonObjectId);
+  const skeletonPlacement=structuredClone(board.canvas.items.find(item=>item.item_id===skeletonObjectId));
+  assert.equal(skeletonObject.content.skeleton.path,skeletonPath);
+  assert.equal(skeletonObject.content.skeleton.hash,skeletonSource.hash);
+  assert(skeletonObject.content.skeleton.documents.some(item=>item.path===trackedSource.path&&item.hash===trackedHash));
+  const skeletonBack=skeletonReader.getByRole('button',{name:'返回',exact:true});
+  const skeletonForward=skeletonReader.getByRole('button',{name:'前进',exact:true});
+  assert.equal(await skeletonBack.isDisabled(),true,'new overview has no previous location');
+  assert.equal(await skeletonForward.isDisabled(),true,'new overview has no next location');
+  await skeletonReader.locator('.gs-system-card[data-gs-node-id="system_1"]').click();
+  assert.equal(await skeletonReader.locator('.gs-stage, .gs-system-card').count(),0,'a branch does not repeat root loop or system entrances');
+  await skeletonReader.locator('.gs-branch-card[data-gs-node-id="region_fixture"]').click();
+  await skeletonReader.locator('.gs-branch-card[data-gs-node-id="shape_fixture"]').click();
+  await skeletonReader.locator('.gs-search-input').fill('深入条件');
+  await skeletonReader.locator('.gs-result[data-gs-node-id="condition_fixture"]').click();
+  assert.equal(await skeletonReader.locator('.gs-group-header[data-gs-group-id="shape_fixture"] .gs-group-title').innerText(),'示例关卡形状');
+  const ruleEntry=skeletonReader.locator('.gs-node-entry[data-gs-node-id="condition_fixture"]');
+  const siblingEntry=skeletonReader.locator('.gs-node-entry[data-gs-node-id="condition_sibling_fixture"]');
+  assert.equal(await ruleEntry.count(),1,'the selected rule remains in its parent group');
+  assert.equal(await siblingEntry.count(),1,'the selected rule keeps its sibling in the same list');
+  assert.equal(await ruleEntry.locator('.gs-node-row').getAttribute('aria-pressed'),'true');
+  assert.equal(await siblingEntry.locator('.gs-node-row').getAttribute('aria-pressed'),'false');
+  assert.match(await ruleEntry.locator('.gs-node-row').innerText(),/存在待核分歧/,'review state is visible on the row');
+  assert.equal(await skeletonReader.getByText('这个节点没有列出直接关联。').count(),0,'a branch omits empty relationship copy');
+  await skeletonReader.locator('.gs-search-input').fill('stageScore');
+  const historyScroll=await skeletonReader.evaluate(node=>{
+    const map=node.querySelector('.canvas-source-skeleton-map'),detail=node.querySelector('.canvas-source-skeleton-detail');
+    map.scrollTop=90;detail.scrollTop=80;return {map:map.scrollTop,detail:detail.scrollTop};
+  });
+  assert(historyScroll.map>0&&historyScroll.detail>0,'history fixture exercises both scroll panes');
+  await skeletonBack.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'示例关卡形状','Back follows the visited node');
+  assert.equal(await skeletonReader.locator('.gs-search-input').inputValue(),'深入条件','Back restores the previous search');
+  assert.match(await canvasSkeleton.page.locator('#form-reason').innerText(),/示例关卡形状/,'Back updates the Canvas selection preview');
+  await shot(canvasSkeleton.page,'canvas-skeleton-history-1600');
+  await skeletonForward.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'深入条件','Forward restores the next node');
+  assert.equal(await skeletonReader.locator('.gs-search-input').inputValue(),'stageScore','Forward restores its search');
+  assert.deepEqual(await skeletonReader.evaluate(node=>({map:node.querySelector('.canvas-source-skeleton-map').scrollTop,detail:node.querySelector('.canvas-source-skeleton-detail').scrollTop})),historyScroll,'Forward restores both scroll positions');
+  await skeletonBack.click();
+  await siblingEntry.locator('.gs-node-row').click();
+  assert.equal(await skeletonReader.getByText('这个节点没有列出直接关联。').count(),0,'a sibling with no relations has no empty relationship section');
+  assert.equal(await skeletonForward.isDisabled(),true,'opening a new node after Back discards the old forward path');
+  await skeletonBack.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'示例关卡形状');
+  await skeletonForward.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'旁支条件','Forward follows the new sibling path');
+  await skeletonBack.click();
+  await skeletonReader.locator('.gs-search-clear').click();
+  await ruleEntry.locator('.gs-node-row').click();
+  await siblingEntry.locator('.gs-node-row').click();
+  assert.equal(await siblingEntry.locator('.gs-node-row').getAttribute('aria-pressed'),'true');
+  await skeletonBack.click();
+  assert.equal(await ruleEntry.locator('.gs-node-row').getAttribute('aria-pressed'),'true','Back returns to the rule after a sibling visit');
+  await skeletonForward.click();
+  assert.equal(await siblingEntry.locator('.gs-node-row').getAttribute('aria-pressed'),'true','Forward returns to the sibling');
+  await skeletonBack.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'深入条件');
+  ok('Canvas Back and Forward restore each visited node, search, scroll and selection; sibling navigation replaces and traverses the forward path');
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'深入条件');
+  assert.match(await skeletonReader.locator('[data-gs-rule="effects"]').innerText(),/允许继续探索/);
+  assert.match(await skeletonReader.locator('[data-gs-rule="conflicts"]').innerText(),/成功与领奖是两个时点/);
+  await skeletonReader.locator('.gs-sources > summary').click();
+  assert.match(await skeletonReader.locator('.gs-provenance[data-gs-evidence-state="archived"]').innerText(),/历史证据[\s\S]*<img src=x/);
+  assert.equal(await skeletonReader.locator('.gs-provenance img').count(),0,'untrusted evidence remains literal text');
+  await skeletonReader.locator('.gs-original-sources > summary').click();
+  await skeletonReader.locator('.gs-source-links button').first().click();
+  await skeletonReader.locator('.canvas-source-skeleton-source-text').waitFor();
+  assert.match(await skeletonReader.locator('.canvas-source-skeleton-source-text').innerText(),/机制规则索引/);
+  await skeletonReader.locator('.canvas-source-skeleton-source-head button').click();
+  assert.equal(await canvasSkeleton.page.evaluate(()=>window.injected),undefined);
+  await skeletonReader.locator('.canvas-source-skeleton-map, .canvas-source-skeleton-detail').evaluateAll(nodes=>nodes.forEach(node=>{node.scrollTop=0;}));
+  await shot(canvasSkeleton.page,'canvas-skeleton-in-place-1600');
+  await skeletonFrame.locator('.canvas-frame-head > button').nth(1).click();
+  await canvasSkeleton.page.locator('dialog.canvas-reader[open]').waitFor();
+  await shot(canvasSkeleton.page,'canvas-skeleton-rule-dark-1600');
+  ok('Game Development browses the source directly on Canvas; optional reader, root-to-rule navigation and versioned evidence remain readable text');
+
+  const readerFonts=()=>skeletonReader.evaluate(node=>{
+    const size=selector=>parseFloat(getComputedStyle(node.querySelector(selector)).fontSize);
+    return {body:size('.gs-detail-lead'),title:size('.gs-detail-title'),group:size('.gs-group-title'),interface:size('.gs-node-row .gs-card-title'),action:size('.gs-develop')};
+  });
+  const changeReaderFonts=async values=>{
+    await canvasSkeleton.page.locator('dialog.canvas-reader[open] .canvas-reader-font-settings').click();
+    for(const [kind,value] of Object.entries(values)){
+      const input=canvasSkeleton.page.locator(`#settings-font-${kind}`);
+      await input.focus();await input.press('Home');
+      for(let step=80;step<value;step+=10)await input.press('ArrowRight');
+      assert.equal(await input.inputValue(),String(value));
+    }
+    await canvasSkeleton.page.locator('#settings-close').click();
+  };
+  const normalFonts=await readerFonts();
+  await changeReaderFonts({body:180});
+  const enlargedFonts=await readerFonts();
+  assert(Math.abs(enlargedFonts.body/normalFonts.body-1.8)<.02,'180% changes the actual skeleton body font');
+  assert.equal(enlargedFonts.title,normalFonts.title,'body size does not overwrite the heading preference');
+  assert.equal(enlargedFonts.interface,normalFonts.interface,'body size does not overwrite interface size');
+  await canvasSkeleton.page.setViewportSize({width:3840,height:2088});
+  const wideReader=await skeletonReader.evaluate(node=>{
+    const root=node.getBoundingClientRect(),map=node.querySelector('.canvas-source-skeleton-map').getBoundingClientRect();
+    return {width:root.width,center:(root.left+root.right)/2,viewport:innerWidth,mapWidth:map.width,overflow:node.scrollWidth>node.clientWidth+1};
+  });
+  assert(wideReader.width<2200&&wideReader.width>1200,'4K reader has a bounded reading width');
+  assert(Math.abs(wideReader.center-wideReader.viewport/2)<4,'4K reading area is centered');
+  assert(wideReader.mapWidth<=425,'the outline does not expand to half the monitor');
+  assert.equal(wideReader.overflow,false);
+  assert.equal(await canvasSkeleton.page.locator('dialog.canvas-reader[open] .canvas-reader-text-size').innerText(),'180%');
+  await shot(canvasSkeleton.page,'canvas-skeleton-fullscreen-3840-180');
+  await changeReaderFonts({title:140,interface:130});
+  const separateFonts=await readerFonts();
+  assert(Math.abs(separateFonts.title/normalFonts.title-1.4)<.02,'heading size applies to skeleton headings');
+  assert(Math.abs(separateFonts.group/normalFonts.group-1.4)<.02,'dialog button styling does not override the group heading');
+  assert(Math.abs(separateFonts.interface/normalFonts.interface-1.3)<.02,'interface size applies to skeleton rows');
+  assert(Math.abs(separateFonts.action/normalFonts.action-1.3)<.02,'interface size applies to action buttons');
+  assert.equal(separateFonts.body,enlargedFonts.body);
+  await canvasSkeleton.page.setViewportSize({width:480,height:800});
+  await skeletonReader.locator('.canvas-source-skeleton-body.is-narrow').waitFor();
+  assert.equal(await skeletonReader.evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'large type remains contained at narrow width');
+  await shot(canvasSkeleton.page,'canvas-skeleton-reader-large-type-480');
+  await changeReaderFonts({body:100,title:100,interface:100});
+  await canvasSkeleton.page.setViewportSize({width:1600,height:900});
+  ok('skeleton reader honors independent font preferences and bounds its 4K reading layout without narrow overflow');
+
+  const canvasAnnotation=canvasSkeleton.page.locator('dialog.canvas-annotations[open]');
+  await canvasSkeleton.page.locator('.canvas-reader-annotation').click();
+  await canvasAnnotation.waitFor();
+  await canvasAnnotation.locator('.canvas-annotation-input').waitFor();
+  await canvasAnnotation.locator('.canvas-annotation-input').fill('核对深入条件');
+  await canvasAnnotation.locator('.canvas-annotations-save').click();
+  await canvasSkeleton.page.waitForFunction(()=>document.querySelector('.canvas-annotation-card'));
+  const nodeAnnotation=annotationOps.at(-1);
+  assert.equal(nodeAnnotation.anchor.object_id,skeletonObjectId);
+  assert.equal(nodeAnnotation.anchor.block_id,'condition_fixture','Canvas annotation targets the selected rule');
+  assert.equal(nodeAnnotation.anchor.content_revision,1);
+  await canvasAnnotation.locator('.canvas-annotations-close').click();
+  await skeletonReader.locator('.gs-develop').click();
+  assert.match(await canvasSkeleton.page.locator('#form-reason').innerText(),/深入条件/,'Canvas composer previews the selected node');
+  assert.equal(await canvasSkeleton.page.locator('#input').isEnabled(),true,'node discussion uses the main Canvas composer');
+  assert.equal(goalPosts.length,canvasGoalsBefore,'Canvas discussion does not create a project goal');
+  await canvasSkeleton.page.locator('#input').fill('请核对深入条件的触发和例外。');
+  await canvasSkeleton.page.locator('#recipient-change').click();
+  const sendsBeforeNewChat=sayPosts.length;
+  await canvasSkeleton.page.locator('#recipient-new-chat').click();
+  const newChat=canvasSkeleton.page.locator('#canvas-new-chat');
+  await newChat.waitFor();
+  assert.equal(await newChat.locator('#new-chat-request').inputValue(),'请核对深入条件的触发和例外。');
+  assert.match(await newChat.locator('#new-chat-workspace option:checked').innerText(),/VESPERIX/,'unlinked skeleton supplies its source workspace');
+  await shot(canvasSkeleton.page,'canvas-skeleton-new-chat');
+  await newChat.getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal(await canvasSkeleton.page.locator('#input').inputValue(),'请核对深入条件的触发和例外。');
+  assert.equal(sayPosts.length,sendsBeforeNewChat,'opening or cancelling a new-chat draft does not send to an existing task');
+  ok('unlinked skeleton offers a new conversation in its workspace and preserves the composer on cancellation');
+  await canvasSkeleton.page.locator('#recipient-workspace').selectOption({index:1});
+  await canvasSkeleton.page.locator('#recipient').selectOption(source);
+  await canvasSkeleton.page.locator('#send').click();
+  await canvasSkeleton.page.waitForFunction(()=>document.querySelector('#input')?.value==='');
+  assert.equal(sayPosts.at(-1).anchors?.[0]?.object_id,skeletonObjectId);
+  assert.equal(sayPosts.at(-1).anchors?.[0]?.block_id,'condition_fixture');
+  assert.equal(sayPosts.at(-1).anchors?.[0]?.content_revision,1);
+  assert.equal(goalPosts.length,canvasGoalsBefore,'Canvas send never creates a project goal');
+  ok('selected Canvas node drives annotation and composer anchors; mocked say sends the exact node without a project goal');
+
+  if(await canvasSkeleton.page.locator('dialog.canvas-reader[open]').count())await canvasSkeleton.page.locator('.canvas-reader-close').click();
+  await canvasSkeleton.page.locator('#projects-open').click();
+  await skeletonReader.waitFor();
+  await canvasSkeleton.page.waitForFunction(id=>document.querySelector(`.canvas-frame[data-item-id="${id}"]`)?.classList.contains('is-active'),skeletonObjectId);
+  assert.equal(board.canvas.objects.filter(item=>item.id===skeletonObjectId).length,1,'reopen reuses the source object');
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'深入条件','reopen retains node selection');
+  await skeletonReader.locator('.gs-search-input').fill('stageScore');
+  assert.equal(await canvasSkeleton.page.evaluate(id=>JSON.parse(localStorage.getItem(`spellcast.canvas.skeleton.${id}`)||'{}').query,skeletonObjectId),'stageScore','search is persisted before reload');
+  await canvasSkeleton.page.reload({waitUntil:'commit'});
+  await skeletonReader.waitFor();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'深入条件','full reload retains node selection');
+  assert.equal(await skeletonReader.locator('.gs-search-input').inputValue(),'stageScore','full reload retains search');
+  await canvasSkeleton.page.locator('#projects-open').click();
+  await canvasSkeleton.page.waitForFunction(id=>document.querySelector(`.canvas-frame[data-item-id="${id}"]`)?.classList.contains('is-active'),skeletonObjectId);
+  await skeletonBack.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'示例关卡形状','Back history survives reload');
+  await canvasSkeleton.page.reload({waitUntil:'commit'});
+  await skeletonReader.waitFor();
+  await canvasSkeleton.page.locator('#projects-open').click();
+  await canvasSkeleton.page.waitForFunction(id=>document.querySelector(`.canvas-frame[data-item-id="${id}"]`)?.classList.contains('is-active'),skeletonObjectId);
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'示例关卡形状','reload keeps the history cursor');
+  await skeletonForward.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'深入条件','Forward history also survives reload');
+  assert.equal(await skeletonReader.locator('.gs-search-input').inputValue(),'stageScore');
+  await skeletonFrame.locator('.canvas-frame-head > button').nth(1).click();
+  await canvasSkeleton.page.locator('dialog.canvas-reader[open]').waitFor();
+  for(const width of [760,480]){
+    await canvasSkeleton.page.setViewportSize({width,height:800});
+    await skeletonReader.locator('.canvas-source-skeleton-body.is-narrow').waitFor();
+    assert.equal(await skeletonReader.evaluate(node=>{
+      const body=node.querySelector('.canvas-source-skeleton-body');
+      return ['auto','scroll'].includes(getComputedStyle(body).overflowY);
+    }),true,'the narrow body owns vertical scrolling');
+    assert.equal(await ruleEntry.evaluate(entry=>{
+      const row=entry.querySelector('.gs-node-row'),detail=entry.querySelector('.gs-detail');
+      return !!row&&!!detail&&!!row.nextElementSibling?.contains(detail);
+    }),true,'the selected rule body follows its row');
+    assert.equal(await ruleEntry.locator('.gs-node-row').getAttribute('aria-pressed'),'true');
+    await noOverflow(canvasSkeleton.page,`Canvas rule ${width}`);
+    await shot(canvasSkeleton.page,`canvas-skeleton-rule-inline-${width}`);
+    if(width===480){
+      const scroll=await skeletonReader.locator('.canvas-source-skeleton-body').evaluate(node=>{node.scrollTop=180;return node.scrollTop;});
+      assert(scroll>0,'narrow history exercises the shared scroll container');
+      await skeletonBack.click();
+      await skeletonForward.click();
+      assert.equal(await skeletonReader.locator('.canvas-source-skeleton-body').evaluate(node=>node.scrollTop),scroll,'Forward restores the narrow reading position');
+      assert.equal(await ruleEntry.locator('.gs-node-row').getAttribute('aria-pressed'),'true');
+    }
+  }
+  await skeletonReader.locator('.gs-group-header[data-gs-group-id="shape_fixture"] button').click();
+  assert.equal(await skeletonReader.locator('.gs-group-header[data-gs-group-id="shape_fixture"]').evaluate(header=>!!header.nextElementSibling?.contains(header.parentElement.querySelector('.gs-detail'))),true,'selected group body follows the group header at narrow width');
+  await skeletonBack.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'深入条件','group selection adds a recoverable history location');
+  await canvasSkeleton.page.setViewportSize({width:1600,height:900});
+  await canvasSkeleton.page.locator('.canvas-reader-close').click();
+  await canvasSkeleton.page.locator('#projects-open').click();
+  await canvasSkeleton.page.waitForFunction(id=>document.querySelector(`.canvas-frame[data-item-id="${id}"]`)?.classList.contains('is-active'),skeletonObjectId);
+  skeletonSource.hash=H('b');
+  const skeletonRelations=syntheticSkeleton.relations;
+  syntheticSkeleton.nodes=syntheticSkeleton.nodes.filter(node=>node.id!=='condition_fixture');
+  syntheticSkeleton.relations=syntheticSkeleton.relations.filter(edge=>edge.from!=='condition_fixture'&&edge.to!=='condition_fixture');
+  canvasSkeleton.page.once('dialog',dialog=>dialog.accept());
+  await skeletonAction(skeletonReader,'refresh');
+  await canvasSkeleton.page.waitForFunction(()=>document.querySelector('.canvas-source-skeleton-detail .gs-detail-title')?.textContent?.includes('游戏全貌'));
+  assert.equal(board.canvas.objects.filter(item=>item.id===skeletonObjectId).length,1);
+  assert.equal(board.canvas.objects.find(item=>item.id===skeletonObjectId).content_revision,2);
+  assert.deepEqual(board.canvas.items.find(item=>item.item_id===skeletonObjectId),skeletonPlacement,'explicit refresh preserves placement');
+  assert.equal(board.canvas.annotations.find(item=>item.id===nodeAnnotation.id).anchor.content_revision,1,'refresh preserves the old annotation snapshot');
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'游戏全貌','removed selected node falls back to root');
+  assert.equal(await canvasSkeleton.page.evaluate(id=>JSON.parse(localStorage.getItem(`spellcast.canvas.skeleton.${id}`)).history.some(view=>view.selectedId==='condition_fixture'),skeletonObjectId),false,'refresh removes missing nodes from browsing history');
+  await skeletonBack.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'示例关卡形状','valid previous locations remain after refresh');
+  await skeletonForward.click();
+  assert.equal(await skeletonReader.locator('.gs-detail-title').innerText(),'游戏全貌');
+  await skeletonFrame.locator('.canvas-frame-head > button').nth(1).click();
+  await canvasSkeleton.page.locator('dialog.canvas-reader[open]').waitFor();
+  for(const width of [760,480]){
+    await canvasSkeleton.page.setViewportSize({width,height:800});
+    await skeletonReader.locator('.canvas-source-skeleton-body.is-narrow').waitFor();
+    assert.equal(await skeletonReader.locator('.gs-group-header[data-gs-group-id=""]').evaluate(header=>{
+      const detail=header.parentElement.querySelector('.gs-detail');
+      return !!detail&&!!header.nextElementSibling?.contains(detail);
+    }),true,'root summary follows its group header at narrow width');
+    assert.equal(await skeletonReader.locator('summary[data-skeleton-tools-toggle]').isVisible(),true,'the More menu stays visible');
+    assert.equal(await skeletonReader.locator('.gs-search-input').isVisible(),true,'search stays usable');
+    assert.equal(await skeletonBack.isVisible()&&await skeletonForward.isVisible(),true,'Back and Forward remain visible at narrow widths');
+    await noOverflow(canvasSkeleton.page,`Canvas skeleton ${width}`);
+    assert.equal(await skeletonReader.evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'Canvas browser has no horizontal overflow');
+    assert.equal(await skeletonReader.locator('summary[data-skeleton-tools-toggle]').evaluate(node=>{const r=node.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;}),true,'Canvas More stays within the viewport');
+    assert.equal(await canvasSkeleton.page.locator('dialog.canvas-reader[open] > header h2').evaluate(node=>node.getBoundingClientRect().width>200),true,'reader title keeps a readable line at narrow widths');
+    await shot(canvasSkeleton.page,`canvas-skeleton-${width}`);
+  }
+  await skeletonAction(skeletonReader,'manage');
+  await canvasSkeleton.page.locator('dialog.project-workspace[open] [data-project-tools] > summary').waitFor();
+  await canvasSkeleton.context.close();
+  ok('Canvas skeleton reopens and survives reload, explicit refresh keeps identity, placement and annotation snapshot, missing node falls back, narrow tools stay usable');
+
+  const canvasOnlyIds=new Set([siblingRule.id,...scrollSiblings.map(node=>node.id)]);
+  syntheticSkeleton.nodes=syntheticSkeleton.nodes.filter(node=>!canvasOnlyIds.has(node.id));
+  syntheticSkeleton.nodes.push(trackedRule);
+  syntheticSkeleton.relations=skeletonRelations;
+  skeletonSource.hash=H('a');
+  const skeletonDark=await openPage('dark',1600,900);
+  const skeletonHome=skeletonDark.page.locator('[data-game-home]');
+  assert.equal(await skeletonHome.locator('[data-game-skeleton="map"]').count(),1);
+  assert.equal(await skeletonHome.locator('.gs-system-card').count(),10);
+  assert.equal(await skeletonHome.locator('.gs-stage').count(),6);
+  assert.equal(await skeletonHome.locator('[data-gh-section="documents-entry"]').count(),0);
+  assert.equal(await skeletonHome.locator('dialog[open]').count(),0);
+  assert.equal(await skeletonHome.locator('[data-gh-action="browse-design-sources"]').count(),0,'source library is not a peer of game structure');
+  const libraryButton=skeletonDark.page.locator('[data-project-action="source-library"]');
+  assert.equal(await libraryButton.isVisible(),false,'source library starts inside closed Tools');
+  await skeletonDark.page.locator('[data-project-tools] > summary').click();await libraryButton.click();
+  assert.match(await skeletonHome.locator('[data-gh-section="documents"]').innerText(),/来源资料[\s\S]*当前规则在游戏节点里继续完善/);
+  await skeletonDark.page.locator('[data-project-tools] > summary').click();await skeletonDark.page.locator('[data-project-view="game"]').click();
+  assert.equal(await skeletonHome.locator('[data-game-skeleton="map"]').count(),1);
+  await shot(skeletonDark.page,'skeleton-dark-1600');
+  await noOverflow(skeletonDark.page,'skeleton dark 1600x900');
+
+  await skeletonHome.locator('.gs-system-card[data-gs-node-id="system_1"]').click();
+  await skeletonHome.locator('.gs-branch-card[data-gs-node-id="region_fixture"]').click();
+  await skeletonHome.locator('.gs-branch-card[data-gs-node-id="shape_fixture"]').click();
+  await skeletonHome.locator('.gs-branch-card[data-gs-node-id="condition_fixture"]').click();
+  assert.equal(await skeletonHome.locator('.gs-detail-title').innerText(),'深入条件');
+  assert.equal(await skeletonHome.locator('.gs-sources').getAttribute('open'),null,'evidence starts collapsed');
+  assert.match(await skeletonHome.locator('.gs-detail').innerText(),/何时触发[\s\S]*需要满足[\s\S]*发生什么[\s\S]*例外与边界[\s\S]*公式与单位[\s\S]*待核分歧/);
+  assert.match(await skeletonHome.locator('[data-gs-rule="formulas"]').innerText(),/stageScore = base \+ progress/);
+  assert.equal(await skeletonHome.locator('dialog[open]').count(),0,'absorbed rules are readable in the node without the source reader');
+  await skeletonHome.locator('.gs-sources > summary').click();
+  const historicalEvidence=skeletonHome.locator('.gs-provenance[data-gs-evidence-state="archived"]');
+  assert.match(await historicalEvidence.innerText(),/历史出处[\s\S]*<img src=x/);
+  assert.doesNotMatch(await historicalEvidence.innerText(),/RetiredExample.md|SHA-256/,'technical source details start folded');
+  assert.equal(await skeletonHome.locator('.gs-provenance[data-gs-evidence-state="matched"]').count(),1);
+  assert.equal(await skeletonHome.locator('[data-gs-evidence-alert]').count(),0,'matching source versions need no warning');
+  await historicalEvidence.locator('.gs-source-metadata > summary').click();
+  assert.match(await historicalEvidence.innerText(),/RetiredExample.md[\s\S]*SHA-256/);
+  assert.equal(await skeletonHome.locator('.gs-provenance img').count(),0,'source quotations remain text');
+  assert.equal(await historicalEvidence.locator('button').count(),0,'archived paths are not treated as current documents');
+  trackedSource.hash=H('0');
+  await skeletonDark.page.locator('[data-project-action="refresh"]').click();
+  await skeletonHome.locator('[data-gs-evidence-alert]').waitFor();
+  assert.match(await skeletonHome.locator('[data-gs-evidence-alert]').innerText(),/1 份来源待核对/,'historical citations do not create a false drift alert');
+  const changedEvidence=skeletonHome.locator('.gs-provenance[data-gs-evidence-state="changed"]');
+  assert.equal(await changedEvidence.locator('blockquote').textContent(),'原有规则摘录：满足条件后继续探索。','source drift never rewrites the saved quote');
+  assert.match(await skeletonHome.locator('[data-gs-rule="effects"]').innerText(),/允许继续探索/,'source drift preserves the authored rule');
+  await skeletonHome.locator('[data-gs-evidence-alert] button').click();
+  await changedEvidence.locator('.gs-source-metadata > summary').click();
+  assert.match(await changedEvidence.innerText(),/摘录版本[\s\S]*当前版本/);
+  await shot(skeletonDark.page,'skeleton-source-changed-dark-1600');
+  await noOverflow(skeletonDark.page,'source drift dark 1600x900');
+  for(const [theme,width,height] of [['light',1600,900],['dark',880,640],['light',880,640]]){
+    const view=await openPage(theme,width,height);const h=view.page.locator('[data-game-home]');
+    await h.locator('.gs-search-input').fill('深入条件');await h.locator('.gs-result[data-gs-node-id="condition_fixture"]').click();
+    await h.locator('[data-gs-evidence-alert]').waitFor();await h.locator('[data-gs-evidence-alert] button').click();
+    await h.locator('.gs-provenance[data-gs-evidence-state="changed"]').scrollIntoViewIfNeeded();
+    await shot(view.page,`skeleton-source-changed-${theme}-${width}`);await noOverflow(view.page,`source drift ${theme} ${width}x${height}`);await view.context.close();
+  }
+  trackedSource.hash=trackedHash;
+  await skeletonDark.page.locator('[data-project-action="refresh"]').click();
+  await skeletonHome.locator('.gs-provenance[data-gs-evidence-state="matched"]').waitFor({state:'attached'});
+  assert.equal(await skeletonHome.locator('[data-gs-evidence-alert]').count(),0,'a matching source revision clears the derived warning');
+  if(await skeletonHome.locator('.gs-sources').getAttribute('open')!==null)await skeletonHome.locator('.gs-sources > summary').click();
+  ok('source library in Tools; inline quotations with folded provenance; source changes warn without rewriting rules or treating archived history as current');
+  await skeletonHome.locator('.gs-search-input').fill('stageScore');
+  assert.equal(await skeletonHome.locator('.gs-result:visible').count(),1,'search includes full rule content');
+  await skeletonHome.locator('.gs-system-card[data-gs-node-id="system_10"]').click();
+  assert.equal(await skeletonHome.locator('.gs-branch-card').count(),24,'large branches open one readable page');
+  await skeletonHome.locator('.gs-branch .gs-more').click();
+  assert.equal(await skeletonHome.locator('.gs-branch-card').count(),30,'all remaining rules remain reachable');
+  await skeletonHome.locator('.gs-search-input').fill('深入条件');
+  assert.equal(await skeletonHome.locator('.gs-result:visible').count(),1,'deep nodes are directly searchable');
+  await skeletonHome.locator('.gs-result[data-gs-node-id="condition_fixture"]').click();
+  assert.equal(await skeletonHome.locator('.gs-detail-title').innerText(),'深入条件');
+
+  const beforeSkeletonGoals=goalPosts.length;
+  await skeletonHome.locator('.gs-develop').click();
+  const skeletonDraft=skeletonHome.locator('[data-gh-goal]');
+  assert.match(await skeletonDraft.inputValue(),/深入条件/);
+  assert.equal(await skeletonDraft.evaluate(node=>document.activeElement===node),true,'AI action focuses the composer');
+  assert.equal(goalPosts.length,beforeSkeletonGoals,'AI action never submits');
+  await skeletonDraft.fill('已有用户草稿：深入条件要先核对路线。');
+  await skeletonHome.locator('.gs-system-card[data-gs-node-id="system_2"]').click();
+  await skeletonHome.locator('.gs-develop').click();
+  assert.equal(await skeletonDraft.inputValue(),'已有用户草稿：深入条件要先核对路线。','AI action preserves a user draft');
+  assert.equal(goalPosts.length,beforeSkeletonGoals);
+  await skeletonHome.locator('.gs-search-input').fill('深入条件');
+  await skeletonHome.locator('.gs-result[data-gs-node-id="condition_fixture"]').click();
+  await skeletonHome.locator('[data-gh-action="save-unsent"]').click();
+  await skeletonDark.page.waitForFunction(()=>document.querySelector('[data-gh-goal]')?.value==='');
+  const savedSkeletonGoal=goals[0];
+  assert.equal(goalPosts.length,beforeSkeletonGoals+1);
+  assert.equal(savedSkeletonGoal.status,'unsent');
+  assert.equal(savedSkeletonGoal.context.entity_kind,'design_node');
+  assert.equal(savedSkeletonGoal.context.entity_id,'condition_fixture');
+  assert.equal(savedSkeletonGoal.context.source_revision,skeletonSource.hash);
+  assert(savedSkeletonGoal.context.sources.some(source=>source.path===skeletonPath&&source.hash===skeletonSource.hash));
+  assert(savedSkeletonGoal.context.sources.some(source=>source.path==='Assets/Documents/GameDesign/Mechanics/README.md'));
+  assert.equal(await skeletonHome.locator('dialog[open]').count(),0,'saving a goal does not open the reader');
+  const postsAfterSave=goalPosts.length;
+  proposals.unshift({id:'skeleton-adopted-by-goal',project_id:project.id,revision:2,title:'骨架节点内容',summary:'',
+    subject:{scale:'overview'},goal_id:savedSkeletonGoal.id,status:'closed',created_at_ms:now,updated_at_ms:now,created_by:agent,updated_by:user,
+    references:[],boundaries:'夹具已采纳内容，无玩家验证。',items:[{id:'adopted-node-content',target:'object',target_id:'skeleton-condition-content',
+      status:'adopted',base_revision:0,reason:'来自节点目标',basis:['design'],references:[],boundaries:'无玩家验证。'}]});
+  objects.push({id:'skeleton-condition-content',project_id:project.id,name:'深入条件 · 已采纳内容',kind:'content',revision:1,archived:false,
+    planning:{body:'依据已采纳的节点目标整理条件。',sections:[{id:'skeleton-section',role:'body',text:'条件满足后开放下一层。'}]}});
+  await skeletonDark.page.locator('[data-project-action="refresh"]').click();
+  await skeletonHome.locator('[data-gh-section="skeleton-adopted"]').waitFor();
+  assert.match(await skeletonHome.locator('[data-gh-section="skeleton-adopted"]').innerText(),/深入条件 · 已采纳内容[\s\S]*依据已采纳的节点目标整理条件[\s\S]*条件满足后开放下一层/);
+  assert.equal(goalPosts.length,postsAfterSave,'refreshing adopted content sends no additional goal');
+  await skeletonHome.locator('.gs-system-card[data-gs-node-id="system_2"]').click();
+  assert.equal(await skeletonHome.locator('[data-gh-section="skeleton-adopted"]').count(),0,'adopted content stays on its target node');
+  await skeletonHome.locator('.gs-search-input').fill('深入条件');
+  await skeletonHome.locator('.gs-result[data-gs-node-id="condition_fixture"]').click();
+  await skeletonHome.locator('.gs-sources > summary').click();
+  await skeletonHome.locator('.gs-original-sources > summary').click();
+  await skeletonHome.locator('.gs-source-links button').first().click();
+  assert.match(await skeletonHome.locator('[data-gh-document-text]').innerText(),/机制规则索引/);
+  await skeletonHome.locator('[data-gh-action="close-source"]').click();
+  await skeletonHome.locator('[data-gh-action="overview-implementation"]').click();
+  assert.equal(await skeletonHome.locator('[data-gh-section="loop"]').count(),1,'implementation view still shows sourced configuration');
+  assert.match(await skeletonHome.locator('[data-gh-section="world"] header').innerText(),/配置事实/);
+  await skeletonHome.locator('[data-gh-action="overview-design"]').click();
+  assert.equal(await skeletonHome.locator('[data-game-skeleton="map"]').count(),1);
+  await skeletonDark.context.close();
+  ok('skeleton map: ten systems, six stages, region-to-condition drilldown, search, composer context, goal-linked adopted content, explicit source reading and implementation switch');
+
+  for(const [theme,width,height] of [['light',1600,900],['dark',880,640],['light',880,640]]){
+    const view=await openPage(theme,width,height);
+    assert.equal(await view.page.locator('[data-game-home] [data-game-skeleton="map"] .gs-system-card').count(),10);
+    await shot(view.page,`skeleton-${theme}-${width}`);
+    await noOverflow(view.page,`skeleton ${theme} ${width}x${height}`);
+    await view.context.close();
+  }
+  ok('skeleton map fits 1600x900 and 880x640 in both themes');
+
+  // The fixed Canvas tools operate on one source, while the composer action only appends a draft.
+  // Keep this fixture's data isolated from the optional real-model screenshots below.
+  const savedToolCanvas=structuredClone(board.canvas);
+  const toolSkeleton=structuredClone(board.canvas.objects.find(object=>object.content.type==='source_skeleton'));
+  const toolTable=structuredClone(board.canvas.objects.find(object=>object.content.type==='source_table'));
+  assert(toolSkeleton&&toolTable,'game tools fixture reuses the authored source objects');
+  toolSkeleton.content.skeleton={...toolSkeleton.content.skeleton,hash:skeletonSource.hash,model:structuredClone(syntheticSkeleton),documents:structuredClone(documents)};
+  const provenanceOnlyDocument=documents.find(document=>document.path==='Assets/Documents/GameDesign/ConfigReference/Config.md');
+  toolSkeleton.content.skeleton.model.nodes.find(node=>node.id==='condition_fixture').provenance.push({path:provenanceOnlyDocument.path,hash:provenanceOnlyDocument.hash,start_line:1,end_line:1,quote:'仅列在证据中的配置边界。'});
+  toolTable.content.table={...toolTable.content.table,project_id:project.id,root:connection.root,path:loop.source.path,hash:loop.source.hash,heading:loop.source.heading,line:loop.source.line,columns:structuredClone(loop.columns),rows:structuredClone(loop.rows)};
+  const toolNote={id:'game-tools-note',content:{type:'text',title:'核对参考便签',text:'用户补充：失败后应可重试。<img src=x onerror="window.injected=12">'},content_revision:1,origin:null,bindings:[],source_id:null,user_edited:true};
+  const foreignTable={...structuredClone(toolTable),id:'game-tools-foreign',content:{type:'source_table',table:{...structuredClone(toolTable.content.table),project_id:'bbbbbbbb-0000-4000-8000-000000000001',root:'C:/fixture/OtherGame',title:'另一个项目的循环'}}};
+  const foreignRecord={id:'game-tools-record-card',content:{type:'work_record',project_id:foreignTable.content.table.project_id,record_id:'game-tools-record'},content_revision:1,origin:null,bindings:[],source_id:null,user_edited:false};
+  const toolObjects=[toolSkeleton,toolTable,toolNote,foreignTable,foreignRecord];
+  // The Canvas opens in the connected workspace scope; reference origin controls visibility only.
+  for(const object of toolObjects)object.origin={cwd:connection.root,label:project.name};
+  board.canvas={revision:1,objects:toolObjects,items:toolObjects.map((object,index)=>({item_id:object.id,revision:1,z:0,removed:false,appearance:'card',x:index*760,y:80,width:700,height:520})),annotations:[]};
+  let toolContext;
+  try{
+    const view=await openPage('dark',1600,900,'canvas');toolContext=view.context;
+    const toolPage=view.page,tools=toolPage.locator('#canvas-game-tools'),design=toolPage.locator('#canvas-game-design'),check=toolPage.locator('#canvas-game-check'),input=toolPage.locator('#input');
+    const refresh=toolPage.locator('#canvas-game-refresh'),readSource=toolPage.locator('#canvas-game-source'),manage=toolPage.locator('#canvas-game-project');
+    const directDisabled=async expected=>{for(const button of [refresh,readSource,manage])assert.equal(await button.isDisabled(),expected);};
+    const select=async(id,append=false)=>{
+      if(await tools.evaluate(node=>node.open))await tools.locator('summary').first().click();
+      await toolPage.locator('.canvas-tool-camera button').first().click();
+      await toolPage.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      const frame=toolPage.locator(`.canvas-frame[data-item-id="${id}"]`);
+      const title=frame.locator('.canvas-frame-head strong');
+      const target=await title.isVisible()?title:frame.locator('.canvas-card-drag');
+      await target.click({modifiers:append?['Control']:[]});
+      await toolPage.waitForFunction(([id,append])=>document.querySelector(`.canvas-frame[data-item-id="${id}"]`)?.classList.contains('is-selected')&& (append||document.querySelectorAll('.canvas-frame.is-selected').length===1),[id,append]);
+    };
+    const clearSelection=async()=>{await toolPage.locator('.canvas-tool-selection').getByRole('button',{name:'清除选择',exact:true}).click();await toolPage.waitForFunction(()=>!document.querySelector('.canvas-frame.is-selected'));};
+    const openTools=async()=>{if(!await tools.evaluate(node=>node.open))await tools.locator('summary').first().click();};
+    const openDesign=async()=>{if(!await design.evaluate(node=>node.open))await toolPage.locator('#canvas-game-design-toggle').click();};
+    const settleCheck=async()=>{await openDesign();await check.click();await toolPage.waitForFunction(()=>!document.querySelector('#canvas-game-check')?.disabled);};
+    await tools.waitFor();await design.waitFor();
+    assert.equal(await tools.evaluate(node=>node.open),false,'fixed game tools start collapsed');
+    assert.equal(await tools.locator('summary').first().innerText(),'游戏工具');
+    assert.equal(await toolPage.locator('#canvas-game-design-toggle').innerText(),'游戏设计');
+    await tools.locator('summary').first().click();await toolPage.locator('#canvas-game-design-toggle').click();
+    await toolPage.locator('.canvas-tool-camera button').first().click();
+    await select(toolSkeleton.id);await directDisabled(false);
+    await openTools();
+    assert.match(await tools.innerText(),/VESPERIX/,'fixed tools identify the selected source project');
+    await select(toolNote.id,true);await directDisabled(true);
+    await clearSelection();await directDisabled(true);assert.equal(await check.isDisabled(),true);await openDesign();
+    assert(await toolPage.locator('#canvas-game-context').innerText(),'empty selection explains why the request is unavailable');
+    await select(toolNote.id);await directDisabled(true);assert.equal(await check.isDisabled(),true,'ordinary content does not infer a game project');
+    await select(toolSkeleton.id);await select(foreignTable.id,true);await directDisabled(true);
+    assert.equal(await check.isDisabled(),true,'sources from different projects cannot share a request');
+    await select(toolSkeleton.id);await select(foreignRecord.id,true);
+    assert.equal(await check.isDisabled(),true,'a work record from another project cannot join the request');
+    foreignTable.content.table.project_id=project.id;await toolPage.reload();await tools.waitFor();
+    await select(toolSkeleton.id);await select(foreignTable.id,true);
+    assert.equal(await check.isDisabled(),true,'sources with the same project id but different roots cannot share a request');
+    foreignTable.content.table.root='c:\\fixture\\VESPERIX\\';await toolPage.reload();await tools.waitFor();
+    await select(toolSkeleton.id);await select(foreignTable.id,true);
+    assert.equal(await check.isDisabled(),false,'equivalent Windows root spelling belongs to the same project');
+    ok('Canvas game actions reject empty/ordinary selection, different project ids/roots and foreign work records; equivalent roots are accepted');
+
+    const expand=toolPage.locator('#composer-expand'),composer=toolPage.locator('.composer');
+    const settleEditor=()=>toolPage.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const inputHeight=async()=>{await settleEditor();return input.evaluate(node=>node.getBoundingClientRect().height);};
+    const selection=()=>input.evaluate(node=>({start:node.selectionStart,end:node.selectionEnd,direction:node.selectionDirection}));
+    const initialHeight=await inputHeight();
+    assert.equal(await expand.getAttribute('type'),'button');
+    assert.equal(await expand.getAttribute('aria-controls'),'input');
+    assert.equal(await expand.innerText(),'展开输入');
+    await input.focus();
+    assert.equal(await composer.evaluate(node=>node.classList.contains('is-editing')),true,'focusing the Canvas input expands it');
+    const focusedHeight=await inputHeight();
+    assert(focusedHeight>initialHeight+10,`focus expands the input (${initialHeight} → ${focusedHeight})`);
+    assert.equal(await expand.innerText(),'收起输入');
+    assert.equal(await input.evaluate(node=>getComputedStyle(node).resize),'vertical','the input exposes a native vertical resize handle');
+    await input.fill('短草稿。');const shortHeight=await inputHeight();
+    const longDraft=Array.from({length:48},(_,index)=>`第 ${index+1} 行：核对路线、条件和失败后的重试边界。`).join('\n');
+    await input.fill(longDraft);const longHeight=await inputHeight();
+    assert(longHeight>shortHeight+10,`long content grows beyond short content (${shortHeight} → ${longHeight})`);
+    const expandedGeometry=await composer.evaluate(node=>{const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height,viewport:innerHeight};});
+    assert(expandedGeometry.top>=-1&&expandedGeometry.bottom<=expandedGeometry.viewport+1&&expandedGeometry.height<expandedGeometry.viewport,'long input remains bounded by the viewport');
+    await input.fill('可保留的草稿：选区和输入高度。');
+    assert(await inputHeight()<longHeight-10,'shorter content releases the automatically allocated height');
+    await input.evaluate(node=>node.setSelectionRange(2,8,'backward'));
+    const selectedBeforeCollapse=await selection(),draftBeforeCollapse=await input.inputValue();
+    await expand.click();
+    assert.equal(await composer.evaluate(node=>node.classList.contains('is-editing')),false,'the explicit toggle collapses the input');
+    assert.equal(await input.inputValue(),draftBeforeCollapse,'collapse retains every draft byte');
+    assert.deepEqual(await selection(),selectedBeforeCollapse,'collapse retains the textarea selection');
+    await expand.click();
+    assert.equal(await composer.evaluate(node=>node.classList.contains('is-editing')),true);
+    assert.equal(await input.inputValue(),draftBeforeCollapse,'expansion restores the draft');
+    assert.deepEqual(await selection(),selectedBeforeCollapse,'expansion retains the textarea selection');
+    await input.focus();await input.evaluate(node=>node.setSelectionRange(3,9,'backward'));
+    const selectedBeforeEscape=await selection();
+    await input.evaluate(node=>node.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',isComposing:true,bubbles:true})));
+    assert.equal(await composer.evaluate(node=>node.classList.contains('is-editing')),true,'IME Escape does not collapse the composer');
+    await input.press('Escape');
+    assert.equal(await composer.evaluate(node=>node.classList.contains('is-editing')),false,'Escape from the input collapses the composer');
+    assert.deepEqual(await selection(),selectedBeforeEscape,'Escape retains the textarea selection');
+    assert.equal(await input.inputValue(),draftBeforeCollapse,'Escape retains the draft');
+    await expand.click();await tools.locator('summary').first().focus();
+    assert.equal(await composer.evaluate(node=>node.classList.contains('is-editing')),true,'ordinary blur keeps the input expanded');
+    await input.fill('拖动之后继续输入。');
+    const resizeBox=await input.boundingBox();
+    await toolPage.mouse.move(resizeBox.x+resizeBox.width-3,resizeBox.y+resizeBox.height-3);
+    await toolPage.mouse.down();await toolPage.mouse.move(resizeBox.x+resizeBox.width-3,resizeBox.y+resizeBox.height+77,{steps:8});await toolPage.mouse.up();
+    const manuallyResizedHeight=await inputHeight();
+    assert(manuallyResizedHeight>resizeBox.height+25,`native drag enlarges the input (${resizeBox.height} → ${manuallyResizedHeight})`);
+    await input.press('End');await input.pressSequentially('保留手动高度。');
+    assert(await inputHeight()>=manuallyResizedHeight-2,'typing after a native resize retains the user height');
+    await input.fill('');await expand.click();
+    ok('Canvas composer expands on focus, adapts to content within the viewport, preserves draft/selection through toggle and Escape, ignores IME Escape and retains native resize height');
+
+    await select(toolSkeleton.id);await select(toolNote.id,true);
+    assert.equal(await check.isDisabled(),false,'a game source plus a reference note may be checked');
+    const draft='已有用户草稿：保留标点、空格与换行。  \n继续核对例外。';
+    await input.fill(draft);
+    const postsBeforeDraft=apiPosts.length,readsBeforeDraft=overviewRequests.length,connectionsBeforeDraft=gameConnectionReads;
+    await settleCheck();
+    const generated=await input.inputValue();
+    assert(generated.startsWith(draft),'the existing draft bytes stay at the beginning');
+    assert(generated.length>draft.length,'the explicitly requested template is appended');
+    assert.match(generated,/核对现有设计/);
+    assert(generated.replaceAll('\\','/').toLowerCase().includes(connection.root.replaceAll('\\','/').replace(/\/+$/,'').toLowerCase()),'draft identifies the actual project directory regardless of equivalent Windows spelling');
+    assert(generated.includes(skeletonPath)&&generated.includes(skeletonSource.hash),'draft cites the selected skeleton path and hash');
+    assert.match(await toolPage.locator('#form-reason').innerText(),/核对参考便签/,'reference note remains part of the selected context');
+    assert.equal(await input.evaluate(node=>document.activeElement===node),true,'generated draft gets focus');
+    const titleOffset=generated.indexOf('核对现有设计',draft.length);
+    assert(titleOffset>=draft.length,'the new request contains a title after the original draft');
+    const appendPosition=await selection();
+    assert(appendPosition.start<=titleOffset&&titleOffset-appendPosition.start<12,'generated request positions the caret at the newly appended title');
+    await settleEditor();
+    const titleVisible=await input.evaluate((node,titleOffset)=>{
+      const style=getComputedStyle(node),mirror=document.createElement('div');
+      for(const key of ['font','letterSpacing','lineHeight','padding','border','boxSizing','width','tabSize'])mirror.style[key]=style[key];
+      Object.assign(mirror.style,{position:'fixed',left:'-10000px',top:'0',height:'auto',whiteSpace:'pre-wrap',overflowWrap:'break-word',visibility:'hidden'});
+      mirror.append(document.createTextNode(node.value.slice(0,titleOffset)));
+      const marker=document.createElement('span');marker.textContent='核对现有设计';mirror.append(marker,document.createTextNode(node.value.slice(titleOffset+marker.textContent.length)));
+      document.body.append(mirror);const top=marker.getBoundingClientRect().top-mirror.getBoundingClientRect().top,lineHeight=parseFloat(style.lineHeight);mirror.remove();
+      return {visible:top>=node.scrollTop-2&&top+lineHeight<=node.scrollTop+node.clientHeight+2,top,scrollTop:node.scrollTop,height:node.clientHeight};
+    },titleOffset);
+    assert(titleVisible.visible,`the appended request title is visible instead of only its final hash: ${JSON.stringify(titleVisible)}`);
+    assert.equal(apiPosts.length,postsBeforeDraft,'generating a template does not send or mutate any project');
+    assert(overviewRequests.length>readsBeforeDraft&&gameConnectionReads>connectionsBeforeDraft,'template validates the current connection and source snapshot');
+    assert.equal(new URLSearchParams(overviewRequests.at(-1)).get('refresh'),'true');
+    await settleCheck();assert.equal(await input.inputValue(),generated,'repeated template action does not duplicate the same request');
+    const repeatReads=overviewRequests.length,canonicalRoot=connection.root;
+    connection.root='\\\\?\\C:\\fixture\\VESPERIX\\';await settleCheck();connection.root=canonicalRoot;
+    assert.equal(overviewRequests.length,repeatReads+1,'extended Windows root spelling passes connection validation and reads the live overview');
+    assert.equal(await input.inputValue(),generated,'equivalent live root does not duplicate a template');
+    assert.equal(apiPosts.length,postsBeforeDraft);
+    assert.equal(await toolPage.evaluate(()=>window.injected),undefined,'reference text stays literal');
+    ok('game design template validates live sources, appends context without overwriting draft, focuses it, deduplicates and performs no POST');
+
+    await select(toolSkeleton.id);
+    const selectedSkeletonFrame=toolPage.locator(`.canvas-frame[data-item-id="${toolSkeleton.id}"]`);
+    if(!await selectedSkeletonFrame.evaluate(frame=>frame.classList.contains('is-active')))await selectedSkeletonFrame.locator('.canvas-frame-head > button').first().click();
+    const inlineSkeleton=toolPage.locator(`.canvas-frame[data-item-id="${toolSkeleton.id}"] .canvas-source-skeleton`);
+    await inlineSkeleton.locator('.gs-search-input').fill('深入条件');
+    await inlineSkeleton.locator('.gs-result[data-gs-node-id="condition_fixture"]').click();
+    await openTools();await readSource.click();
+    const skeletonSources=inlineSkeleton.locator('.canvas-source-skeleton-source-list');
+    await skeletonSources.waitFor();
+    const sourceEntry=await skeletonSources.locator('button').first().innerText();
+    await skeletonSources.locator('button').first().click();
+    await inlineSkeleton.locator('.canvas-source-skeleton-source-text').waitFor();
+    const sourceNavigation=await inlineSkeleton.locator('.canvas-source-skeleton-source-view').evaluate(panel=>{
+      const button=panel.querySelector('.canvas-source-skeleton-source-actions button'),r=button.getBoundingClientRect(),box=panel.getBoundingClientRect();
+      return {modal:panel.tagName==='DIALOG'&&panel.open,within:box.top>=0&&box.bottom<=innerHeight&&box.left>=0&&box.right<=innerWidth,clickable:button.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))};
+    });
+    assert.deepEqual(sourceNavigation,{modal:true,within:true,clickable:true},'source return stays accessible above the Canvas when the composer is expanded');
+    await inlineSkeleton.getByRole('button',{name:/返回来源列表/}).click();
+    await skeletonSources.waitFor();
+    assert.equal(await skeletonSources.locator('button').first().innerText(),sourceEntry,'document navigation returns to the same source list');
+    assert.equal(await skeletonSources.locator('button').first().evaluate(node=>document.activeElement===node),true,'returning to the source list restores its document focus');
+    await inlineSkeleton.getByRole('button',{name:'返回游戏骨架',exact:true}).click();
+    assert.equal(await inlineSkeleton.locator('.canvas-source-skeleton-source-view').count(),0,'the labelled skeleton return closes the source panel');
+    assert.equal(await inlineSkeleton.locator('.gs-detail-title').innerText(),'深入条件','closing the source retains the selected skeleton node');
+    await openTools();await readSource.click();await skeletonSources.waitFor();
+    await skeletonSources.locator('button').first().click();await inlineSkeleton.locator('.canvas-source-skeleton-source-text').waitFor();
+    await toolPage.keyboard.press('Escape');
+    assert.equal(await inlineSkeleton.locator('.canvas-source-skeleton-source-view').count(),0,'Escape closes a document source directly back to the skeleton');
+    await openTools();await readSource.click();await skeletonSources.waitFor();await toolPage.keyboard.press('Escape');
+    assert.equal(await inlineSkeleton.locator('.canvas-source-skeleton-source-view').count(),0,'Escape also closes the source list');
+    ok('skeleton sources support list → document → list with restored focus, labelled return to the selected skeleton and Escape from document or list');
+    const preserved='来源变化时保留这份草稿。';await input.fill(preserved);
+    const stableSkeletonHash=skeletonSource.hash;
+    skeletonSource.hash=H('6');await settleCheck();assert.equal(await input.inputValue(),preserved,'stale skeleton does not append a misleading request');
+    assert(await toolPage.locator('#canvas-game-context').innerText(),'stale source has a visible explanation');
+    skeletonSource.hash=stableSkeletonHash;
+    const docHash=trackedSource.hash;trackedSource.hash=H('7');
+    await settleCheck();assert.equal(await input.inputValue(),preserved,'changed node reference document refuses the request');trackedSource.hash=docHash;
+    const provenanceDocHash=provenanceOnlyDocument.hash;provenanceOnlyDocument.hash=H('4');
+    await settleCheck();assert.equal(await input.inputValue(),preserved,'a changed provenance-only node document refuses the request');provenanceOnlyDocument.hash=provenanceDocHash;
+    const rootBefore=connection.root;connection.root='C:/fixture/ReconnectedGame';
+    await settleCheck();assert.equal(await input.inputValue(),preserved,'a reconnected project does not reuse an old source root');connection.root=rootBefore;
+    const currentModel=overview.skeleton;overview.skeleton=undefined;
+    await settleCheck();assert.equal(await input.inputValue(),preserved,'a missing skeleton refuses the request');overview.skeleton=currentModel;
+    let releaseOverview,notifyOverviewStarted;
+    const heldRead=new Promise(resolve=>{notifyOverviewStarted=resolve;});
+    holdGameOverview=()=>new Promise(resolve=>{releaseOverview=resolve;notifyOverviewStarted();});
+    await openDesign();await check.click();await heldRead;
+    await input.fill('请求期间新输入的草稿');
+    releaseOverview();await toolPage.waitForFunction(()=>!document.querySelector('#canvas-game-check')?.disabled);
+    assert.equal(await input.inputValue(),'请求期间新输入的草稿','a completed stale async check cannot overwrite newer input');
+    const heldSelectionRead=new Promise(resolve=>{notifyOverviewStarted=resolve;});
+    holdGameOverview=()=>new Promise(resolve=>{releaseOverview=resolve;notifyOverviewStarted();});
+    await openDesign();await check.click();await heldSelectionRead;
+    await select(toolTable.id);
+    const tableDraft='切换选区后的循环表草稿';await input.fill(tableDraft);
+    const selectionReadDone=toolPage.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/game/overview'));
+    releaseOverview();await selectionReadDone;await toolPage.waitForFunction(()=>!document.querySelector('#canvas-game-check')?.disabled);
+    assert.equal(await input.inputValue(),tableDraft,'a completed check cannot append a template for the previously selected source');
+    assert.equal(apiPosts.length,postsBeforeDraft);
+    ok('stale/missing skeleton, changed source/provenance-only documents, reconnected root and in-flight input/selection changes preserve the draft without writes');
+
+    // A removed node changes the discussion route; refreshing must migrate the current draft.
+    await select(toolSkeleton.id);
+    const refreshedSkeletonFrame=toolPage.locator(`.canvas-frame[data-item-id="${toolSkeleton.id}"]`);
+    if(!await refreshedSkeletonFrame.evaluate(frame=>frame.classList.contains('is-active')))await refreshedSkeletonFrame.locator('.canvas-frame-head > button').first().click();
+    await inlineSkeleton.locator('.gs-search-input').fill('深入条件');
+    await inlineSkeleton.locator('.gs-result[data-gs-node-id="condition_fixture"]').click();
+    const removedNodeDraft='节点移除后仍须保留这份设计核对草稿。  \n待确认例外。';await input.fill(removedNodeDraft);
+    const nodesBeforeRemoval=syntheticSkeleton.nodes,relationsBeforeRemoval=syntheticSkeleton.relations,hashBeforeRemoval=skeletonSource.hash;
+    syntheticSkeleton.nodes=syntheticSkeleton.nodes.filter(node=>node.id!=='condition_fixture');
+    syntheticSkeleton.relations=syntheticSkeleton.relations.filter(relation=>relation.from!=='condition_fixture'&&relation.to!=='condition_fixture');
+    skeletonSource.hash=H('2');
+    const otherRootDraft='另一个窗口已保存的根选区草稿。  \n两份文字都要保留。';
+    const nextSourceRevision=board.canvas.objects.find(object=>object.id===toolSkeleton.id).content_revision+1;
+    await toolPage.evaluate(({objectId,revision,text,currentText})=>{
+      const key='spellcast.reply-drafts.v1',records=JSON.parse(localStorage.getItem(key)||'[]');
+      const existing=records.find(record=>record.object_id===objectId&&record.channel==='composer'&&record.text===currentText);
+      if(!existing)throw new Error('Missing current node draft for concurrent root draft fixture');
+      const anchors=existing.anchors.map(({block_id:_node,annotations:_annotations,...anchor})=>({...anchor,content_revision:revision}));
+      records.push({...existing,anchors,expected_revision:revision,text,updated_at:Date.now()+1});
+      localStorage.setItem(key,JSON.stringify(records));
+    },{objectId:toolSkeleton.id,revision:nextSourceRevision,text:otherRootDraft,currentText:removedNodeDraft});
+    toolPage.once('dialog',dialog=>dialog.accept());await openTools();await refresh.click();
+    await toolPage.waitForFunction(()=>document.querySelector('.canvas-source-skeleton-detail .gs-detail-title')?.textContent?.includes('游戏全貌'));
+    const carriedDraft=await input.inputValue();
+    assert(carriedDraft.includes(removedNodeDraft)&&carriedDraft.includes(otherRootDraft),'source refresh preserves both the removed-node draft and the newer persisted root draft byte for byte');
+    assert.doesNotMatch(await toolPage.locator('#form-reason').innerText(),/深入条件/,'composer context stops referring to the removed node');
+    await settleCheck();const migratedDraft=await input.inputValue();
+    assert(migratedDraft.includes(removedNodeDraft)&&migratedDraft.includes(otherRootDraft)&&migratedDraft.includes(H('2')),'a new request uses the refreshed root context and retains both migrated drafts');
+    await select(toolNote.id);await select(toolSkeleton.id);
+    assert.equal(await input.inputValue(),migratedDraft,'leaving and returning to the refreshed root recovers the migrated draft');
+    syntheticSkeleton.nodes=nodesBeforeRemoval;syntheticSkeleton.relations=relationsBeforeRemoval;skeletonSource.hash=hashBeforeRemoval;
+    ok('refreshing away a selected skeleton node updates composer anchors, preserves both local and newer stored drafts, allows a current request and recovers the migrated root draft');
+
+    // Table sources use the same project validation and their own inline document reader.
+    await select(toolTable.id);await directDisabled(false);
+    gameReadFault='document';await openTools();await readSource.click();
+    await toolPage.waitForFunction(()=>{const status=document.querySelector('.canvas-source-table-source-status');return status?.textContent&&!/读取中|正在读取/.test(status.textContent);});
+    assert.equal(await toolPage.locator('.canvas-source-table-source-text').count(),0,'failed table source read never displays unverified text');
+    assert(await toolPage.locator('.canvas-source-table-source-status').innerText(),'table source failure is visible');
+    assert.equal(await input.inputValue(),tableDraft);
+    await toolPage.locator('.canvas-source-table-source-head').getByRole('button',{name:'返回玩法循环',exact:true}).click();
+    gameReadFault='';await openTools();await readSource.click();await toolPage.locator('.canvas-source-table-source-text').waitFor();
+    assert.match(await toolPage.locator('.canvas-source-table-source-text').innerText(),/全景骨架/);
+    await toolPage.locator('.canvas-source-table-source-head').getByRole('button',{name:'返回玩法循环',exact:true}).click();
+    assert.equal(await toolPage.locator('.canvas-source-table-source-view').count(),0,'the labelled loop return closes the table source');
+    await openTools();await readSource.click();await toolPage.locator('.canvas-source-table-source-text').waitFor();await toolPage.keyboard.press('Escape');
+    assert.equal(await toolPage.locator('.canvas-source-table-source-view').count(),0,'Escape closes the table source and restores its loop card');
+    assert.equal(await input.inputValue(),tableDraft,'table source navigation retains the composer draft');
+    const tableBefore=structuredClone(board.canvas.objects.find(object=>object.id===toolTable.id));
+    const tablePlacementBefore=structuredClone(board.canvas.items.find(item=>item.item_id===toolTable.id));
+    board.canvas.annotations.push({id:'game-tools-table-note',revision:1,anchor:{object_id:toolTable.id,content_revision:tableBefore.content_revision},snapshot:structuredClone(tableBefore.content),text:'保留旧版批注',removed:false});
+    const loopHashBefore=loop.source.hash,loopDocument=documents.find(document=>document.path===loop.source.path),loopDocumentHashBefore=loopDocument.hash;
+    loop.source.hash=H('5');loopDocument.hash=loop.source.hash;
+    const otherTableDraft='另一个窗口已保存的新循环版本草稿。';
+    await toolPage.evaluate(({objectId,revision,text,currentText})=>{
+      const key='spellcast.reply-drafts.v1',records=JSON.parse(localStorage.getItem(key)||'[]');
+      const existing=records.find(record=>record.object_id===objectId&&record.channel==='composer'&&record.text===currentText);
+      if(!existing)throw new Error('Missing current table draft for same-route refresh fixture');
+      records.push({...existing,anchors:existing.anchors.map(anchor=>({...anchor,content_revision:revision})),expected_revision:revision,text,updated_at:Date.now()+1});
+      localStorage.setItem(key,JSON.stringify(records));
+    },{objectId:toolTable.id,revision:tableBefore.content_revision+1,text:otherTableDraft,currentText:tableDraft});
+    toolPage.once('dialog',dialog=>dialog.accept());await openTools();await refresh.click();
+    await toolPage.waitForFunction(()=>document.querySelector('.canvas-source-table')?.textContent?.includes('sha 55555555'));
+    const refreshedTable=board.canvas.objects.find(object=>object.id===toolTable.id);
+    assert.equal(board.canvas.objects.filter(object=>object.id===toolTable.id).length,1,'fixed refresh keeps source identity');
+    assert.equal(refreshedTable.content_revision,tableBefore.content_revision+1);
+    assert.deepEqual(board.canvas.items.find(item=>item.item_id===toolTable.id),tablePlacementBefore,'fixed refresh preserves source placement');
+    assert.equal(board.canvas.annotations.find(annotation=>annotation.id==='game-tools-table-note').anchor.content_revision,tableBefore.content_revision,'fixed refresh preserves old annotation revision');
+    const finalTableDraft=await input.inputValue();
+    assert(finalTableDraft.includes(tableDraft)&&finalTableDraft.includes(otherTableDraft),'same-route refresh preserves current input and the newer stored version draft');
+    loop.source.hash=loopHashBefore;loopDocument.hash=loopDocumentHashBefore;
+    ok('fixed table source reader reports errors and retries; refresh preserves identity, placement, annotations and composer draft');
+
+    // Explicit expanded/collapsed preferences and the ordinary reply draft survive reload.
+    await openTools();assert.equal(await tools.evaluate(node=>node.open),true);
+    await toolPage.reload();await tools.waitFor();
+    assert.equal(await tools.evaluate(node=>node.open),true,'expanded fixed game tools persist');
+    await select(toolTable.id);
+    assert.equal(await input.inputValue(),finalTableDraft,'template dispatch uses the existing persisted composer draft');
+    await openTools();
+    await tools.locator('summary').first().click();
+    await toolPage.waitForFunction(()=>localStorage.getItem('spellcast.canvas.game-tools.open')==='false');
+    await toolPage.reload();await tools.waitFor();
+    assert.equal(await tools.evaluate(node=>node.open),false,'collapsed fixed game tools persist');
+    await select(toolTable.id);
+    await tools.locator('summary').first().click();
+    if(!await design.evaluate(node=>node.open))await toolPage.locator('#canvas-game-design-toggle').click();
+    for(const [theme,width,height] of [['dark',1600,900],['light',880,640],['dark',480,800],['dark',880,380],['light',480,380],['dark',900,320]]){
+      await toolPage.evaluate(theme=>{localStorage.setItem('spellcast.theme',theme);document.body.dataset.theme=theme;document.dispatchEvent(new CustomEvent('spellcast-theme-change',{detail:theme}));},theme);
+      await toolPage.setViewportSize({width,height});
+      const geometry=await toolPage.evaluate(()=>{const within=node=>{const r=node.getBoundingClientRect();return r.left>=-1&&r.right<=innerWidth+1;};return {tools:within(document.querySelector('#canvas-game-tools')),design:within(document.querySelector('#canvas-game-design')),page:document.documentElement.scrollWidth<=innerWidth+1};});
+      assert.deepEqual(geometry,{tools:true,design:true,page:true},`Canvas game tools remain contained at ${theme} ${width}x${height}`);
+      await input.fill(longDraft);await settleEditor();
+      const composerGeometry=await composer.evaluate(node=>{const r=node.getBoundingClientRect(),input=node.querySelector('#input').getBoundingClientRect(),toggle=node.querySelector('#composer-expand').getBoundingClientRect();return {composer:r.left>=-1&&r.right<=innerWidth+1&&r.top>=-1&&r.bottom<=innerHeight+1,input:input.top>=r.top-1&&input.bottom<=r.bottom+1,toggle:toggle.top>=r.top-1&&toggle.bottom<=r.bottom+1,page:document.documentElement.scrollWidth<=innerWidth+1};});
+      assert.deepEqual(composerGeometry,{composer:true,input:true,toggle:true,page:true},`expanded Canvas input remains accessible at ${theme} ${width}x${height}`);
+      await openDesign();await settleEditor();
+      const menuGeometry=await toolPage.locator('.composer-game-design-panel').evaluate(node=>{const r=node.getBoundingClientRect();return {left:r.left>=-1,right:r.right<=innerWidth+1,top:r.top>=-1,bottom:r.bottom<=innerHeight+1};});
+      assert.deepEqual(menuGeometry,{left:true,right:true,top:true,bottom:true},`design menu remains accessible beside the expanded input at ${theme} ${width}x${height}`);
+      await shot(toolPage,`canvas-game-tools-${theme}-${width}`);
+    }
+    ok('Canvas game tools remember expansion, preserve persisted draft and fit dark/light/narrow layouts');
+  }finally{
+    gameReadFault='';holdGameOverview=undefined;
+    await toolContext?.close();board.canvas=savedToolCanvas;
+  }
+
+  if(process.env.SPELLCAST_SKELETON_FIXTURE){
+    const bytes=await readFile(process.env.SPELLCAST_SKELETON_FIXTURE);
+    const parsed=JSON.parse(bytes.toString('utf8'));
+    const model=parsed.model||parsed;
+    assert.equal(model.schema_version,1);
+    addModelSources(model);
+    // Real-model visuals assume matching current snapshots; the separate drift fixture above checks changed versions.
+    for(const node of model.nodes)for(const evidence of node.provenance||[])if(!evidence.archived){const doc=documents.find(item=>item.path===evidence.path);if(doc)doc.hash=evidence.hash;}
+    overview.skeleton={source:{path:skeletonPath,hash:createHash('sha256').update(bytes).digest('hex')},model};
+    const byId=new Map(model.nodes.map(node=>[node.id,node]));
+    const paths=model.nodes.map(node=>{const chain=[],seen=new Set();let cursor=node;
+      while(cursor&&!seen.has(cursor.id)){chain.unshift(cursor);seen.add(cursor.id);cursor=byId.get(cursor.parent_id);}
+      return chain;}).filter(chain=>chain[0]?.kind==='system'&&!chain[0].parent_id);
+    const branch=paths.find(chain=>['system','region','structure','rule'].every((kind,index)=>chain[index]?.kind===kind))
+      ||paths.sort((left,right)=>right.length-left.length)[0];
+    assert(branch?.length,'real model has a navigable system branch');
+    for(const [theme,width,height] of [['dark',1600,900],['light',1600,900],['dark',880,640],['light',880,640]]){
+      const actual=await openPage(theme,width,height);
+      const actualHome=actual.page.locator('[data-game-home]');
+      assert.equal(await actualHome.locator('[data-game-skeleton="map"] .gs-system-card').count(),model.nodes.filter(node=>node.kind==='system'&&!node.parent_id).length);
+      assert.equal(await actualHome.locator('.gs-stage').count(),model.loop.length);
+      assert.equal(await actualHome.locator('.gs-system-card').first().isVisible(),true);
+      assert.equal(await actualHome.locator('dialog[open]').count(),0);
+      await shot(actual.page,`skeleton-real-root-${theme}-${width}`);
+      await noOverflow(actual.page,`optional local skeleton root ${theme} ${width}x${height}`);
+      await actualHome.locator(`.gs-system-card[data-gs-node-id="${branch[0].id}"]`).click();
+      for(const node of branch.slice(1))await actualHome.locator(`.gs-branch-card[data-gs-node-id="${node.id}"]`).click();
+      assert.equal(await actualHome.locator('.gs-detail-title').innerText(),branch.at(-1).title);
+      assert.equal(await actualHome.locator('.gs-detail-title').isVisible(),true);
+      assert.equal(await actualHome.locator('dialog[open]').count(),0,'node selection does not open the reader');
+      await shot(actual.page,`skeleton-real-branch-${theme}-${width}`);
+      await noOverflow(actual.page,`optional local skeleton branch ${theme} ${width}x${height}`);
+      const absorbed = model.nodes.filter(node=>node.rule && Object.values(node.rule).some(values=>values?.length))
+        .sort((a,b)=>Object.keys(b.rule).length-Object.keys(a.rule).length)[0];
+      if(absorbed){
+        await actualHome.locator('.gs-search-input').fill(absorbed.title);
+        await actualHome.locator(`.gs-result[data-gs-node-id="${absorbed.id}"]`).click();
+        assert.equal(await actualHome.locator('.gs-detail-title').innerText(),absorbed.title);
+        for(const [field,values] of Object.entries(absorbed.rule))if(values.length)assert.match(await actualHome.locator(`[data-gs-rule="${field}"]`).innerText(),new RegExp(values[0].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+        assert.equal(await actualHome.locator('dialog[open]').count(),0,'actual absorbed content is displayed directly in its node');
+        await shot(actual.page,`skeleton-real-rule-${theme}-${width}`);
+        await noOverflow(actual.page,`actual absorbed rule ${theme} ${width}x${height}`);
+      }
+      await actual.context.close();
+    }
+    ok('optional local Skeleton.json: root and selected branch render across desktop/small and both themes without opening the reader');
+  }
 
   // Unknown routes (including the retired /game/zones listing and /game/actions requests) count as unexpected.
   assert.deepEqual(pageErrors,[]);assert.deepEqual(unexpected,[]);

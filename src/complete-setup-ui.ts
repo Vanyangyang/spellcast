@@ -105,7 +105,7 @@ export function statusReadFailedReport(client: string, message: string): SetupRe
   return {
     client,
     kind: "failed",
-    complete_supported: client === "codex",
+    complete_supported: client === "codex" || client === "claude-code",
     installed: false,
     note: "",
     done: [],
@@ -138,6 +138,14 @@ export function installingReport(client: string): SetupReport {
 
 function mainHintKey(report: SetupReport): MessageKey {
   if (report.ui === "status-read-failed") return "setup.hint.readFailed";
+  if (report.client === "claude-code") {
+    if (report.installed && report.plugin_resources_current === false) {
+      return skillDiffers(report) ? "setup.hint.skillDiffers" : "setup.hint.claudeResourcesDiffer";
+    }
+    if (report.kind === "pending_reload") return "setup.hint.claudeReload";
+    if (report.kind === "installed_unverified") return "setup.hint.claudeUnverified";
+    if (report.kind === "verified") return "setup.hint.claudeVerified";
+  }
   if (report.client === "grok") {
     if (report.kind === "verified") return "setup.hint.grokVerified";
     if (report.kind === "not_installed") {
@@ -168,7 +176,10 @@ function setText(id: string, text: string) {
 
 export function paintSetupView(report: SetupReport, t: Translate) {
   const grok = report.client === "grok";
-  const status = grok && report.kind === "verified"
+  const claude = report.client === "claude-code";
+  const status = claude && report.ui !== "status-read-failed" && report.installed && report.plugin_resources_current === false
+    ? t("setup.status.claudeResourcesDiffer")
+    : grok && report.kind === "verified"
     ? t("setup.status.grokVerified")
     : t(report.hook_trust === "disabled" ? "setup.status.hooksDisabled"
     : report.hook_trust === "modified" ? "setup.status.hooksModified"
@@ -179,13 +190,14 @@ export function paintSetupView(report: SetupReport, t: Translate) {
   setText("#agent-setup-hint", hint);
   setText("#settings-setup-hint", hint);
   document.querySelectorAll<HTMLElement>("[data-setup-title]").forEach((el) => {
-    el.textContent = t(grok ? "setup.titleGrok" : "setup.title");
+    el.textContent = t(claude ? "setup.titleClaude" : grok ? "setup.titleGrok" : "setup.title");
   });
   document.querySelectorAll<HTMLElement>("[data-setup-body]").forEach((el) => {
     el.textContent = t("settings.body");
+    el.hidden = report.installed;
   });
   document.querySelectorAll<HTMLElement>("[data-setup-hooks-desc]").forEach((el) => {
-    el.textContent = t("setup.hooksDescription");
+    el.textContent = t(claude ? "setup.hooksDescriptionClaude" : "setup.hooksDescription");
   });
   document.querySelectorAll<HTMLElement>("[data-setup-skill-desc]").forEach((el) => {
     el.textContent = t("setup.skillDescription");
@@ -195,6 +207,7 @@ export function paintSetupView(report: SetupReport, t: Translate) {
   });
   document.querySelectorAll<HTMLButtonElement>("#agent-complete-setup, #settings-complete-setup").forEach(button => {
     button.textContent = t(report.kind === "installing" ? "setup.installing"
+      : claude ? (report.installed ? "setup.updateClaude" : "setup.installClaude")
       : grok ? (report.installed ? "setup.updateGrok" : "setup.installGrok")
       : report.installed ? "setup.update"
       : "setup.install");
@@ -202,7 +215,18 @@ export function paintSetupView(report: SetupReport, t: Translate) {
   document.querySelectorAll<HTMLButtonElement>("[data-setup-refresh]").forEach(button => {
     button.disabled = report.kind === "installing"; button.textContent = t("setup.check");
   });
+  document.querySelectorAll<HTMLElement>("[data-setup-ccgui-row]").forEach(row => { row.hidden = !claude; });
   document.querySelectorAll<HTMLElement>("[data-setup-component]").forEach(element => {
+    if (element.dataset.setupComponent === "ccgui") {
+      // Deployment and pairing only; live chat connections are shown by the CC GUI section below.
+      const [key, tone]: [MessageKey, string] = report.ccgui_detected === false ? ["setup.ccgui.notDetected", "quiet"]
+        : report.ccgui_detected !== true ? ["setup.component.unknown", "quiet"]
+        : !report.ccgui_plugin_current ? ["setup.ccgui.needsDeploy", "attention"]
+        : !report.ccgui_paired ? ["setup.ccgui.needsPairing", "attention"]
+        : ["setup.ccgui.ready", "done"];
+      element.textContent = t(key); element.dataset.tone = tone;
+      return;
+    }
     const component = element.dataset.setupComponent as "mcp" | "skill" | "hooks";
     const checked = report.components?.[component];
     const installed = checked ?? report.installed;
@@ -214,6 +238,9 @@ export function paintSetupView(report: SetupReport, t: Translate) {
     } else if (component === "skill" && skillDiffers(report)) {
       key = "setup.component.differs";
       tone = "attention";
+    } else if (component === "hooks" && installed && claude) {
+      key = "setup.hooks.claudeRegistered";
+      tone = "done";
     } else if (component === "hooks" && installed) {
       const trust = report.hook_trust || "unknown";
       key = `setup.hooks.${trust}` as MessageKey;
@@ -240,6 +267,7 @@ export function paintSetupView(report: SetupReport, t: Translate) {
   document.querySelectorAll<HTMLElement>(".setup-details").forEach((el) => {
     el.hidden = !body;
   });
+  window.dispatchEvent(new CustomEvent("spellcast:setup-report", { detail: report }));
 }
 
 export function createSetupController(opts: {

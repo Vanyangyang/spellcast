@@ -109,6 +109,8 @@ pub struct CanvasArtifactAnchor {
 /// Something the user did on the local Spellcast surface.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_pin: Option<crate::types::HostRoutePin>,
     pub seq: u64,
     pub at_ms: u64,
     /// poke | reply | kept | dismiss | expired | say | board_edit | cleared
@@ -196,6 +198,7 @@ impl Inbox {
 impl AgentEvent {
     pub fn new(kind: &str) -> Self {
         Self {
+            host_pin: None,
             seq: 0,
             at_ms: 0,
             kind: kind.into(),

@@ -28,17 +28,20 @@ import "./project-workspace.css";
 import { createProjectPlanningView } from "./project-planning-view";
 import { createGameHome } from "./project-game-home";
 import { gh } from "./i18n/game-home";
-import type { PlayerLoop } from "./project-game-home-api";
+import type { GameDocument, PlayerLoop } from "./project-game-home-api";
+import type { GameSkeleton } from "./project-game-skeleton-model";
 import { planText } from "./i18n/planning";
 
 export type ProjectWorkspace = {
   open(projectId?: string, recordId?: string): Promise<void>;
+  openOnCanvas(projectId?: string): Promise<void>;
   close(): void;
 };
 
 export type ProjectWorkspaceOptions = {
   onChanged: () => void;
   onOpenSourceTable: (projectId: string, projectName: string, root: string, loop: PlayerLoop) => Promise<string>;
+  onOpenSkeleton: (projectId: string, projectName: string, root: string, skeleton: GameSkeleton, documents: readonly GameDocument[]) => Promise<string>;
 };
 
 type PendingMutation = { requestId: string; fingerprint: string };
@@ -257,9 +260,10 @@ export function createProjectWorkspace(options: ProjectWorkspaceOptions): Projec
   const gameTab = button(""); gameTab.dataset.projectView = "game";
   const planningTab = button(""); planningTab.dataset.projectView = "planning";
   const recordsTab = button(""); recordsTab.dataset.projectView = "records";
+  const sourceLibrary = button(""); sourceLibrary.dataset.projectAction = "source-library";
   const reloadSources = button(""); reloadSources.dataset.projectAction = "reload-sources";
-  for (const item of [gameTab, planningTab, recordsTab, reloadSources]) item.setAttribute("role", "menuitem");
-  toolsMenu.append(gameTab, planningTab, recordsTab, reloadSources); tools.append(toolsSummary, toolsMenu);
+  for (const item of [gameTab, planningTab, recordsTab, sourceLibrary, reloadSources]) item.setAttribute("role", "menuitem");
+  toolsMenu.append(gameTab, planningTab, recordsTab, sourceLibrary, reloadSources); tools.append(toolsSummary, toolsMenu);
   tools.addEventListener("keydown", event => { if (event.key === "Escape" && tools.open) { event.preventDefault(); event.stopPropagation(); tools.open = false; toolsSummary.focus(); } });
   headerActions.append(projectPicker, tools, refresh, closeButton);
   header.append(heading, notice, headerActions);
@@ -316,6 +320,12 @@ export function createProjectWorkspace(options: ProjectWorkspaceOptions): Projec
   const gameHome = createGameHome({
     openRecord: id => { setWorkspaceView("records"); void selectRecord(id); },
     onChanged: options.onChanged,
+    openSkeleton: async (skeleton, documents, root, nodeId) => {
+      if (!selectedProject) throw new Error("No project selected");
+      const objectId = await options.onOpenSkeleton(selectedProject.id, selectedProject.name, root, skeleton, documents);
+      closeWorkspace();
+      window.dispatchEvent(new CustomEvent("spellcast:locate-canvas-object", { detail: { objectId, nodeId, activate: true } }));
+    },
     openTool: view => setWorkspaceView(view),
     openSourceTable: async (loop, root) => {
       if (!selectedProject) throw new Error("No project selected");
@@ -331,9 +341,10 @@ export function createProjectWorkspace(options: ProjectWorkspaceOptions): Projec
     tools.open=false;
     render();
   }
-  gameTab.addEventListener("click",()=>{recordOpenRequested=false;setWorkspaceView("game");void gameHome.refresh(false);});
+  gameTab.addEventListener("click",()=>{recordOpenRequested=false;setWorkspaceView("game");gameHome.showGame();void gameHome.refresh(false);});
   planningTab.addEventListener("click",()=>{recordOpenRequested=false;setWorkspaceView("planning");void planningView.refresh();});
   recordsTab.addEventListener("click",()=>setWorkspaceView("records"));
+  sourceLibrary.addEventListener("click",()=>{recordOpenRequested=false;setWorkspaceView("game");gameHome.showSources();});
   reloadSources.addEventListener("click",()=>{recordOpenRequested=false;setWorkspaceView("game");void gameHome.refresh(true);});
   projectPicker.addEventListener("change",()=>{ if(projectPicker.value) void selectProject(projectPicker.value); });
 
@@ -766,6 +777,7 @@ export function createProjectWorkspace(options: ProjectWorkspaceOptions): Projec
     refresh.disabled = mutationBusy;
     toolsSummary.textContent = gh("tools"); toolsSummary.setAttribute("aria-label", gh("toolsLabel"));
     gameTab.textContent = gh("backToGame"); planningTab.textContent = gh("planningTool"); recordsTab.textContent = gh("recordsTool"); reloadSources.textContent = gh("reloadSources");
+    sourceLibrary.textContent = gh("sourceLibrary"); sourceLibrary.disabled = !selectedProject;
     planningTab.disabled = !selectedProject; gameTab.disabled = !selectedProject; reloadSources.disabled = !selectedProject;
     // Without a project there is nothing to show but the project list, where projects are created.
     const shown = selectedProject ? workspaceView : "records";
@@ -1161,15 +1173,42 @@ export function createProjectWorkspace(options: ProjectWorkspaceOptions): Projec
   render();
 
   return {
-    async open(projectId?: string, recordId?: string) {
-      recordOpenRequested=!!recordId;
-      if(recordId)workspaceView="records";
-      const previous = selectedProject?.id;
+    async openOnCanvas(projectId?: string) {
+      recordOpenRequested = false;
+      await reloadProjects(projectId);
+      if (selectedProject) {
+        const current = selectedProject;
+        try {
+          await gameHome.setProject(current);
+          const source = await gameHome.canvasSource();
+          if (selectedProject?.id !== current.id) return;
+          if (source) {
+            const objectId = await options.onOpenSkeleton(current.id, current.name, source.root, source.skeleton, source.documents);
+            closeWorkspace();
+            window.dispatchEvent(new CustomEvent("spellcast:locate-canvas-object", { detail: { objectId, activate: true } }));
+            return;
+          }
+        } catch (error) { setNotice(`${pt("error")} ${asError(error)}`); }
+      }
+      // Projects without a readable skeleton still need their connection and management tools.
       if (!dialog.open) dialog.showModal();
-      await reloadProjects(projectId, recordId);
-      if(workspaceView==="planning")await planningView.refresh();
-      else if(workspaceView==="game"&&previous&&previous===selectedProject?.id)await gameHome.refresh(false);
-      gameHome.visible(workspaceView==="game");
+      gameHome.visible(workspaceView === "game");
+    },
+    async open(projectId?: string, recordId?: string) {
+      dialog.setAttribute("aria-busy", "true");
+      try {
+        recordOpenRequested=!!recordId;
+        if(recordId)workspaceView="records";
+        const previous = selectedProject?.id;
+        if (!dialog.open) dialog.showModal();
+        await reloadProjects(projectId, recordId);
+        if(workspaceView==="planning")await planningView.refresh();
+        else if(workspaceView==="game") {
+          if(previous&&previous===selectedProject?.id)await gameHome.refresh(false);
+          else { await gameHome.setProject(selectedProject); await gameHome.canvasSource(); }
+        }
+        gameHome.visible(workspaceView==="game");
+      } finally { dialog.setAttribute("aria-busy", "false"); }
     },
     close() {
       closeWorkspace();

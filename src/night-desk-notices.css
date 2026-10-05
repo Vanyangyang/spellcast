@@ -52,7 +52,7 @@ body #completion-voice[aria-pressed="false"] {
     radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--nd-done) 18%, transparent), transparent 60%),
     var(--nd-glass-hover);
 }
-/* Tighter rhythm keeps a two-line title within the 128px each card may use (completions.rs: 140px per card). */
+/* Tighter rhythm keeps a three-line reply within the 148px each card may use (completions.rs: 160px per card). */
 #completions .task {
   gap: 4px;
   padding: 12px 18px 10px;
@@ -68,13 +68,11 @@ body #completion-voice[aria-pressed="false"] {
 #completions .project {
   color: var(--nd-ink-muted);
 }
-/* completions.css asks for 600, which the sans now ships as a real cut. */
 #completions .title {
-  color: var(--nd-ink-text);
+  color: var(--nd-ink-muted);
 }
 #completions .summary {
-  opacity: 1;
-  color: rgba(244, 241, 234, 0.8);
+  color: var(--nd-ink-text);
 }
 #completions .hint {
   margin-top: 3px;

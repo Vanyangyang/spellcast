@@ -24,7 +24,7 @@
 #settings .settings-tabs [role="tab"]:hover { color: var(--setup-text); }
 #settings .settings-tabs [aria-selected="true"] { border-bottom-color: var(--setup-accent); color: var(--setup-text); font-weight: 600; }
 /* Where the sheet is wide enough for every label on one line (the desktop window always is), a
-   longer label such as "Appearance & reading" takes the room it needs instead of wrapping. */
+   longer label such as "Asides & connection" takes the room it needs instead of wrapping. */
 @media (min-width: 700px) {
   #settings .settings-tabs { grid-template-columns: repeat(4, minmax(max-content, 1fr)); }
 }
@@ -34,6 +34,12 @@
 #settings-panel-appearance, #settings-panel-connection, #settings-panel-display { width: 100%; max-width: 64em; margin-inline: auto; }
 #settings .settings-panel[hidden] { display: none !important; }
 #settings .settings-panel:focus-visible { outline: 2px solid var(--setup-accent); outline-offset: 4px; }
+#settings .settings-startup { display: grid; gap: 12px; padding-bottom: 24px; border-bottom: 1px solid var(--setup-border); }
+#settings .settings-startup h3, #settings .settings-startup .hint { margin: 0; }
+#settings .startup-setting { display: flex; flex-direction: row; justify-content: flex-start; align-items: center; gap: 10px; color: var(--setup-text); font-weight: 600; text-align: start; cursor: pointer; }
+#settings .startup-setting input { width: 18px; height: 18px; margin: 0; flex-shrink: 0; accent-color: var(--setup-accent); }
+#settings .startup-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+#settings .startup-feedback .hint { flex: 1 1 240px; }
 #settings .theme-setting { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; margin: 0; color: var(--setup-text); font-size: calc(var(--settings-text-size) - 1px); font-weight: 600; }
 #settings .theme-setting select { min-width: 160px; min-height: 36px; padding: 6px 10px; border: 1px solid var(--setup-border); border-radius: 9px; background: var(--setup-subtle); color: var(--setup-text); font: inherit; }
 #settings .settings-typography { display: grid; gap: 16px; padding-top: 24px; border-top: 1px solid var(--setup-border); }
@@ -80,7 +86,6 @@
 #settings .setup-required { padding: 2px 8px; border-radius: 6px; background: var(--setup-subtle); color: var(--setup-muted); font-size: var(--settings-small-size); }
 #settings .setup-clients { display: grid; gap: 8px; }
 #settings .setup-clients-label { margin: 0; color: var(--setup-muted); font-size: var(--settings-small-size); font-weight: 600; }
-#settings .observer-points { margin: 0; padding-left: 1.15em; color: var(--setup-muted); font-size: calc(var(--settings-text-size) - 1px); line-height: 1.7; display: grid; gap: 6px; }
 #settings .settings-body, #settings .hint { margin: 0; color: var(--setup-muted); font-size: calc(var(--settings-text-size) - 1px); line-height: 1.7; }
 #settings .setup-components { margin: 0; padding: 0; list-style: none; border: 1px solid var(--setup-border); border-radius: 12px; overflow: hidden; }
 #settings .setup-components li { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 14px; }
@@ -113,7 +118,9 @@
 #settings .setup-details-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 #settings .agent-status { margin: 0; font-size: var(--settings-small-size); }
 #settings .setup-connection-status { padding: 12px 14px; border: 1px solid var(--setup-border); border-radius: 10px; background: var(--setup-subtle); color: var(--setup-text); }
-#settings .setup-connection-status .agent-last { color: var(--setup-muted); }
+#settings .setup-connection-status .agent-last,
+#settings .setup-connection-status .client-summary-detail[data-link="none"],
+#settings .setup-connection-status .client-summary-when { color: var(--setup-muted); }
 #settings button:focus-visible, #settings summary:focus-visible { outline: 2px solid var(--setup-accent); outline-offset: 3px; }
 .agent-setup-checks { position: relative; display: grid; gap: 6px; }
 .agent-setup-checks-title { margin: 0; color: var(--mute); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
@@ -130,6 +137,27 @@
 .setup-components-home [data-tone="done"] { color: var(--mint); }
 .setup-components-home [data-tone="attention"] { color: var(--warn); }
 .agent-setup-checks-note { margin: 0; color: var(--mute); font-size: 11px; line-height: 1.5; }
+/* Pairing help and diagnostics only; per-client status is the connection summary. */
+.settings-host-link > [data-claude-connection-status] { margin: 0 0 8px; color: var(--setup-muted, var(--mute)); font-size: .92em; line-height: 1.5; }
+.settings-host-link ul { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.settings-host-link h4 { margin: 8px 0; }
+.settings-host-link ul[hidden], .settings-host-link button[hidden], .settings-host-link p[hidden] { display: none; }
+.settings-host-diagnostics { margin-top: 12px; border-top: 1px solid var(--setup-border, var(--line)); padding-top: 10px; }
+.settings-host-diagnostics > summary { cursor: pointer; color: var(--setup-muted, var(--mute)); }
+.settings-host-diagnostics > code { display: block; overflow-wrap: anywhere; margin-block: 10px; }
+.settings-host-diagnostics > .config-actions { flex-wrap: wrap; }
+.settings-host-diagnostics > p { color: var(--setup-muted, var(--mute)); font-size: .9em; }
+.settings-host-diagnostics > summary:focus-visible { outline: 2px solid var(--setup-accent, var(--mint)); outline-offset: 3px; }
+/* Diagnostic identity lines, not cards. */
+.settings-host-session { display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--setup-border, var(--line)); overflow-wrap: anywhere; }
+.settings-host-session-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.settings-host-session-heading span { color: var(--setup-muted, var(--mute)); font-size: .85em; }
+.settings-host-session[data-recently-active="true"] .settings-host-session-heading span { color: var(--setup-accent, var(--mint)); }
+.settings-host-session code { font-size: .8em; white-space: normal; overflow-wrap: anywhere; }
+.recipient-diagnostics { grid-column: 1 / -1; min-width: 0; margin-top: 8px; }
+.recipient-diagnostics > summary { cursor: pointer; color: var(--mute); font-size: .9em; }
+.recipient-diagnostics code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8em; }
+.recipient-diagnostics section { margin-block: 8px; }
 #settings .settings-display { display: grid; gap: 20px; }
 #settings .settings-display-head { display: grid; gap: 6px; }
 #settings .settings-display-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

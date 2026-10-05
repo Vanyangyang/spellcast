@@ -1,0 +1,9 @@
+.composer-route-options #recipient-new-chat { grid-column: 1 / -1; justify-self: end; white-space: nowrap; }
+.canvas-new-chat { width: min(640px, calc(100vw - 32px)); box-sizing: border-box; }
+#canvas-new-chat h2 { font: 600 22px/1.35 var(--font); }
+#canvas-new-chat button[type="button"] { color: var(--studio-ink); background: var(--studio-canvas); border-color: var(--studio-line); }
+.canvas-new-chat form { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.canvas-new-chat #new-chat-request { min-height: 110px; max-height: 30vh; }
+.canvas-new-chat .new-chat-status { margin: 4px 0; overflow-wrap: anywhere; }
+.new-chat-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+@media (max-width: 560px) { .composer-route-options #recipient-new-chat { width: 100%; } }

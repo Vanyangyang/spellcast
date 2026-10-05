@@ -66,6 +66,20 @@ assert.deepEqual(new DraftStore(() => storage).get(draftKey(anchored)).anchors, 
 assert.notEqual(draftKey(anchored), draftKey({ ...anchored, target_source_id: 'visual-task' }));
 assert.notEqual(draftKey(anchored), draftKey({ ...anchored, anchors: [{ ...anchored.anchors[0], content_revision: 4 }, anchored.anchors[1]] }));
 assert.equal(again.put({ ...anchored, anchors: [{ object_id: 'cover', content_revision: 'stale' }] }), false);
+for (const count of [33, 64]) {
+  const manyAnchors = { ...anchored, text: `Keep all ${count} references`, anchors: Array.from({ length: count }, (_, index) => ({ object_id: `reference-${index}`, content_revision: index + 1 })) };
+  assert.equal(again.put(manyAnchors), true, `${count} references can be saved`);
+  const recovered = new DraftStore(() => storage).get(draftKey(manyAnchors));
+  assert.equal(recovered.text, manyAnchors.text);
+  assert.deepEqual(recovered.anchors, manyAnchors.anchors, `${count} references survive reload intact`);
+}
+const beforeTooMany = saved, recordsBeforeTooMany = again.list();
+const tooManyAnchors = { ...anchored, anchors: Array.from({ length: 65 }, (_, index) => ({ object_id: `reference-${index}`, content_revision: index + 1 })) };
+assert.equal(again.put(tooManyAnchors), false, '65 references are rejected');
+assert.equal(again.lastError, 'invalid');
+assert.equal(saved, beforeTooMany, 'Rejected references leave saved records unchanged');
+assert.deepEqual(again.list(), recordsBeforeTooMany, 'Rejected references leave held records unchanged');
+assert.deepEqual(new DraftStore(() => storage).list(), recordsBeforeTooMany, 'Existing records still reload intact after rejection');
 saved = null;
 const linkedDrafts = new DraftStore(() => storage);
 const linked = { ...anchored, anchors: [{ object_id: 'value', content_revision: 3, inputs: { revision: 99, ports: { text: { status: 'available', value: 8, sources: [] } } } }], text: 'Keep this linked draft' };
@@ -77,4 +91,4 @@ assert.equal(linkedDrafts.getComposer({ ...startup, target_source_id: 'another-t
 assert(linkedDrafts.put({ ...linked, text: 'A separate historical draft', anchors: [{ ...linked.anchors[0], inputs: { ...linked.anchors[0].inputs, revision: 100 } }] }));
 assert.equal(linkedDrafts.getComposer(startup), undefined, 'Ambiguous drafts stay available for explicit recovery.');
 assert.equal(new DraftStore(() => storage).list().length, 2);
-console.log('PASS: draft recovery, failed storage, window merging, legacy preservation and exact multi-anchor routing, including recomputed inputs');
+console.log('PASS: draft recovery, failed storage, window merging, legacy preservation and exact multi-anchor routing, including recomputed inputs and the 64-anchor limit');

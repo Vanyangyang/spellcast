@@ -79,7 +79,7 @@ async function until(read, message, timeout = 60000) {
   }
 }
 
-const native = spawn(exe, [], { env, stdio: "ignore" });
+const native = spawn(exe, [], { env, stdio: "ignore", windowsHide: true });
 let code = 1;
 try {
   await until(async () => (await fetch(`http://127.0.0.1:${cdp}/json/version`)).ok, "native CDP did not start");

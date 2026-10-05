@@ -1,12 +1,18 @@
-//! Private local automation credential. Never expose it through HTTP or window IPC.
+//! Owner-only local credentials. The project key never enters HTTP/window IPC;
+//! the separate host-link key can be copied from the authorized main window.
 use std::{fs, io::Write, path::Path};
 
 pub(crate) fn load_or_create(database: &Path) -> Result<String, String> {
+    load_or_create_named(database, "project-api.key")
+}
+
+pub(crate) fn load_or_create_named(database: &Path, name: &str) -> Result<String, String> {
+    if !matches!(name, "project-api.key" | "host-link.key") { return Err("本机凭据名称无效".into()); }
     let directory=database.parent().ok_or("项目数据库没有父目录")?.join("credentials");
     fs::create_dir_all(&directory).map_err(|e|e.to_string())?;
     require_plain(&directory)?;
     protect(&directory,true)?;
-    let path=directory.join("project-api.key");
+    let path=directory.join(name);
     if !path.try_exists().map_err(|e|e.to_string())? {
         let key=format!("{}{}",uuid::Uuid::new_v4().simple(),uuid::Uuid::new_v4().simple());
         let mut options=fs::OpenOptions::new();
@@ -79,6 +85,10 @@ mod tests {
         let first=load_or_create(&db).unwrap();
         assert_eq!(first.len(),64);
         assert_eq!(first,load_or_create(&db).unwrap());
+        let host=load_or_create_named(&db,"host-link.key").unwrap();
+        assert_ne!(host,first);
+        assert_eq!(host,load_or_create_named(&db,"host-link.key").unwrap());
+        assert!(load_or_create_named(&db,"../other.key").is_err());
         #[cfg(unix)] {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(fs::metadata(root.join("credentials/project-api.key")).unwrap().permissions().mode() & 0o777,0o600);

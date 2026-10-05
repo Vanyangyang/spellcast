@@ -72,6 +72,7 @@ impl Store {
         crate::project_workspace::init_access_schema(&connection)?;
         crate::project_game::init_schema(&connection)?;
         crate::project_goals::init_schema(&connection)?;
+        crate::sigil_store::init_schema(&connection)?;
         Ok(Self { connection })
     }
 

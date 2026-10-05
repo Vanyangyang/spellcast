@@ -2,6 +2,130 @@ use super::*;
 use serde_json::{json, Value};
 use spellcast_core::{CanvasBatchRequest, CanvasBatchStatus};
 
+fn bind_fixture(bridge: &Bridge, source: &str, thread: &str, cwd: &str) {
+    bridge.update(|state| {
+        state.bindings.push(crate::codex::CodexBinding {
+            source_id: source.into(), thread_id: thread.into(), cwd: cwd.into(),
+            label: source.into(), executable: Default::default(), protocol_agent: "test".into(), bound_at_ms: 1,
+        });
+        Ok(())
+    }).unwrap();
+}
+
+fn revision(id: &str, revision: u64) -> crate::annotations::AnnotationRevision {
+    crate::annotations::AnnotationRevision { id: id.into(), revision }
+}
+
+#[test]
+fn old_annotations_default_pending_and_schema_requires_source() {
+    let note: spellcast_core::CanvasAnnotation = serde_json::from_value(json!({
+        "id":"old","revision":1,"anchor":{"object_id":"o","content_revision":1},
+        "snapshot":{"type":"text"},"text":"old note"
+    })).unwrap();
+    assert_eq!(note.status, spellcast_core::CanvasAnnotationStatus::Pending);
+    let schema = serde_json::to_value(rmcp::schemars::schema_for!(crate::annotations::AnnotationRequest)).unwrap();
+    assert!(schema["required"].as_array().unwrap().contains(&json!("source_id")));
+    assert!(schema["properties"]["action"].is_object());
+}
+
+#[test]
+fn pending_pages_are_stable_scoped_and_read_does_not_complete() {
+    let bridge = Bridge::new(Headless, 0);
+    bind_fixture(&bridge, "task-a", "thread-shared", "G:\\Workspace\\Same\\");
+    bind_fixture(&bridge, "task-alias", "thread-shared", "g:/workspace/same");
+    bind_fixture(&bridge, "task-other", "thread-other", "G:/Workspace/Same");
+    bridge.canvas_batch(batch("seed-pages", json!([text("draft", "原文")])), Some("task-a")).unwrap();
+    for start in [0, 64] {
+        let operations: Vec<Value> = (start..(start + 64).min(70)).map(|i| json!({
+            "op":"annotate","id":format!("note-{i:03}"),"expected_revision":0,
+            "anchor":{"object_id":"draft","content_revision":1},"text":format!("注释{i}")
+        })).collect();
+        let result = bridge.canvas_batch(batch(&format!("notes-{start}"), json!(operations)), None).unwrap();
+        assert_eq!(result.result.status, CanvasBatchStatus::Applied);
+    }
+    let mut seen = Vec::new();
+    let mut after = None;
+    loop {
+        let page = bridge.pending_annotations("task-alias", Some(13), after.as_deref()).unwrap();
+        seen.extend(page.annotations.iter().map(|note| note.id.clone()));
+        if !page.has_more { assert!(page.next_cursor.is_none()); break; }
+        after = page.next_cursor;
+    }
+    assert_eq!(seen.len(), 70);
+    assert_eq!(seen.iter().collect::<std::collections::BTreeSet<_>>().len(), 70);
+    assert!(bridge.pending_annotations("task-other", None, None).unwrap().annotations.is_empty());
+    assert_eq!(bridge.pending_annotations("task-a", Some(64), None).unwrap().annotations.len(), 64);
+    assert_eq!(bridge.board().canvas.annotation("note-000").unwrap().status, spellcast_core::CanvasAnnotationStatus::Pending);
+    let first_page = bridge.pending_annotations("task-a", Some(13), None).unwrap();
+    let build_generation = bridge.annotation_index_generation().unwrap();
+    let entries: Vec<_> = first_page.annotations.iter().map(|note| revision(&note.id, note.revision)).collect();
+    assert_eq!(bridge.complete_annotations("task-a", &entries).unwrap().completed, 13);
+    assert_eq!(bridge.annotation_index_generation(), Some(build_generation));
+    let next_page = bridge.pending_annotations("task-a", Some(13), first_page.next_cursor.as_deref()).unwrap();
+    assert_eq!(next_page.annotations.len(), 13);
+    assert_eq!(bridge.annotation_index_generation(), Some(build_generation));
+}
+
+#[test]
+fn complete_is_atomic_idempotent_and_user_edits_reopen() {
+    let path = std::env::temp_dir().join(format!("spellcast-annotation-complete-{}.sqlite3", new_id()));
+    {
+        let bridge = Bridge::open(Headless, 0, &path).unwrap();
+        bind_fixture(&bridge, "task-a", "thread-a", "G:/A");
+        bind_fixture(&bridge, "task-b", "thread-b", "G:/B");
+        bridge.canvas_batch(batch("seed-complete", json!([text("a", "A"), text("b", "B")])), Some("task-a")).unwrap();
+        bridge.canvas_batch(batch("note-complete", json!([
+            {"op":"annotate","id":"n-a","expected_revision":0,"anchor":{"object_id":"a","content_revision":1},"text":"A note"},
+            {"op":"annotate","id":"n-b","expected_revision":0,"anchor":{"object_id":"b","content_revision":1},"text":"B note"}
+        ])), None).unwrap();
+        assert!(bridge.complete_annotations("task-b", &[revision("n-a", 1)]).is_err());
+        let first = bridge.complete_annotations("task-a", &[revision("n-a", 1)]).unwrap();
+        assert_eq!(first.completed, 1);
+        assert_eq!(bridge.complete_annotations("task-a", &[revision("n-a", 1)]).unwrap().already_handled, 1);
+        assert_eq!(bridge.board().canvas.annotation("n-a").unwrap().revision, 1);
+        bridge.canvas_batch(batch("edit-a", json!([{"op":"annotate","id":"n-a","expected_revision":1,"anchor":{"object_id":"a","content_revision":1},"text":"A changed"}])), None).unwrap();
+        assert_eq!(bridge.board().canvas.annotation("n-a").unwrap().status, spellcast_core::CanvasAnnotationStatus::Pending);
+        assert!(bridge.complete_annotations("task-a", &[revision("n-b", 1), revision("n-a", 1)]).is_err());
+        assert_eq!(bridge.board().canvas.annotation("n-b").unwrap().status, spellcast_core::CanvasAnnotationStatus::Pending);
+        bridge.canvas_batch(batch("delete-b", json!([{"op":"remove_annotation","id":"n-b","expected_revision":1,"removed":true}])), None).unwrap();
+        assert!(bridge.complete_annotations("task-a", &[revision("n-b", 2), revision("n-a", 2)]).is_err());
+        assert_eq!(bridge.board().canvas.annotation("n-a").unwrap().status, spellcast_core::CanvasAnnotationStatus::Pending);
+        bridge.canvas_batch(batch("restore-b", json!([{"op":"remove_annotation","id":"n-b","expected_revision":2,"removed":false}])), None).unwrap();
+        assert_eq!(bridge.board().canvas.annotation("n-b").unwrap().status, spellcast_core::CanvasAnnotationStatus::Pending);
+        assert_eq!(bridge.complete_annotations("task-a", &[revision("n-a", 2), revision("n-b", 3)]).unwrap().completed, 2);
+    }
+    {
+        let bridge = Bridge::open(Headless, 0, &path).unwrap();
+        assert!(bridge.pending_annotations("task-a", None, None).unwrap().annotations.is_empty());
+        assert_eq!(bridge.board().canvas.annotation("n-a").unwrap().status, spellcast_core::CanvasAnnotationStatus::Handled);
+        assert_eq!(bridge.complete_annotations("task-a", &[revision("n-a", 2)]).unwrap().already_handled, 1);
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn late_binding_recovers_target_after_original_object_is_deleted() {
+    let bridge = Bridge::new(Headless, 0);
+    bridge.canvas_batch(batch("unbound-object", json!([text("gone", "原文")])), Some("task-a")).unwrap();
+    bridge.canvas_batch(batch("unbound-note", json!([{
+        "op":"annotate","id":"survivor","expected_revision":0,
+        "anchor":{"object_id":"gone","content_revision":1},"text":"保留批注"
+    }])), None).unwrap();
+    let note = bridge.board().canvas.annotation("survivor").unwrap().clone();
+    assert!(note.origin.is_none());
+    assert!(note.source_id.is_none());
+    assert_eq!(note.target_source_id.as_deref(), Some("task-a"));
+    bridge.delete_canvas_content("gone", 1, vec![]).unwrap();
+    bind_fixture(&bridge, "task-a", "thread-a", "G:/Workspace/A");
+    bind_fixture(&bridge, "task-alias", "thread-a", "g:\\workspace\\a\\");
+    bind_fixture(&bridge, "task-other", "thread-other", "G:/Workspace/A");
+    let pending = bridge.pending_annotations("task-alias", None, None).unwrap();
+    assert_eq!(pending.annotations.len(), 1);
+    assert_eq!(pending.annotations[0].id, "survivor");
+    assert!(bridge.pending_annotations("task-other", None, None).unwrap().annotations.is_empty());
+    assert_eq!(bridge.complete_annotations("task-a", &[revision("survivor", 1)]).unwrap().completed, 1);
+}
+
 fn batch(id: &str, operations: Value) -> CanvasBatchRequest {
     serde_json::from_value(json!({"request_id": id, "operations": operations})).unwrap()
 }
@@ -164,6 +288,7 @@ fn legacy_reply_binding_and_node_capture_become_durable_annotation_origins() {
                     ..Default::default()
                 },
                 Some(spellcast_core::CapturedContext {
+                    host_pin: None,
                     project: "Captured project".into(),
                     goal: String::new(),
                     change: String::new(),

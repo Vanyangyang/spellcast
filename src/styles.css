@@ -744,6 +744,10 @@ body.mode-focus #desktop {
     grid-template-rows: auto auto minmax(0, max-content);
   }
 
+  .agent-side:has(> .agent-activity[hidden]) {
+    grid-template-rows: auto auto;
+  }
+
   .agent-activity {
     grid-template-rows: auto minmax(0, max-content);
     align-content: start;
@@ -892,6 +896,75 @@ body.mode-focus #desktop {
   background: rgba(215, 173, 100, 0.1);
 }
 
+/* No recent MCP call: the client is known only from its send-back link. */
+.agent-chip.idle {
+  color: var(--mute);
+}
+
+.agent-chip-version {
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+/* Connection summary: one row per client (badge, send-back link, last activity), never one per chat. */
+.client-summary {
+  container-type: inline-size;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.client-summary-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "client detail when";
+  align-items: baseline;
+  gap: 3px 10px;
+}
+
+.client-summary-row > .agent-chip {
+  grid-area: client;
+  justify-self: start;
+}
+
+.client-summary-detail,
+.client-summary-when {
+  color: var(--mute);
+  font-size: max(12px, 0.92em);
+  line-height: 1.4;
+}
+
+.client-summary-detail {
+  grid-area: detail;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.client-summary-detail[data-link="ok"] {
+  color: var(--nd-accent, var(--mint));
+}
+
+.client-summary-detail[data-link="attention"] {
+  color: var(--nd-warn, var(--warn));
+}
+
+.client-summary-when {
+  grid-area: when;
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The home column: badge and time share a line, the link status reads in full below. */
+@container (max-width: 420px) {
+  .client-summary-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "client when" "detail detail";
+  }
+}
+
 .agent-last {
   margin: 6px 0 0;
   color: var(--mute);
@@ -934,44 +1007,6 @@ body.mode-focus #desktop {
   color: var(--mute);
   font-size: 12px;
   line-height: 1.45;
-}
-
-.observer-points {
-  margin: 0;
-  padding-left: 1.15em;
-  color: var(--mute);
-  font-size: 12px;
-  line-height: 1.5;
-  display: grid;
-  gap: 4px;
-}
-
-/* The explanation after its first line repeats Settings. Narrow windows fold it, where it would push
-   the card past the window; wide windows show it as before, without the toggle. */
-.observer-details > summary {
-  width: fit-content;
-  color: var(--mute);
-  font: 500 12px/1.45 var(--font);
-  cursor: pointer;
-}
-
-.observer-details > summary:hover {
-  color: var(--nd-text, var(--paper));
-}
-
-.observer-details > .observer-points,
-.observer-details > .agent-observer-hint {
-  margin-top: var(--observer-gap);
-}
-
-@media (min-width: 1101px) {
-  .observer-details > summary {
-    display: none;
-  }
-
-  .observer-details > .observer-points {
-    margin-top: 0;
-  }
 }
 
 .agent-url,
@@ -1360,6 +1395,10 @@ body.mode-focus #desktop {
   gap: 8px;
 }
 
+.agent-activity[hidden] {
+  display: none;
+}
+
 .agent-activity ol {
   list-style: none;
   margin: 0;
@@ -1381,15 +1420,6 @@ body.mode-focus #desktop {
 .agent-activity time {
   color: var(--mute);
   font-variant-numeric: tabular-nums;
-}
-
-.agent-activity .hint[hidden] {
-  display: none !important;
-}
-
-/* An empty list leaves only its quiet line, without a gap for a list that is not there. */
-.agent-activity ol:empty {
-  display: none;
 }
 
 .hint {

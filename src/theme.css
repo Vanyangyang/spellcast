@@ -1,4 +1,7 @@
-/* The desktop palette is the default; the saved choice applies to every view. */
+/* The main window starts light; an explicit saved preference overrides it. */
+.theme-feedback { display: flex; align-items: center; gap: 10px; }
+.theme-feedback .hint { margin: 0; }
+.theme-feedback button { flex: none; }
 body[data-theme="light"] {
   --ink: #f7f6f2;
   --paper: #1c1a16;

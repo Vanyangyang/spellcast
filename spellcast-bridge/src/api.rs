@@ -32,11 +32,18 @@ fn bad(err: SpellcastError) -> Fail {
 
 pub fn router(bridge: Shared) -> Router {
     bridge.start_delivery_worker();
+    bridge.start_sigil_observer();
     let allowed_origins = TRUSTED_ORIGINS.map(HeaderValue::from_static);
     let mcp_service = mcp::service(bridge.clone());
     Router::new()
         .merge(crate::project_api::router())
+        .merge(crate::sigil_api::router())
         .route("/api/health", get(health))
+        .route("/api/hosts/register", post(register_host))
+        .route("/api/hosts/heartbeat", post(heartbeat_host))
+        .route("/api/hosts/requests", get(host_requests))
+        .route("/api/hosts/receipt", post(host_receipt))
+        .route("/api/hosts/status", get(host_status))
         .route("/api/forms", get(list_forms))
         .route("/api/board", get(board).delete(reset))
         .route("/api/board/form", post(set_form))
@@ -47,6 +54,7 @@ pub fn router(bridge: Shared) -> Router {
         // A fixed inline image can be up to 2 MB before base64 encoding and may
         // appear both as the source object and as its reference in one transaction.
         .route("/api/canvas/batch", post(canvas_batch).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
+        .route("/api/canvas/organize", post(organize_canvas).layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024)))
         .route("/api/canvas/blocks/:id/action", post(canvas_block_action).layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024)))
         .route("/api/canvas/proposals/:id", post(canvas_proposal))
         .route("/api/nodes", post(create_node))
@@ -105,6 +113,45 @@ pub fn router(bridge: Shared) -> Router {
 
 async fn task_target(State(b): State<Shared>, Json(req): Json<crate::task_target::TaskTargetRequest>) -> Result<Json<crate::task_target::TaskTargetStatus>, Fail> {
     b.task_target_status(req).await.map(Json).map_err(bad)
+}
+
+fn host_token(headers: &axum::http::HeaderMap) -> Result<&str, Fail> {
+    headers.get(header::AUTHORIZATION).and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer ")).filter(|token| !token.is_empty())
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(json!({"error":"宿主认证无效或租约已过期。"}))))
+}
+
+fn host_bad(error: SpellcastError) -> Fail {
+    if error.to_string() == "宿主认证无效或租约已过期。" {
+        (StatusCode::UNAUTHORIZED, Json(json!({"error":error.to_string()})))
+    } else { bad(error) }
+}
+
+async fn register_host(State(b): State<Shared>, headers: axum::http::HeaderMap, Json(request): Json<crate::host_sessions::HostRegistration>) -> Result<Json<crate::host_sessions::RegisteredHost>, Fail> {
+    b.register_host(host_token(&headers)?, request).map(Json).map_err(host_bad)
+}
+
+async fn heartbeat_host(State(b): State<Shared>, headers: axum::http::HeaderMap, Json(request): Json<crate::host_sessions::HostHeartbeat>) -> Result<Json<crate::host_sessions::HostStatus>, Fail> {
+    b.heartbeat_host(host_token(&headers)?, request).map(Json).map_err(host_bad)
+}
+
+#[derive(Deserialize)]
+struct HostRequestsQuery {
+    lease_id: String,
+    #[serde(default)] since: u64,
+    #[serde(default)] wait_ms: u64,
+}
+
+async fn host_requests(State(b): State<Shared>, headers: axum::http::HeaderMap, Query(query): Query<HostRequestsQuery>) -> Result<Json<crate::host_sessions::HostRequests>, Fail> {
+    b.host_requests(host_token(&headers)?, &query.lease_id, query.since, query.wait_ms).await.map(Json).map_err(host_bad)
+}
+
+async fn host_receipt(State(b): State<Shared>, headers: axum::http::HeaderMap, Json(request): Json<crate::host_sessions::HostReceipt>) -> Result<Json<crate::feedback::DeliveryReceipt>, Fail> {
+    b.host_receipt(host_token(&headers)?, request).map(Json).map_err(host_bad)
+}
+
+async fn host_status(State(b): State<Shared>, headers: axum::http::HeaderMap) -> Result<Json<Value>, Fail> {
+    b.host_status(host_token(&headers)?).map(|sessions| Json(json!({"sessions":sessions}))).map_err(host_bad)
 }
 
 async fn publish_artifact(
@@ -195,6 +242,9 @@ async fn artifact_resource(
 }
 
 async fn local_request_guard(request: Request, next: Next) -> Response {
+    if request.uri().path().starts_with("/api/hosts/") && request.headers().get(header::HOST).is_none() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if let Some(value) = request.headers().get(header::HOST) {
         let Ok(host) = value.to_str() else {
             return StatusCode::FORBIDDEN.into_response();
@@ -327,6 +377,10 @@ async fn set_canvas_delete_lock(State(b): State<Shared>, Json(req): Json<CanvasD
 
 async fn canvas_batch(State(b): State<Shared>, Json(req): Json<spellcast_core::CanvasBatchRequest>) -> Result<Json<crate::canvas::CanvasOutcome>, Fail> {
     b.canvas_batch(req, None).map(Json).map_err(bad)
+}
+
+async fn organize_canvas(State(b): State<Shared>, Json(req): Json<crate::canvas::CanvasOrganizeRequest>) -> Result<Json<crate::canvas::CanvasOutcome>, Fail> {
+    b.organize_canvas(req).map(Json).map_err(bad)
 }
 
 async fn canvas_block_action(State(b): State<Shared>, Path(id): Path<String>, Json(req): Json<crate::canvas_blocks::BlockActionRequest>) -> Result<Json<crate::canvas_blocks::BlockActionOutcome>, Fail> {
@@ -945,6 +999,53 @@ mod tests {
             "reply":"keep","nodes":[{"title":"碎片"}]
         }})).await;
         assert!(mcp_call_failed(&presented), "{presented}");
+    }
+
+    #[tokio::test]
+    async fn mcp_annotations_list_pending_and_complete_without_canvas_write_access() {
+        let bridge = Arc::new(Bridge::new(crate::Headless, 0));
+        let app = router(bridge.clone());
+        let listed = rpc(&app, 1, "tools/list", json!({})).await;
+        let tool = listed["result"]["tools"].as_array().unwrap().iter()
+            .find(|tool| tool["name"] == "spellcast_annotations").unwrap();
+        for field in ["source_id", "action", "limit", "after", "annotations"] {
+            assert!(tool["inputSchema"]["properties"][field].is_object(), "{tool}");
+        }
+        assert!(tool["inputSchema"]["required"].as_array().unwrap().contains(&json!("source_id")));
+        let create = rpc(&app, 2, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":{
+            "source_id":"task-notes","request_id":"seed-note-source","operations":[
+                {"op":"create","id":"source-object","content":{"type":"text","text":"原文"}}
+            ]
+        }})).await;
+        assert_eq!(create["result"]["structuredContent"]["result"]["status"], "applied", "{create}");
+        let request: spellcast_core::CanvasBatchRequest = serde_json::from_value(json!({
+            "request_id":"user-note","operations":[{"op":"annotate","id":"note-1","expected_revision":0,
+                "anchor":{"object_id":"source-object","content_revision":1},"text":"用户批注"}]
+        })).unwrap();
+        bridge.canvas_batch(request, None).unwrap();
+        let pending = rpc(&app, 3, "tools/call", json!({"name":"spellcast_annotations","arguments":{"source_id":"task-notes"}})).await;
+        let content = &pending["result"]["structuredContent"];
+        assert_eq!(content["annotations"][0]["id"], "note-1", "{pending}");
+        assert_eq!(content["annotations"][0]["status"], "pending");
+        assert_eq!(content["annotations"][0]["snapshot"]["text"], "原文");
+        assert_eq!(content["has_more"], false);
+        let foreign = rpc(&app, 4, "tools/call", json!({"name":"spellcast_annotations","arguments":{
+            "source_id":"other-task","action":"complete","annotations":[{"id":"note-1","revision":1}]
+        }})).await;
+        assert!(mcp_call_failed(&foreign), "{foreign}");
+        let complete = rpc(&app, 5, "tools/call", json!({"name":"spellcast_annotations","arguments":{
+            "source_id":"task-notes","action":"complete","annotations":[{"id":"note-1","revision":1}]
+        }})).await;
+        assert_eq!(complete["result"]["structuredContent"]["completed"], 1, "{complete}");
+        let empty = rpc(&app, 6, "tools/call", json!({"name":"spellcast_annotations","arguments":{"source_id":"task-notes"}})).await;
+        assert!(empty["result"]["structuredContent"]["annotations"].as_array().unwrap().is_empty());
+        let forbidden = rpc(&app, 7, "tools/call", json!({"name":"spellcast_canvas_batch","arguments":{
+            "source_id":"task-notes","request_id":"forbidden-note","operations":[
+                {"op":"annotate","id":"agent-note","expected_revision":0,
+                 "anchor":{"object_id":"source-object","content_revision":1},"text":"不可写"}
+            ]
+        }})).await;
+        assert!(mcp_call_failed(&forbidden), "{forbidden}");
     }
 
     #[tokio::test]

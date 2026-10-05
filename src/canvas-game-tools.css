@@ -1,0 +1,33 @@
+.canvas-toolbar > .canvas-game-tools {
+  position: absolute; left: 88px; top: 16px; max-width: min(340px, calc(100% - 104px));
+  color: var(--studio-ink, var(--paper)); font: 13px/1.45 var(--font);
+}
+.canvas-game-tools > summary, .composer-game-design > summary {
+  display: flex; align-items: center; gap: 7px; width: max-content; list-style: none;
+  cursor: pointer; color: var(--studio-soft, var(--paper)); border: 1px solid var(--studio-line, var(--line));
+  background: var(--studio-paper, var(--surface)); border-radius: 10px; padding: 7px 11px;
+  box-shadow: var(--studio-shadow, none); font: 500 13px/1.25 var(--font);
+}
+.canvas-game-tools > summary::-webkit-details-marker, .composer-game-design > summary::-webkit-details-marker { display: none; }
+.canvas-game-tools > summary::after, .composer-game-design > summary::after { content: "▸"; }
+.canvas-game-tools[open] > summary::after, .composer-game-design[open] > summary::after { content: "▾"; }
+.canvas-game-tools[open] > summary, .composer-game-design[open] > summary { color: var(--studio-ink, var(--paper)); border-color: var(--studio-lilac, var(--lilac)); }
+.canvas-game-tool-panel, .composer-game-design-panel {
+  display: grid; gap: 7px; padding: 12px; border: 1px solid var(--studio-line, var(--line));
+  border-radius: 12px; background: var(--studio-paper, var(--surface)); color: var(--studio-ink, var(--paper));
+  box-shadow: var(--studio-shadow, none); overflow-wrap: anywhere;
+}
+.canvas-game-tool-panel { margin-top: 7px; width: min(320px, calc(100vw - 124px)); max-height: min(360px, calc(100vh - 210px)); overflow: auto; }
+.canvas-game-tool-panel p, .composer-game-design-panel p { margin: 0; font: 12px/1.5 var(--font); color: var(--studio-soft, var(--mute)); }
+.canvas-game-tool-panel button, .composer-game-design-panel button { text-align: left; white-space: normal; line-height: 1.4; }
+.canvas-game-tool-panel strong { font-size: 13px; }
+.composer-game-design { position: relative; flex: none; margin-left: auto; }
+.composer-game-design[hidden] { display: none !important; }
+.composer-game-design > summary { min-height: 28px; padding: 4px 8px; box-shadow: none; }
+.composer-game-design-panel { position: absolute; bottom: calc(100% + 7px); right: 0; z-index: 10; width: min(340px, calc(100vw - 56px)); max-height: min(360px, calc(100vh - 190px)); overflow: auto; }
+.composer-game-design-panel button { padding: 8px 10px; border: 1px solid var(--studio-line, var(--line)); border-radius: 8px; background: var(--studio-canvas-2, var(--surface-2)); color: var(--studio-ink, var(--paper)); font-size: 13px; }
+.composer-game-design-panel button:disabled { opacity: .5; cursor: not-allowed; }
+@media (max-width: 600px) {
+  .canvas-toolbar > .canvas-game-tools { left: 88px; top: 12px; }
+  .canvas-game-tool-panel { width: min(280px, calc(100vw - 124px)); }
+}

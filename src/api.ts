@@ -151,9 +151,12 @@ export async function say(
   text: string,
   bubbleId?: string | null,
   nodeId?: string | null,
-  target?: { object_id?: string | null; source_id?: string | null; target_thread_id?: string | null; reply_id?: string | null; block_id?: string | null; anchors?: CanvasAnchor[] },
+  target?: { object_id?: string | null; source_id?: string | null; target_thread_id?: string | null; host_pin?: import("./types").HostRoutePin | null; reply_id?: string | null; block_id?: string | null; anchors?: CanvasAnchor[] },
 ): Promise<AgentEvent> {
   const req = { text, bubble_id: bubbleId ?? null, node_id: nodeId ?? null, ...target };
+  // Host native identity is carried by the complete pin; target_thread_id is
+  // reserved for the Codex delivery branch.
+  if (req.host_pin) delete req.target_thread_id;
   return requestOnce<AgentEvent, typeof req & { request_id?: string }>("say", req, async request => {
     if (inTauri()) return invoke("say", { req: request });
     return read(await post("/api/say", request));
@@ -221,7 +224,7 @@ export async function installClientSkill(client: string): Promise<SkillInstall> 
 
 export async function completeSetupStatus(client: string, url: string): Promise<SetupReport> {
   if (!inTauri()) {
-    const desktop = client === "codex";
+    const desktop = client === "codex" || client === "claude-code";
     return {
       client,
       kind: desktop ? "not_installed" : "unsupported",
@@ -239,6 +242,11 @@ export async function completeSetupStatus(client: string, url: string): Promise<
 export async function completeSetupInstall(client: string, url: string): Promise<SetupReport> {
   if (!inTauri()) throw new Error(t("settings.desktopOnly"));
   return invoke("complete_setup_install", { client, url });
+}
+
+export async function openClaudePluginFolder(): Promise<void> {
+  if (!inTauri()) throw new Error(t("settings.desktopOnly"));
+  return invoke("open_claude_plugin_folder");
 }
 
 export async function syncUiLocale(locale = currentLocale()): Promise<void> {
@@ -294,7 +302,19 @@ export async function fetchFeedbackState(): Promise<FeedbackState> {
 }
 
 export async function checkTaskTarget(target: import("./types").TaskTarget): Promise<import("./types").TaskTargetStatus> {
-  return read(await post("/api/task-target", { source_id: target.source_id, thread_id: target.thread_id, cwd: target.cwd }));
+  return read(await post("/api/task-target", { source_id: target.source_id, thread_id: target.thread_id, cwd: target.cwd, host_pin: target.host_pin }));
+}
+
+let hostKey: Promise<string> | null = null;
+export function nativeHostLinkKey(): Promise<string> {
+  if (!inTauri()) return Promise.reject(new Error("宿主连接需要桌面主窗口。"));
+  hostKey ??= invoke<string>("host_link_key").catch(error => { hostKey = null; throw error; });
+  return hostKey;
+}
+export async function fetchHostSessions(): Promise<import("./types").HostSessionStatus[]> {
+  const key = await nativeHostLinkKey();
+  const data = await read<{ sessions: import("./types").HostSessionStatus[] }>(await fetch((await apiBase()) + "/api/hosts/status", { headers: { Authorization: "Bearer " + key } }));
+  return data.sessions;
 }
 
 export async function retryFeedback(sequence: number): Promise<DeliveryReceipt> {

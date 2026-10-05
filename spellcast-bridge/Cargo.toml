@@ -19,6 +19,15 @@ rmcp = { version = "3.2.0", features = ["server", "macros", "transport-streamabl
 sha2 = "0.10.9"
 uuid.workspace = true
 
+# Sigil checks: a kill-on-close job for each command's process tree and OEM code page output.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+# Sigil checks: a process group for each command's process tree.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

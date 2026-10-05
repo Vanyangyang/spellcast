@@ -7,6 +7,13 @@
 .board-views button { min-height: 28px; padding: 0 12px; font: 500 13px var(--font); background: transparent; border-color: transparent; }
 .board-views [aria-pressed="true"] { color: var(--ink); background: var(--paper); border-color: var(--paper); }
 #reply-stage { position: absolute; inset: var(--board-top) 20px var(--board-bottom); min-height: 0; z-index: 2; }
+#sigil-stage { position: absolute; inset: var(--board-top) 20px 20px; min-height: 0; overflow: hidden; z-index: 2; }
+#sigils-open[aria-pressed="true"] { color: var(--ink); background: var(--paper); border-color: var(--paper); }
+.sigil-workspace-loading { margin: 24px; color: var(--mute); }
+body.view-sigils #whisper, body.view-sigils #inspector,
+body.view-sigils #forms, body.view-sigils #add-btn,
+body.view-sigils #clear-btn, body.view-sigils .top .topic,
+body.view-sigils .composer { display: none !important; }
 #reply-stage[hidden], [hidden] { display: none !important; }
 body.view-replies #whisper, body.view-replies #inspector,
 body.view-replies #forms, body.view-replies #add-btn,
@@ -44,12 +51,12 @@ body.mode-focus #bubbles-pause { display: none !important; }
 .board-dialog label { font-size: 12px; color: var(--mute); display: block; }
 .board-dialog input, .board-dialog textarea, .board-dialog select { width: 100%; box-sizing: border-box; color: var(--paper); background: #1c1f2a; border: 1px solid var(--line); border-radius: 8px; min-height: 32px; padding: 8px 12px; font: 14px/1.5 var(--font); }
 .board-dialog textarea { min-height: 105px; resize: vertical; }
-.board-dialog button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]) {
+.board-dialog button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]):not(:where(.canvas-source-skeleton button)) {
   font: 500 13px/1 var(--font); min-height: 32px; padding: 0 12px; border-radius: 8px;
   border: 1px solid var(--line); background: #1c1f2a; color: var(--paper); cursor: pointer;
 }
-.board-dialog button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]):hover:not(:disabled) { background: #2a2e3c; border-color: var(--line-strong); }
-.board-dialog button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]):disabled { opacity: 0.4; cursor: not-allowed; }
+.board-dialog button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]):not(:where(.canvas-source-skeleton button)):hover:not(:disabled) { background: #2a2e3c; border-color: var(--line-strong); }
+.board-dialog button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]):not(:where(.canvas-source-skeleton button)):disabled { opacity: 0.4; cursor: not-allowed; }
 .board-dialog, .canvas-tool-menu {
   scrollbar-width: thin;
   scrollbar-color: #6a7388 #161821;

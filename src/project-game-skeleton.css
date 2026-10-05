@@ -1,0 +1,117 @@
+/* The map and detail share the game home's existing two-column layout. */
+.gs-map, .gs-detail { min-width: 0; color: var(--paper); font: 16px/1.5 var(--font); }
+.gs-map { display: grid; align-content: start; gap: 14px; }
+.gs-map[data-selected="false"] { gap: 12px; }
+.gs-map[data-selected="false"] .gs-section-head p { display: none; }
+.project-workspace .gs-map[data-selected="false"] .gs-system-card { min-height: 108px; padding: 11px 12px; gap: 5px; }
+.gs-map p, .gs-detail p { margin: 0; }
+.gs-heading, .gs-detail .gs-detail-title { margin: 0; font: 650 23px/1.25 var(--font); letter-spacing: -.02em; }
+.gs-map-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); align-items: center; gap: 16px; min-width: 0; }
+.gs-map-heading { display: grid; gap: 2px; min-width: 0; }
+.gs-map-heading .gs-intro { font-size: 14px; }
+.gs-intro, .gs-section-head p, .gs-branch-help { color: var(--mute); }
+.gs-section-heading, .gs-detail .gs-detail-section h3 { margin: 0; font: 650 18px/1.3 var(--font); color: var(--paper); }
+.gs-map button, .gs-detail button { height: auto; min-height: 36px; white-space: normal; line-height: 1.35; }
+.project-workspace .gs-map button, .project-workspace .gs-detail button { font-size: 14px; }
+.gs-map button:focus-visible, .gs-detail button:focus-visible, .gs-search-input:focus-visible, .gs-sources summary:focus-visible {
+  outline: 2px solid var(--mint); outline-offset: 2px;
+}
+.gs-map [hidden], .gs-detail [hidden] { display: none !important; }
+
+.gs-search { display: flex; align-items: center; gap: 6px; position: relative; min-width: 0; }
+.gs-search-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.gs-search-input { flex: 1; width: 100%; min-width: 0; min-height: 40px; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--project-input); color: var(--paper); font: 16px/1.35 var(--font); }
+.project-workspace .gs-search-clear { flex: none; min-height: 40px; padding: 6px 9px; }
+.gs-search-results { position: absolute; top: calc(100% + 5px); right: 0; z-index: 10; display: grid; gap: 8px; width: min(440px, 100%); max-width: 100%; padding: 10px; border: 1px solid var(--line-strong); border-radius: 11px; background: var(--project-panel); box-shadow: 0 12px 28px #0006; }
+.gs-result-count { color: var(--mute); font-size: 14px; }
+.gs-result-list { display: grid; gap: 6px; max-height: 270px; overflow: auto; }
+.project-workspace .gs-result { width: 100%; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 12px; text-align: left; background: var(--project-detail); }
+.gs-result strong { font-size: 15px; }
+.gs-result span { color: var(--mute); font-size: 14px; }
+.gs-result[aria-pressed="true"] { border-color: var(--mint); }
+
+.gs-loop, .gs-systems, .gs-branch { display: grid; gap: 9px; min-width: 0; }
+.gs-stages { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 7px; padding: 0; margin: 0; list-style: none; counter-reset: stage; }
+.gs-stage { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px; border: 1px solid var(--line); border-top: 3px solid var(--mint); border-radius: 11px; background: var(--project-detail); counter-increment: stage; }
+.gs-stage-title { display: flex; align-items: start; gap: 8px; font: 650 16px/1.3 var(--font); }
+.gs-stage-title::before { content: counter(stage, decimal-leading-zero); color: var(--mint); font: 650 12px/1.6 var(--font); }
+.gs-stage p { color: var(--mute); font-size: 14px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.gs-stage-links { display: flex; flex-wrap: wrap; gap: 5px; margin-top: auto; }
+.project-workspace .gs-stage-link { min-height: 28px; padding: 4px 8px; border-radius: 999px; font-size: 14px; text-align: left; }
+.gs-section-head { display: grid; gap: 2px; }
+.gs-section-head p { font-size: 14px; }
+.gs-system-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.gs-map[data-selected="false"] .gs-system-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.project-workspace .gs-system-card { display: flex; flex-direction: column; align-items: stretch; gap: 5px; min-width: 0; min-height: 115px; padding: 11px 12px; border-radius: 12px; text-align: left; background: var(--project-panel); }
+.gs-system-card:hover, .gs-branch-card:hover { transform: translateY(-1px); }
+.gs-system-card[aria-pressed="true"] { border-color: var(--mint); background: var(--project-selected); }
+.gs-card-title { font: 650 17px/1.3 var(--font); }
+.gs-card-summary { flex: 1; color: var(--mute); font: 14px/1.4 var(--font); overflow-wrap: anywhere; }
+.gs-card-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; color: var(--mute); font-size: 14px; }
+.gs-state { display: inline-flex; width: fit-content; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--mint) 45%, transparent); border-radius: 999px; color: var(--mint); font: 600 14px/1.3 var(--font); }
+
+.gs-branch { padding: 16px; border: 1px solid var(--line-strong); border-radius: 15px; background: var(--project-detail); }
+.gs-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.project-workspace .gs-crumbs button { min-height: 27px; padding: 3px 7px; background: transparent; color: var(--mute); font-size: 14px; }
+.gs-crumb-separator, .gs-crumb-current { color: var(--mute); font-size: 14px; overflow-wrap: anywhere; }
+.gs-crumb-current { color: var(--paper); }
+.gs-branch-help { font-size: 14px; }
+.gs-branch-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.project-workspace .gs-branch-card { display: grid; align-content: start; gap: 5px; min-width: 0; padding: 12px; text-align: left; background: var(--project-panel); }
+.gs-branch-card strong { font: 600 16px/1.35 var(--font); }
+.gs-branch-card span { color: var(--mute); font: 14px/1.4 var(--font); overflow-wrap: anywhere; }
+.gs-kind { color: var(--mint); font: 600 14px/1.3 var(--font); }
+.gs-empty { color: var(--mute); font-size: 14px; }
+
+.gs-detail { display: grid; align-content: start; gap: 18px; padding: 16px; border: 1px solid var(--line-strong); border-radius: 15px; background: var(--project-detail); }
+.gs-detail-header { display: grid; justify-items: start; gap: 8px; }
+.gs-detail-lead { color: var(--mute); }
+.gs-detail-section { display: grid; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.gs-detail-prose, .gs-notes, .gs-steps { overflow-wrap: anywhere; }
+.gs-notes, .gs-steps { display: grid; gap: 9px; margin: 0; padding-left: 21px; }
+.gs-steps li { padding-left: 3px; }
+.gs-steps strong { font-weight: 650; }
+.gs-steps p { color: var(--mute); }
+.gs-detail-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.project-workspace .gs-detail-links button { padding: 6px 9px; text-align: left; }
+.gs-relation-list { display: grid; gap: 6px; }
+.project-workspace .gs-relation { display: grid; gap: 2px; width: 100%; padding: 9px 10px; text-align: left; background: var(--project-panel); }
+.gs-relation small { color: var(--mute); font-size: 14px; }
+.gs-relation strong { font-size: 15px; }
+.gs-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.project-workspace .gs-actions button { padding: 8px 11px; font-size: 14px; }
+.project-workspace .gs-develop { border-color: var(--mint); }
+.gs-sources { border-top: 1px solid var(--line); padding-top: 10px; }
+.gs-sources summary { width: fit-content; cursor: pointer; color: var(--mute); font-size: 14px; }
+.gs-source-links { display: grid; gap: 5px; padding-top: 8px; }
+.gs-formula { margin: 0; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 8px; background: var(--project-input); }
+.game-home .gs-formula code { color: var(--paper); font: 14px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.gs-provenance { display: grid; gap: 6px; padding: 12px 0; border-top: 1px solid var(--line); }
+.gs-provenance blockquote { margin: 0; padding: 0 10px; border-left: 2px solid var(--line-strong); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.gs-provenance small { color: var(--mute); overflow-wrap: anywhere; }
+.gs-evidence-hash { font: 11px/1.4 ui-monospace, monospace; }
+.gs-evidence-label { color: var(--mute); font-size: 13px; font-weight: 600; }
+.gs-source-metadata, .gs-original-sources { padding-top: 6px; }
+.gs-source-metadata summary, .gs-original-sources summary { padding: 5px 0; }
+.gs-source-metadata[open] > :not(summary) { display: block; margin-top: 6px; }
+.gs-evidence-alert { display: grid; gap: 7px; padding: 12px; border: 1px solid var(--warn); border-radius: 10px; background: color-mix(in srgb, var(--warn) 9%, var(--project-detail)); color: var(--paper); font-size: 14px; }
+.gs-evidence-alert strong { font-weight: 650; }
+.gs-evidence-alert button { justify-self: start; }
+.gs-provenance[data-gs-evidence-state="changed"] .gs-evidence-label, .gs-provenance[data-gs-evidence-state="unavailable"] .gs-evidence-label { color: var(--paper); }
+.gs-provenance[data-gs-evidence-state="changed"] blockquote, .gs-provenance[data-gs-evidence-state="unavailable"] blockquote { border-left-color: var(--warn); }
+.project-workspace .gs-source-links button { width: 100%; padding: 6px 9px; text-align: left; overflow-wrap: anywhere; font-size: 14px; }
+
+@media (max-width: 1249px) {
+  .gs-stages { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .gs-map[data-selected="false"] .gs-system-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .gs-map-header { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .gs-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gs-map[data-selected="false"] .gs-system-grid, .gs-system-grid, .gs-branch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .gs-stages, .gs-system-grid, .gs-branch-grid { grid-template-columns: minmax(0, 1fr); }
+  .gs-map[data-selected="false"] .gs-system-grid { grid-template-columns: minmax(0, 1fr); }
+  .gs-result { flex-direction: column; }
+}

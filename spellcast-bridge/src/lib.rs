@@ -1,16 +1,27 @@
 //! Shared application state behind the Spellcast desktop and its local REST adapter.
 
 pub mod api;
+pub mod annotations;
 pub mod artifacts;
 pub mod canvas;
 pub mod canvas_blocks;
 pub mod task_target;
 pub mod desktop_delivery;
+mod new_chat;
 mod canvas_data;
 pub mod codex;
 pub mod feedback;
+pub mod host_sessions;
+#[cfg(test)]
+mod host_sessions_tests;
+#[cfg(test)]
+mod host_focus_tests;
+#[cfg(test)]
+mod surface_lock_tests;
 pub mod mcp;
 pub mod observer;
+pub mod observer_runner;
+mod process_tree;
 pub mod project_records;
 pub mod project_planning;
 pub mod project_flow;
@@ -23,12 +34,25 @@ pub mod project_goals;
 mod project_record_store;
 pub mod project_workspace;
 mod project_api;
+pub mod sigils;
+mod sigil_store;
+pub mod sigil_workspace;
+pub mod sigil_run;
+mod sigil_snapshot;
+mod sigil_observe;
+mod sigil_process;
+mod sigil_verify;
+pub mod sigil_amend;
+mod sigil_api;
+mod sigil_delivery;
 #[cfg(test)]
 mod annotation_tests;
 #[cfg(test)]
 mod reply_tests;
 #[cfg(test)]
 mod delete_lock_tests;
+#[cfg(test)]
+mod canvas_cleanup_tests;
 #[cfg(test)]
 mod project_content_tests;
 mod store;
@@ -75,6 +99,10 @@ pub trait Surface: Send + Sync + 'static {
     fn presented(&self, result: &PresentResult);
     /// Something changed the board (user or agent); repaint.
     fn board_changed(&self);
+    /// A sigil's plan, run or observed changes moved; only its cards need to refresh.
+    fn sigil_changed(&self, _sigil_id: &str) {
+        self.board_changed();
+    }
     fn close_bubbles(&self);
     /// Bring the board forward, in focus mode.
     fn focus(&self);
@@ -83,6 +111,7 @@ pub trait Surface: Send + Sync + 'static {
     }
     /// Whether the board window currently receives keyboard input. This is
     /// separate from the selected board/ambient presentation mode.
+    /// Desktop implementations may wait for the UI; callers must release bridge locks first.
     fn board_is_focused(&self) -> bool {
         false
     }
@@ -179,6 +208,8 @@ pub struct BubbleOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct PersistedState {
+    #[serde(default)]
+    host_generation: u64,
     session: Session,
     inbox: Inbox,
     kept: HashMap<String, String>,
@@ -254,9 +285,9 @@ impl PersistedState {
             event.object_id = Some(object.id.clone());
             event.object_revision = Some(object.content_revision);
         }
-        event.source_id = self.source_for(&event);
-        if event.target_thread_id.is_none() {
-            event.target_thread_id = self.bindings.iter().find(|binding| Some(binding.source_id.as_str()) == event.source_id.as_deref()).map(|binding| binding.thread_id.clone());
+        event.source_id = event.host_pin.as_ref().map(|pin| pin.source_id.clone()).or_else(|| self.source_for(&event));
+        if event.host_pin.is_none() && event.target_thread_id.is_none() {
+            event.target_thread_id = event.source_id.as_deref().and_then(|source| codex::binding_for_source(&self.bindings, source)).map(|binding| binding.thread_id.clone());
         }
         let important = matches!(
             event.kind.as_str(),
@@ -275,7 +306,7 @@ impl PersistedState {
         events.extend(self.pending.iter().cloned());
         events.retain(|e| {
             !matches!(e.kind.as_str(), "canvas_state" | "board_edit") && source_id.map_or(true, |id| {
-                e.source_id.as_deref() == Some(id)
+                codex::event_for_source(e, id, &self.bindings)
                     || (e.source_id.is_none()
                         && matches!(e.kind.as_str(), "cleared" | "board_edit"))
             })
@@ -289,6 +320,7 @@ impl PersistedState {
 
 pub struct Bridge {
     state: Mutex<PersistedState>,
+    annotation_index: Mutex<Option<annotations::AnnotationIndex>>,
     store: Option<Mutex<Store>>,
     project_window_key: String,
     project_local_key: Option<String>,
@@ -300,7 +332,10 @@ pub struct Bridge {
     admission: Mutex<Admission>,
     observers: Mutex<observer::Observers>,
     delivery_gate: tokio::sync::Mutex<()>,
+    /// Short, synchronous sigil reservation/queue and user control changes. Never held over I/O.
+    sigil_dispatch_gate: Mutex<()>,
     delivery_started: AtomicBool,
+    hosts: Mutex<host_sessions::HostRegistry>,
 }
 
 impl Bridge {
@@ -322,7 +357,7 @@ impl Bridge {
         let mut state: PersistedState = store.load()?.unwrap_or_default();
         let mut recovered = state.session.sync_canvas();
         for receipt in &mut state.deliveries {
-            if receipt.phase == feedback::DeliveryPhase::Dispatching {
+            if receipt.phase == feedback::DeliveryPhase::Dispatching || receipt.event.host_pin.is_some() && matches!(receipt.phase, feedback::DeliveryPhase::Waiting | feedback::DeliveryPhase::Queued | feedback::DeliveryPhase::Received | feedback::DeliveryPhase::Executing | feedback::DeliveryPhase::AwaitingPermission) {
                 receipt.phase = feedback::DeliveryPhase::Unknown;
                 receipt.error = Some("应用在收到投递确认前退出，请先核对原任务；没有自动重发。".into());
                 recovered = true;
@@ -343,8 +378,10 @@ impl Bridge {
         store: Option<Store>,
     ) -> Self {
         state.ui_locale = normalize_ui_locale(&state.ui_locale).into();
+        let host_generation = state.host_generation.max(state.deliveries.iter().filter_map(|receipt| receipt.event.host_pin.as_ref().map(|pin| pin.generation)).max().unwrap_or(0));
         Self {
             state: Mutex::new(state),
+            annotation_index: Mutex::new(None),
             project_window_key: format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple()),
             project_local_key: None,
             game_repositories: game_config::RepositoryCache::default(),
@@ -369,13 +406,25 @@ impl Bridge {
             admission: Mutex::new(Admission::default()),
             observers: Mutex::new(observer::Observers::default()),
             delivery_gate: tokio::sync::Mutex::new(()),
+            sigil_dispatch_gate: Mutex::new(()),
             delivery_started: AtomicBool::new(false),
+            hosts: Mutex::new(host_sessions::HostRegistry::with_generation(host_generation)),
         }
     }
 
     fn update<R>(
         &self,
         change: impl FnOnce(&mut PersistedState) -> Result<R, SpellcastError>,
+    ) -> Result<R, SpellcastError> {
+        self.update_with_annotation_cache(change, None)
+    }
+
+    /// Only annotation completion may retain the derived index. All other successful writes
+    /// invalidate it, including imports and source binding changes.
+    fn update_with_annotation_cache<R>(
+        &self,
+        change: impl FnOnce(&mut PersistedState) -> Result<R, SpellcastError>,
+        completed_ids: Option<&[String]>,
     ) -> Result<R, SpellcastError> {
         let mut current = self.state.lock().unwrap();
         let previous_sequence = current.inbox.last_seq();
@@ -399,7 +448,19 @@ impl Bridge {
                     SpellcastError::user(format!("Spellcast 没能保存这次改动：{err}"))
                 })?;
         }
+        let sigil_notifications = sigil_delivery::changed_receipts(&current, &next);
         *current = next;
+        let mut cache = self.annotation_index.lock().unwrap();
+        if let Some(ids) = completed_ids {
+            if let Some(index) = cache.as_mut() { index.remove_completed(ids); }
+        } else {
+            *cache = None;
+        }
+        drop(cache);
+        drop(current);
+        for id in sigil_notifications {
+            self.surface.sigil_changed(&id);
+        }
         Ok(result)
     }
 
@@ -472,6 +533,8 @@ impl Bridge {
                 });
             }
         }
+        // Desktop window getters wait for the UI, which may be reading the board.
+        drop(state);
         status.board_focused = self.surface.board_is_focused();
         status
     }
@@ -531,6 +594,7 @@ impl Bridge {
             }
             Ok(())
         })?;
+        drop(observers);
         Ok(self.observer_status())
     }
 
@@ -560,8 +624,14 @@ impl Bridge {
     }
 
     fn observer_gate(&self) -> observer::ObserverStatus {
-        let surface = self.status.lock().unwrap().surface.clone();
         let actual_focus = self.surface.board_is_focused();
+        self.observer_gate_with_focus(actual_focus)
+    }
+
+    // Focus must be sampled without bridge locks. Observer callers then read
+    // the current policy here while holding their existing ticket guard.
+    fn observer_gate_with_focus(&self, actual_focus: bool) -> observer::ObserverStatus {
+        let surface = self.status.lock().unwrap().surface.clone();
         let state = self.state.lock().unwrap();
         let board_focused = surface == "focus" && actual_focus;
         observer::ObserverStatus::from_flags(
@@ -822,22 +892,42 @@ impl Bridge {
         &self,
         brief: &observer::ObserverBrief,
     ) -> spellcast_core::CapturedContext {
-        let binding = {
+        let native_claude = observer::claude_native_source(&brief.source_id)
+            .ok()
+            .flatten();
+        let binding = if brief.source_id.split_once(':').is_some_and(|(engine, _)| engine.eq_ignore_ascii_case("claude")) {
+            None
+        } else {
             let state = self.state.lock().unwrap();
-            state
-                .bindings
-                .iter()
-                .find(|binding| binding.source_id == brief.source_id)
-                .cloned()
+            codex::binding_for_source(&state.bindings, &brief.source_id).cloned()
+        };
+        let host_pin = {
+            let hosts = self.hosts.lock().unwrap();
+            let live: Vec<_> = hosts
+                .statuses_for(&brief.source_id)
+                .into_iter()
+                .filter(|status| status.reachable)
+                .collect();
+            if live.len() == 1 {
+                Some(live[0].host_pin.clone())
+            } else {
+                None
+            }
         };
         spellcast_core::CapturedContext {
+            thread_id: native_claude
+                .map(str::to_owned)
+                .or_else(|| binding.as_ref().map(|b| b.thread_id.clone())),
+            cwd: host_pin
+                .as_ref()
+                .map(|pin| pin.cwd.clone())
+                .or_else(|| binding.as_ref().map(|b| b.cwd.clone())),
+            host_pin,
             project: brief.snapshot.project.clone(),
             goal: brief.snapshot.goal.clone(),
             change: brief.snapshot.change.clone(),
             source_id: brief.source_id.clone(),
             captured_at_ms: now_ms(),
-            thread_id: binding.as_ref().map(|b| b.thread_id.clone()),
-            cwd: binding.as_ref().map(|b| b.cwd.clone()),
         }
     }
 
@@ -1185,12 +1275,10 @@ impl Bridge {
     }
 
     pub fn pending_feedback(&self, source_id: Option<&str>) -> Vec<AgentEvent> {
-        self.state
-            .lock()
-            .unwrap()
-            .pending
+        let state = self.state.lock().unwrap();
+        state.pending
             .iter()
-            .filter(|event| source_id.map_or(true, |id| event.source_id.as_deref() == Some(id)))
+            .filter(|event| source_id.map_or(true, |id| codex::event_for_source(event, id, &state.bindings)))
             .cloned()
             .collect()
     }
@@ -1207,21 +1295,23 @@ impl Bridge {
         let removed =
             self.update(|state| {
                 if state.pending.iter().any(|e| {
-                    sequences.contains(&e.seq) && e.source_id.as_deref() != Some(source_id)
+                    sequences.contains(&e.seq) && !codex::event_for_source(e, source_id, &state.bindings)
                 }) {
                     return Err(SpellcastError::user("不能确认其他任务或尚未分配的反馈。"));
                 }
                 let before = state.pending.len();
                 state.pending.retain(|e| {
-                    !(sequences.contains(&e.seq) && e.source_id.as_deref() == Some(source_id))
+                    !(sequences.contains(&e.seq) && codex::event_for_source(e, source_id, &state.bindings))
                 });
                 for receipt in &mut state.deliveries {
-                    if receipt.event.source_id.as_deref() == Some(source_id)
+                    if codex::event_for_source(&receipt.event, source_id, &state.bindings)
                         && sequences.contains(&receipt.event.seq)
                     {
-                        receipt.phase = feedback::DeliveryPhase::Handled;
+                        if receipt.event.host_pin.is_none() {
+                            receipt.phase = feedback::DeliveryPhase::Handled;
+                            receipt.error = None;
+                        }
                         receipt.handled_at_ms.get_or_insert_with(now_ms);
-                        receipt.error = None;
                     }
                 }
                 Ok(before - state.pending.len())
@@ -1247,7 +1337,12 @@ impl Bridge {
                 self.admission.lock().unwrap().active.remove(id);
             }
         }
+        let hosts = self.hosts.lock().unwrap();
         let stored = self.update(|state| {
+            if let Some(pin) = &event.host_pin { hosts.validate_pin(pin, state.source_for(&event).as_deref())?; }
+            if event.host_pin.is_none() && matches!(event.kind.as_str(), "say" | "reply") && state.source_for(&event).as_deref().is_some_and(|source| source.starts_with("claude:")) {
+                return Err(SpellcastError::user("Claude 请求需要明确宿主租约。"));
+            }
             let event = state.record(event);
             if matches!(event.kind.as_str(), "expired" | "dismiss" | "not_shown") {
                 if let Some(id) = &event.bubble_id {
@@ -1256,6 +1351,7 @@ impl Bridge {
             }
             Ok(event)
         })?;
+        drop(hosts);
         self.notify.notify_waiters();
         Ok(stored)
     }
@@ -1290,21 +1386,31 @@ impl Bridge {
         event.anchors = req.anchors;
         event.target_thread_id = req.target_thread_id;
         event.project_context = project_context;
+        event.host_pin = req.host_pin;
+        // Keep a lease alive/unchanged throughout admission and durable recording.
+        let hosts = self.hosts.lock().unwrap();
         let stored = self.update(|state| {
             if let Some(replay) =
                 self.replay_request(state, event.request_id.as_deref(), &request_hash)?
             {
                 return Ok(replay);
             }
+            if let Some(pin) = &event.host_pin {
+                hosts.validate_pin(pin, event.source_id.as_deref())?;
+                if event.request_id.is_none() { return Err(SpellcastError::user("宿主请求需要唯一 request_id。")); }
+                if event.target_thread_id.is_some() { return Err(SpellcastError::user("宿主路由不能使用 Codex target_thread_id。")); }
+            } else if event.source_id.as_deref().is_some_and(|source| source.starts_with("claude:")) {
+                return Err(SpellcastError::user("Claude 接收任务需要明确的宿主租约，不能按来源猜测实例。"));
+            }
             if let Some(expected) = &event.target_thread_id {
-                if !state.bindings.iter().any(|binding| Some(binding.source_id.as_str()) == event.source_id.as_deref() && &binding.thread_id == expected) {
+                if !event.source_id.as_deref().and_then(|source| codex::binding_for_source(&state.bindings, source)).is_some_and(|binding| &binding.thread_id == expected) {
                     return Err(SpellcastError::user("接收任务关联已变化，没有发送；请重新确认原任务。"));
                 }
             }
             if !event.anchors.is_empty() {
                 let source = event.source_id.as_deref().ok_or_else(|| SpellcastError::user("请选择一个接收请求的任务。"))?;
                 spellcast_core::reply::validate_id(source)?;
-                let known = state.bindings.iter().any(|b| b.source_id == source)
+                let known = event.host_pin.is_some() || codex::binding_for_source(&state.bindings, source).is_some()
                     || state.session.board.replies.iter().any(|r| r.source_id == source)
                     || state.session.board.nodes.iter().any(|n| n.source_id.as_deref() == Some(source))
                     || state.session.board.canvas.objects.iter().any(|o| o.source_id.as_deref() == Some(source))
@@ -1377,10 +1483,14 @@ impl Bridge {
             state
                 .session
                 .note_user(event.text.as_deref().unwrap_or_default());
+            if event.host_pin.is_none() && state.source_for(&event).as_deref().is_some_and(|source| source.starts_with("claude:")) {
+                return Err(SpellcastError::user("原内容属于 Claude 会话，需要明确宿主租约。"));
+            }
             let event = state.record(event);
             state.stamp_request(event.seq, request_hash);
             Ok(event)
         })?;
+        drop(hosts);
         self.notify.notify_waiters();
         self.surface.board_changed();
         Ok(stored)
@@ -2315,6 +2425,7 @@ mod tests {
         hijack.title = "旁念想覆盖".into();
         hijack.body = "旁念想覆盖正文".into();
         hijack.captured_context = Some(spellcast_core::CapturedContext {
+            host_pin: None,
             project: "other".into(),
             goal: "no".into(),
             change: "no".into(),
@@ -2436,6 +2547,7 @@ mod tests {
 
     fn evil_context() -> spellcast_core::CapturedContext {
         spellcast_core::CapturedContext {
+            host_pin: None,
             project: "forged".into(),
             goal: "no".into(),
             change: "no".into(),

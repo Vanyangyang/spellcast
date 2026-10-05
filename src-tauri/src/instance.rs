@@ -11,8 +11,8 @@ pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     })
 }
 
-/// Show the board, or create it again if the user closed it while completions
-/// or the single-instance helper window kept the process alive.
+/// Restore the board for a second launch. Rebuild only if startup or an
+/// abnormal window teardown left it missing; closing the main window exits the app.
 pub(crate) fn restore_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();

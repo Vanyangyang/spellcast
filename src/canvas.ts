@@ -1,20 +1,26 @@
 import { Graph, Shape, Transform, History, type Node } from "@antv/x6";
 import { mountReplyBoard, type ReplyBoardHandle, type ReplyBoardHandlers } from "./replies";
-import type { BoardReply, ReplyBlock, ReplyPatchRequest, ReplyActionInput } from "./reply-types";
+import type { BoardReply, ReplyBlock, ReplyPatchRequest, ReplyActionInput, ReplyTarget } from "./reply-types";
 import type { BoardNode, BoardSnapshot, CanvasAnchor, CanvasAnnotation, CanvasBatchRequest, CanvasComposition, CanvasContent, CanvasContentFields, CanvasLayout, CanvasObject, CanvasPlacement, CanvasProposal, CanvasRead, CodexBinding } from "./types";
 import { filterOverviewItems, overviewItemFromObject, overviewPaintKey, textLabel } from "./content-organization";
 import { originForObject, originMatches, resolveContentOrigin, scopeForReclassifiedSelection, type ContentOrigin } from "./content-origin";
 import { blockReply } from "./canvas-blocks";
-import { targetImage } from "./reply-image";
+import { targetImage, targetExists } from "./reply-image";
 import { targetArtifact } from "./reply-artifact";
 import { canvasAnnotations } from "./canvas-annotations";
 import { annotationLabel, annotationSelected } from "./canvas-annotation-markers";
 import { canvasInsert } from "./canvas-insert";
 import { canvasIdea, type IdeaMember } from "./canvas-idea";
+import { canvasCleanup } from "./canvas-cleanup";
 import { arrangementPreview, arrangementText as at } from "./canvas-arrangement";
 import { replyDrafts, draftKey, draftText, contentKey, type DraftRecord } from "./reply-drafts";
 import { isNativeCanvasContent, NativeCanvasContent } from "./canvas-native";
 import { mountSourceTable } from "./canvas-source-table";
+import { mountSourceSkeleton, skeletonSelectionText } from "./canvas-source-skeleton";
+import { refreshGameLoopOnCanvas, refreshGameSkeletonOnCanvas } from "./project-game-canvas";
+import { gameSource } from "./canvas-game-design";
+import { cgd } from "./i18n/canvas-game-design";
+import { gh } from "./i18n/game-home";
 import { ct } from "./i18n/canvas";
 import { onLocale } from "./i18n";
 import { apiBase } from "./api";
@@ -27,16 +33,18 @@ import { contentUsesWheel, wheelScale } from "./canvas-wheel";
 import { canvasTypography, onCanvasTypographyChange, setCanvasFontPercent } from "./canvas-typography";
 import { fetchProjectRecord, type WorkRecord } from "./project-record-api";
 import { pt } from "./i18n/projects";
+import { st } from "./i18n/sigil";
+import { mountSigilCard, type SigilCard } from "./sigil-card";
 import "./canvas.css";
 
 /** object_id is the canonical canvas identity; reply/block/node ids stay for existing callers. */
 export type CanvasSelection = { object_id?: string; object_ids?: string[]; composition_id?: string; anchors?: CanvasAnchor[]; reply_id?: string; block_id?: string; node_id?: string };
 type Handlers = Omit<ReplyBoardHandlers, "onSelect"> & {
-  onSelect(selection: CanvasSelection | null): void;
+  onSelect(selection: CanvasSelection | null, options?: { preserveDraft?: boolean }): void;
   /** Pointer/keyboard canvas choice, not update() or selectNode. */
   onHumanSelect?(): void;
   /** Focus the existing composer with the current selection; sending remains a separate user action. */
-  onDiscussSelection?(): void;
+  onDiscussSelection?(text?: string): void;
   onNodePatch(id: string, request: ReplyPatchRequest): Promise<BoardNode>;
   onNodeAsk(id: string, text: string): Promise<void>;
   onBlockAction(id: string, request: ReplyActionInput, expectedRevision: number): Promise<BoardSnapshot>;
@@ -51,6 +59,7 @@ type Handlers = Omit<ReplyBoardHandlers, "onSelect"> & {
   onBatch(request: CanvasBatchRequest): Promise<BoardSnapshot>;
   onProposal(requestId: string, action: "apply" | "dismiss", current: CanvasRead[]): Promise<BoardSnapshot>;
   onReload(): Promise<BoardSnapshot>;
+  onOrganized?(snapshot: BoardSnapshot): void;
   onRestoreComposer(record: DraftRecord): void;
 };
 type Content = CanvasObject["content"];
@@ -59,12 +68,12 @@ type Entry = { object: CanvasObject; placement: CanvasPlacement; reply?: BoardRe
 type Frame = {
   object: CanvasObject; root: HTMLElement; head: HTMLElement; title: HTMLElement; source: HTMLElement; provenance: HTMLElement; content: HTMLElement;
   activateButton: HTMLButtonElement; openButton: HTMLButtonElement; cell: Node; editor?: ReplyBoardHandle; native?: NativeCanvasContent;
-  workRecord?: WorkRecordCard; sourceTable?: ReturnType<typeof mountSourceTable>; reply?: BoardReply; placement: CanvasPlacement; note?: BoardNode; summary?: HTMLElement;
+  workRecord?: WorkRecordCard; sigil?: SigilCard; sourceTable?: ReturnType<typeof mountSourceTable>; sourceSkeleton?: ReturnType<typeof mountSourceSkeleton>; reply?: BoardReply; placement: CanvasPlacement; note?: BoardNode; summary?: HTMLElement;
 };
 const MIN_SIZE = 48, MAX_SIZE = 2400, EDGE_Z = -2_000_000;
 const isLegacyContent = (content: Content): content is LegacyContent => content.type === "node" || content.type === "reply";
 const legacyKey = (content: Content) => isLegacyContent(content) ? `${content.type}:${content.id}` : content.type;
-const titleFor = (object: CanvasObject, reply?: BoardReply) => object.content.type === "work_record" ? pt("title") : object.content.type === "source_table" ? object.content.table.title : reply?.title || (isNativeCanvasContent(object.content) ? object.content.title || (object.content.type === "text" ? textLabel(object.content.text) : "") : object.content.type === "block" && object.content.block.type === "text" ? textLabel(object.content.block.text) : "") || ct("untitledBlock");
+const titleFor = (object: CanvasObject, reply?: BoardReply) => object.content.type === "work_record" ? pt("title") : object.content.type === "sigil" ? st("kind") :object.content.type === "source_skeleton" ? object.content.skeleton.title : object.content.type === "source_table" ? object.content.table.title : reply?.title || (isNativeCanvasContent(object.content) ? object.content.title || (object.content.type === "text" ? textLabel(object.content.text) : "") : object.content.type === "block" && object.content.block.type === "text" ? textLabel(object.content.block.text) : "") || ct("untitledBlock");
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text = "") {
   const node = document.createElement(tag); node.className = className; node.textContent = text; return node;
@@ -437,6 +446,10 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   readerTextSize.classList.add("canvas-reader-text-size");
   const readerFontSettings = button(ct("readerFontSettings"), () => document.dispatchEvent(new Event("spellcast-open-settings")));
   readerFontSettings.classList.add("canvas-reader-font-settings");
+  const readerAnnotation = button(annotationLabel(), () => {
+    if (readingKey) void beginAnnotationFor(readingKey, frames.get(readingKey)?.sourceSkeleton?.selectedId() || readerBlockId || undefined);
+  });
+  readerAnnotation.classList.add("canvas-reader-annotation");
   const readerToggle = button(ct("readerHideOutline"), () => {
     reader.classList.toggle("is-outline-collapsed");
     readerToggle.textContent = ct(reader.classList.contains("is-outline-collapsed") ? "readerShowOutline" : "readerHideOutline");
@@ -503,7 +516,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   readerBatch.append(readerCount, readerCompare, readerCopy, readerDiscuss, readerClear);
   readerOutline.append(readerOutlineTitle, readerAll, readerPickAll, readerWidth, readerAtoms, readerEdit);
   readerWorkspace.append(readerOutline);
-  readerHead.append(readerTitle, readerSource, readerToggle, readerTextSize, readerFontSettings, readerLock, readerClose);
+  readerHead.append(readerTitle, readerSource, readerToggle, readerAnnotation, readerTextSize, readerFontSettings, readerLock, readerClose);
   reader.append(readerHead, readerBatch, readerWorkspace); document.body.append(reader);
   function readerPositionKey() {
     return JSON.stringify([readingKey, readerComparing ? [...(blockSelections.get(readingKey!) ?? [])].sort() : readerBlockId]);
@@ -701,13 +714,14 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
         if (blocks.length === 1 && blocks[0].type === "artifact" && blocks[0].state_preview) image = blocks[0].state_preview;
       } else if (content.type === "text" || content.type === "shape") body = content.text;
       else if (content.type === "source_table") body = [content.table.columns.join(" · "), ...content.table.rows.map(row => row.join(" · ")), `${content.table.path} · sha ${content.table.hash.slice(0, 8)}`].join("\n");
+      else if (content.type === "source_skeleton") { const preview = skeletonSelectionText(content.skeleton, anchor.block_id); title = preview.title; body = preview.body; }
       else if (content.type === "image") { body = content.alt; image = { src: content.src, alt: content.alt || title }; }
       return [{ anchor, title, source, body, image, draft }];
     });
   }
-  function discussSelection() {
+  function discussSelection(text?: string) {
     handlers.onSelect(getSelection());
-    if (handlers.onDiscussSelection) handlers.onDiscussSelection();
+    if (handlers.onDiscussSelection) handlers.onDiscussSelection(text);
     else handlers.onFocusNotice?.(ct("selectionDiscussReady"));
   }
   async function copySelection() {
@@ -938,6 +952,10 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const anchor: CanvasAnchor = { object_id: object.id, content_revision: object.content_revision };
     const annotation = savedLayout.annotations?.find(note => note.id === selectedAnnotationId && note.anchor.object_id === object.id && !note.removed);
     if (annotation) return { ...anchor, annotations: [{ id: annotation.id, revision: annotation.revision }] };
+    if (object.content.type === "source_skeleton") {
+      const id = frame?.sourceSkeleton?.selectedId();
+      return id ? { ...anchor, block_id: id } : anchor;
+    }
     const selected = frame?.editor?.getSelection();
     if (selected?.target) { anchor.target = selected.target; if (selected.region) anchor.region = selected.region; }
     if (object.content.type === "block") return { ...anchor, block_id: object.content.block.id, image: targetImage(object.content.block, selected?.target), artifact_reference: targetArtifact(object.content.block, selected?.target) };
@@ -958,7 +976,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const object_ids = selectedObjectIds(); if (!object_ids.length) return null;
     const frame = primaryFrame(); const object = frame?.object ?? objectById(object_ids[0]); if (!object) return null;
     const inner: CanvasSelection = object.content.type === "block" ? { block_id: object.content.block.id } : frame?.note ? { node_id: frame.note.id }
-      : frame?.editor?.getSelection() ?? (frame?.reply ? { reply_id: frame.reply.id } : {});
+      : frame?.sourceSkeleton ? { block_id: frame.sourceSkeleton.selectedId() || undefined } : frame?.editor?.getSelection() ?? (frame?.reply ? { reply_id: frame.reply.id } : {});
     const picked = blockSelections.get(object.id);
     if (picked) { inner.block_id = picked.size === 1 ? [...picked][0] : undefined; }
     return { object_id: object.id, object_ids, ...(selection && isComposition(selection) && selectedUnits.size === 1 ? { composition_id: selection } : {}), anchors: object_ids.flatMap(id => {
@@ -989,7 +1007,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       deactivate(false); choose(key, false, true);
       active = key; frame.root.classList.add("is-active"); frame.content.inert = false; frame.native?.setActive(true);
     }
-    const target = [...frame.content.querySelectorAll<HTMLElement>("input, textarea, select, iframe, button:not([disabled]), [tabindex]:not([tabindex='-1'])")]
+    const skeletonTarget = frame.sourceSkeleton ? frame.content.querySelector<HTMLElement>(".gs-node-row[aria-pressed='true'], .gs-group-title[aria-pressed='true']") : null;
+    const target = skeletonTarget ?? [...frame.content.querySelectorAll<HTMLElement>("input, textarea, select, iframe, button:not([disabled]), [tabindex]:not([tabindex='-1'])")]
       .find(element => element.getClientRects().length && !element.closest("dialog:not([open])")) ?? frame.content;
     target.focus({ preventScroll: true });
     paintMode();
@@ -1339,12 +1358,17 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   }
   const annotationsPanel = canvasAnnotations({
     getBoard: () => board ?? undefined,
-    getAnnotations: () => (savedLayout.annotations ?? []).filter(note => {
-      const object = objectById(note.anchor.object_id);
-      const origin = object && board ? originForObject(object, board, overviewMeta.bindings)
-        : resolveContentOrigin(note.origin ? { cwd: note.origin.cwd, thread_id: note.origin.thread_id, source_id: note.origin.source_id || undefined, goal: note.origin.label } : undefined, note.origin?.source_id, overviewMeta.bindings);
-      return originMatches(origin, scopeWorkspace || "all", scopeTask);
-    }),
+    getAnnotations: () => {
+      const objects = new Map(savedLayout.objects.map(object => [object.id, object]));
+      const origins = new Map<string, ReturnType<typeof originForObject>>();
+      return (savedLayout.annotations ?? []).filter(note => {
+        const object = objects.get(note.anchor.object_id);
+        if (object && board && !origins.has(object.id)) origins.set(object.id, originForObject(object, board, overviewMeta.bindings));
+        const origin = object && board ? origins.get(object.id)!
+          : resolveContentOrigin(note.origin ? { cwd: note.origin.cwd, thread_id: note.origin.thread_id, source_id: note.origin.source_id || undefined, goal: note.origin.label } : undefined, note.origin?.source_id ?? note.target_source_id ?? undefined, overviewMeta.bindings);
+        return originMatches(origin, scopeWorkspace || "all", scopeTask);
+      });
+    },
     capture: async () => {
       // Capturing a new note points at the current selection, not a recursive note reference.
       selectedAnnotationId = null;
@@ -1357,11 +1381,42 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     focus: note => focusAnnotation(note, false),
     discuss: note => focusAnnotation(note, true),
   });
+  async function beginAnnotationFor(objectId: string, blockId?: string, target?: ReplyTarget) {
+    try {
+      if (reader.open && readingKey === objectId) rememberReaderPosition();
+      await prepareFeedback();
+      const frame = frames.get(objectId);
+      if (!frame) throw new Error(ct("proposalMissing"));
+      const anchor: CanvasAnchor = { object_id: objectId, content_revision: frame.object.content_revision };
+      const block = blockId ? frame.reply?.blocks.find(item => item.id === blockId) : undefined;
+      const skeletonNode = frame.object.content.type === "source_skeleton" && blockId
+        ? frame.object.content.skeleton.model.nodes.find(node => node.id === blockId) : undefined;
+      if (blockId && !block && !skeletonNode) throw new Error(ct("missingBlock"));
+      if (skeletonNode) { if (target) throw new Error(ct("missingBlock")); anchor.block_id = skeletonNode.id; }
+      if (block) {
+        anchor.block_id = block.id;
+        if (target) {
+          if (!targetExists(block, target)) throw new Error(ct("missingBlock"));
+          anchor.target = target;
+        }
+        anchor.image = targetImage(block, target);
+        anchor.artifact_reference = targetArtifact(block, target);
+        if (block.type === "artifact") {
+          anchor.artifact = frame.editor?.getArtifactAnchor() ?? { bundle_id: block.bundle_id, state_revision: block.state_revision, state: block.state };
+          anchor.inputs = dataflow.snapshot(objectId, block.id);
+        }
+      }
+      const compositions = compositionDependencies().filter(group => compositionContains(group, objectId)).map(group => ({ id: group, revision: compositionById(group)!.revision }));
+      if (compositions.length) anchor.compositions = compositions;
+      await annotationsPanel.showForAnchor(anchor);
+    } catch (error) { fail(error); }
+  }
   function focusAnnotation(note: CanvasAnnotation, discuss: boolean) {
     const frame = frames.get(note.anchor.object_id);
     if (!frame) throw new Error(ct("proposalMissing"));
     focus(frame.object.id, true); choose(frame.object.id, false, true);
     if (!discuss && note.anchor.content_revision === frame.object.content_revision) {
+      if (frame.sourceSkeleton) { frame.sourceSkeleton.select(note.anchor.block_id || ""); handlers.onSelect(getSelection()); }
       if (note.anchor.block_id && frame.reply) frame.editor?.selectBlock(frame.reply.id, note.anchor.block_id, note.anchor.target, note.anchor.region);
       if (note.anchor.region) frame.native?.setRegion(note.anchor.region);
     }
@@ -1406,7 +1461,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     focusButton.disabled = !selectedObjectIds().length;
     connectionsButton.disabled = !frame || (frame.object.content.type !== "text" && !frame.reply?.blocks.some(block => block.type === "artifact"));
     cardButton.setAttribute("aria-pressed", String(frame ? currentPlacement(frame).appearance === "card" : false));
-    placeSelectionTools();
+    placeSelectionTools(); paintGameTools();
   }
   function moveSelected(event: KeyboardEvent, frame: Frame) {
     const step = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] }[event.key];
@@ -1519,6 +1574,29 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   const retry = button(ct("retry"), () => { layoutMessage = "layoutSaving"; void flushLayout(); }); retry.hidden = true;
   const draftsButton = button(ct("drafts"), () => { paintDrafts(); drafts.showModal(); });
   const removedButton = button(ct("removed"), () => { paintRemovedList(); removedDialog.showModal(); });
+  const cleanup = canvasCleanup({
+    reload: async () => {
+      await flushLayout();
+      if (dirty.size || groupLocal.size || groupMove) throw new Error(ct("layoutFailed"));
+      const snapshot = await handlers.onReload(); update(snapshot); return snapshot;
+    },
+    scopeIds: () => new Set(visibleFrames),
+    selectedIds: selectedObjectIds,
+    protectedIds: () => {
+      const ids = new Set<string>();
+      if (active) ids.add(active);
+      for (const frame of frames.values()) if (frame.native?.hasDraft) ids.add(frame.object.id);
+      for (const draft of replyDrafts.list()) {
+        if (draft.object_id) ids.add(draft.object_id);
+        for (const anchor of [...(draft.anchors ?? []), ...(draft.context?.anchors ?? [])]) ids.add(anchor.object_id);
+        if (!draft.object_id) for (const frame of frames.values()) if (frame.reply?.id === draft.reply_id) ids.add(frame.object.id);
+      }
+      return ids;
+    },
+    applied: snapshot => { handlers.onOrganized?.(snapshot); update(snapshot); },
+    locate: id => focus(id, true),
+    openRemoved: () => { paintRemovedList(); removedDialog.showModal(); },
+  });
   const layersButton = button(ct("layers"), () => { paintLayers(); layers.showModal(); });
   const proposalsButton = button(ct("proposals"), () => { reviewedProposals.clear(); paintProposals(); proposals.showModal(); void refreshProposals(); });
   const jump = element("select", "canvas-jump"); jump.setAttribute("aria-label", ct("openItem"));
@@ -1564,13 +1642,73 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   window.addEventListener("pointerdown", closeMore, true);
   actual.classList.add("canvas-zoom-value");
   workButton.classList.add("canvas-tool-primary", "canvas-selection-work");
-  const rail = toolGroup(add, multiButton, overviewButton, layersButton, handButton, more);
+  const rail = toolGroup(add, multiButton, overviewButton, cleanup.button, layersButton, handButton, more);
   rail.classList.add("canvas-tool-rail");
   const selectionTitle = element("span", "canvas-tool-selection-title");
   const selectionDock = toolGroup(selectionTitle, selectionDiscussButton, selectionCompareButton, groupButton, ideaButton, workButton, lockButton, workSettingsButton, annotationsButton, connectionsButton, focusButton, selectionMore, clearButton);
   selectionDock.classList.add("canvas-tool-selection");
   const camera = toolGroup(fitButton, zoomOut, actual, zoomIn);
   camera.classList.add("canvas-tool-camera");
+  const gameTools = element("details", "canvas-game-tools"); gameTools.id = "canvas-game-tools";
+  const gameToolsToggle = element("summary");
+  const gameToolsPanel = element("div", "canvas-game-tool-panel");
+  const gameToolsContext = element("strong"); gameToolsContext.id = "canvas-game-tool-context";
+  const gameToolsHelp = element("p");
+  let gameToolsBusy = false;
+  const gameRefresh = button("", async () => {
+    const frame = selectedGameFrame(); if (!frame || gameToolsBusy) return;
+    gameToolsBusy = true; paintGameTools();
+    try { await refreshSourceFrame(frame); } catch (error) { fail(error); }
+    finally { gameToolsBusy = false; if (!destroyed) paintGameTools(); }
+  }); gameRefresh.id = "canvas-game-refresh";
+  const gameViewSource = button("", () => {
+    const frame = selectedGameFrame(); if (!frame || gameToolsBusy) return;
+    activate(frame.object.id);
+    frame.sourceSkeleton?.showSources(); frame.sourceTable?.showSource();
+    gameTools.open = false;
+  }); gameViewSource.id = "canvas-game-source";
+  const gameProject = button("", () => {
+    const source = gameSource(selectedGameFrame()?.object); if (!source || gameToolsBusy) return;
+    gameTools.open = false;
+    window.dispatchEvent(new CustomEvent("spellcast:open-game-workspace", { detail: { projectId: source.project_id } }));
+  }); gameProject.id = "canvas-game-project";
+  gameToolsPanel.append(gameToolsContext, gameToolsHelp, gameRefresh, gameViewSource, gameProject);
+  gameTools.append(gameToolsToggle, gameToolsPanel);
+  try { gameTools.open = localStorage.getItem("spellcast.canvas.game-tools.open") === "true"; } catch { /* View preference only. */ }
+  gameTools.addEventListener("toggle", () => {
+    gameToolsToggle.setAttribute("aria-expanded", String(gameTools.open));
+    try { localStorage.setItem("spellcast.canvas.game-tools.open", String(gameTools.open)); } catch { /* The tools remain usable. */ }
+  });
+  gameTools.addEventListener("keydown", event => {
+    if (event.key !== "Escape" || !gameTools.open) return;
+    event.preventDefault(); event.stopPropagation(); gameTools.open = false; gameToolsToggle.focus();
+  });
+  function selectedGameFrame() {
+    const ids = selectedObjectIds();
+    const frame = ids.length === 1 ? frames.get(ids[0]) : undefined;
+    return gameSource(frame?.object) ? frame : undefined;
+  }
+  function paintGameTools() {
+    const frame = selectedGameFrame(), source = gameSource(frame?.object);
+    gameToolsToggle.textContent = cgd("tools"); gameToolsToggle.setAttribute("aria-label", cgd("tools"));
+    gameToolsContext.textContent = source ? frame!.object.origin?.label?.trim() || source.root.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || source.title : cgd("tools");
+    gameToolsContext.title = source ? `${source.root}\n${source.path}` : "";
+    gameToolsHelp.textContent = source ? source.title : cgd(selectedObjectIds().length > 1 ? "pickOne" : "pickSource");
+    gameRefresh.textContent = cgd(gameToolsBusy ? "refreshing" : "refresh");
+    gameViewSource.textContent = cgd("source"); gameProject.textContent = cgd("project");
+    for (const control of [gameRefresh, gameViewSource, gameProject]) control.disabled = !source || gameToolsBusy;
+  }
+  async function refreshSourceFrame(frame: Frame) {
+    const content = frame.object.content;
+    if (content.type === "source_skeleton") await refreshGameSkeletonOnCanvas(content.skeleton, frame.object.id);
+    else if (content.type === "source_table") await refreshGameLoopOnCanvas(content.table, frame.object.id);
+    else return;
+    if (destroyed) return;
+    const snapshot = await handlers.onReload();
+    if (destroyed) return;
+    update(snapshot);
+    handlers.onSelect(getSelection(), { preserveDraft: true });
+  }
   function placeSelectionTools() {
     const ids = selectedObjectIds();
     selectionDock.hidden = !ids.length;
@@ -1614,7 +1752,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     for (const [node, svg] of iconButtons) { node.classList.add("canvas-tool-icon"); node.innerHTML = svg; }
   }
   camera.append(retry);
-  toolbar.append(rail, selectionDock, camera, status, navigationHelp);
+  toolbar.append(rail, gameTools, selectionDock, camera, status, navigationHelp);
   paintIcons();
   placeSelectionTools();
   window.addEventListener("resize", placeSelectionTools);
@@ -2147,6 +2285,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const frame = element("article", "canvas-frame"); frame.dataset.itemId = key; frame.dataset.contentId = legacyKey(object.content);
     if (object.content.type === "node") frame.classList.add("is-idea-note");
     if (object.content.type === "work_record") frame.classList.add("is-work-record");
+    if (object.content.type === "sigil") frame.classList.add("is-sigil");
     // The head is a selection-time handle: static title bar for cards, floating handle for plain presentations.
     const label = titleFor(object, reply);
     const head = element("header", "canvas-frame-head"); head.tabIndex = 0; head.setAttribute("aria-label", label);
@@ -2154,8 +2293,10 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const source = element("small", "canvas-frame-source");
     const provenance = element("small", "canvas-origin");
     const recordReference = object.content.type === "work_record" ? object.content : null;
+    // A sigil card has no reader view yet; opening it works inside the card.
+    const sigilReference = object.content.type === "sigil" ? object.content : null;
     const activateButton = button(recordReference ? pt("editRecord") : ct("activate"), () => { if (recordReference) openProjectRecord(recordReference); else if (active === key) deactivate(); else workInside(key); });
-    const openButton = button(recordReference ? pt("editRecord") : ct("open"), () => { if (recordReference) openProjectRecord(recordReference); else openReader(key); }, recordReference ? pt("editRecord") : ct("open"));
+    const openButton = button(recordReference ? pt("editRecord") : ct("open"), () => { if (recordReference) openProjectRecord(recordReference); else if (sigilReference) workInside(key); else openReader(key); }, recordReference ? pt("editRecord") : ct("open"));
     const annotationBadge = button(annotationLabel(), () => { choose(key, false, true); void annotationsPanel.show(key); });
     annotationBadge.classList.add("canvas-annotation-badge"); annotationBadge.hidden = true;
     for (const name of ["pointerdown", "mousedown", "click", "dblclick"]) annotationBadge.addEventListener(name, event => event.stopPropagation());
@@ -2182,12 +2323,37 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     let native: NativeCanvasContent | undefined;
     let workRecord: WorkRecordCard | undefined;
     let sourceTable: ReturnType<typeof mountSourceTable> | undefined;
+    let sourceSkeleton: ReturnType<typeof mountSourceSkeleton> | undefined;
     if (recordReference) {
       workRecord = mountWorkRecordCard(content, recordReference, value => {
         title.textContent = value; head.setAttribute("aria-label", value);
       });
     }
-    if (object.content.type === "source_table") sourceTable = mountSourceTable(content, object.content.table);
+    let sigil: SigilCard | undefined;
+    if (sigilReference) {
+      sigil = mountSigilCard(content, sigilReference, value => {
+        title.textContent = value; head.setAttribute("aria-label", value);
+      });
+    }
+    if (object.content.type === "source_table") sourceTable = mountSourceTable(content, object.content.table, {
+      projectLabel: object.origin?.label,
+      onRefresh: async () => { const held = frames.get(key); if (held) await refreshSourceFrame(held); },
+    });
+    if (object.content.type === "source_skeleton") sourceSkeleton = mountSourceSkeleton(content, object.content.skeleton, {
+      objectId: key,
+      projectLabel: object.origin?.label,
+      onSelect: () => { selectedAnnotationId = null; blockSelections.delete(key); choose(key, false, true); handlers.onSelect(getSelection()); paintSelectionTools(); },
+      onDiscuss: (id, intent) => {
+        const held = frames.get(key); if (held?.object.content.type !== "source_skeleton") return;
+        const node = held.object.content.skeleton.model.nodes.find(node => node.id === id); if (!node) return;
+        selectedAnnotationId = null; blockSelections.delete(key); choose(key, false, true);
+        if (readingKey === key) closeReader();
+        discussSelection(gh(intent === "develop" ? "developSkeletonNode" : "questionSkeletonNode", { name: node.title }));
+      },
+      onRefresh: async () => {
+        const held = frames.get(key); if (held) await refreshSourceFrame(held);
+      },
+    });
     if (isNativeCanvasContent(object.content)) {
       native = new NativeCanvasContent(content, object, {
         getSourceTitle: source => {
@@ -2219,6 +2385,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
         getCanvas: () => board?.canvas,
         getBoard: () => board ?? undefined,
         onAnnotation: openAnnotation,
+        onAnnotate: selection => { void beginAnnotationFor(key, selection.block_id, selection.target); },
         onArtifactWheel: canvasWheel,
         onArtifactPresentationChange: (_replyId, blockId, height, _mode, explicit) => {
           const held = frames.get(key);
@@ -2273,7 +2440,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     mountHtml(cell, frame, native);
     queueMicrotask(() => { if (!destroyed && html.get(key) === frame) mountHtml(cell, frame, native); });
     requestAnimationFrame(() => { if (!destroyed && html.get(key) === frame) mountHtml(cell, frame, native); });
-    const held: Frame = { object, root: frame, head, title, source, provenance, content, activateButton, openButton, cell, editor, native, workRecord, sourceTable, reply, placement: p, note };
+    const held: Frame = { object, root: frame, head, title, source, provenance, content, activateButton, openButton, cell, editor, native, workRecord, sigil, sourceTable, sourceSkeleton, reply, placement: p, note };
     frames.set(key, held); applyAppearance(held, p); if (editor && reply) editor.update([reply]);
     paintReplySummary(held);
     frame.classList.toggle("is-selected", selectedObjectIds().includes(key));
@@ -2318,6 +2485,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
   function update(snapshot: BoardSnapshot) {
     if (destroyed) return;
     board = snapshot;
+    cleanup.changed(snapshot);
     dataflow.update(snapshot);
     const layout: CanvasLayout = { revision: snapshot.canvas?.revision ?? 0, objects: snapshot.canvas?.objects ?? [], items: snapshot.canvas?.items ?? [], compositions: snapshot.canvas?.compositions ?? [], annotations: snapshot.canvas?.annotations ?? [], proposals: snapshot.canvas?.proposals ?? [] };
     if (layout.revision >= revision) { revision = layout.revision; savedLayout = layout; }
@@ -2335,7 +2503,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     const shown: Entry[] = [], hidden: Entry[] = [];
     for (const object of savedLayout.objects) {
       const p = savedLayout.items.find(item => item.item_id === object.id); if (!p) continue;
-      if (isNativeCanvasContent(object.content) || object.content.type === "work_record" || object.content.type === "source_table") (p.removed ? hidden : shown).push({ object, placement: p });
+      if (isNativeCanvasContent(object.content) || object.content.type === "work_record" || object.content.type === "sigil" || object.content.type === "source_table" || object.content.type === "source_skeleton") (p.removed ? hidden : shown).push({ object, placement: p });
       else if (object.content.type === "block") (p.removed ? hidden : shown).push({ object, placement: p, reply: blockReply(object) });
       else {
         const note = object.content.type === "node" ? nodes.get(object.content.id) : undefined;
@@ -2357,15 +2525,15 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     for (const [key, frame] of frames) if (!keys.has(key)) {
       if (readingKey === key) { rememberReaderPosition(); reader.close(); }
       if (active === key) deactivate(false);
-      frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); frame.sourceTable?.destroy();
+      frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); frame.sigil?.destroy(); frame.sourceTable?.destroy(); frame.sourceSkeleton?.destroy();
       frame.root.remove();
       graph.removeCell(frame.cell, { remote: true }); frames.delete(key); html.delete(key); dirty.delete(key); groupLocal.delete(key); nativeRequestIds.delete(key); history.clean();
     }
     for (const { object, placement: p, reply, note } of shown) {
       const key = object.id; const frame = frames.get(key);
       if (!frame) { addFrame(object, p, reply, note); continue; }
-      if (Boolean(frame.native) !== isNativeCanvasContent(object.content) || Boolean(frame.workRecord) !== (object.content.type === "work_record") || Boolean(frame.sourceTable) !== (object.content.type === "source_table")) {
-        frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); frame.sourceTable?.destroy(); frame.root.remove(); graph.removeCell(frame.cell, { remote: true }); frames.delete(key); html.delete(key);
+      if (Boolean(frame.native) !== isNativeCanvasContent(object.content) || Boolean(frame.workRecord) !== (object.content.type === "work_record") || Boolean(frame.sigil) !== (object.content.type === "sigil") || Boolean(frame.sourceTable) !== (object.content.type === "source_table") || Boolean(frame.sourceSkeleton) !== (object.content.type === "source_skeleton")) {
+        frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); frame.sigil?.destroy(); frame.sourceTable?.destroy(); frame.sourceSkeleton?.destroy(); frame.root.remove(); graph.removeCell(frame.cell, { remote: true }); frames.delete(key); html.delete(key);
         addFrame(object, p, reply, note); continue;
       }
       frame.object = object; frame.note = note; frame.reply = reply; frame.placement = p;
@@ -2377,9 +2545,10 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
           if (selection === key) selection = [...selectedUnits].at(-1) ?? null;
         }
       }
-      frame.native?.update(object); frame.workRecord?.refresh();
+      frame.native?.update(object); frame.workRecord?.refresh(); frame.sigil?.refresh();
       if (object.content.type === "source_table") frame.sourceTable?.update(object.content.table);
-      const label = frame.workRecord ? frame.title.textContent || titleFor(object, reply) : frame.native?.title() ?? titleFor(object, reply);
+      if (object.content.type === "source_skeleton") frame.sourceSkeleton?.update(object.content.skeleton);
+      const label = frame.workRecord || frame.sigil ? frame.title.textContent || titleFor(object, reply) : frame.native?.title() ?? titleFor(object, reply);
       frame.title.textContent = label; frame.source.textContent = reply?.source_label ?? object.source_id ?? ""; frame.head.setAttribute("aria-label", label);
       if (frame.editor && reply) frame.editor.update([reply]);
       paintReplySummary(frame);
@@ -2401,6 +2570,13 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     syncGraphEdges(edges);
     applyScope();
     if (selectedAnnotationId && !savedLayout.annotations?.some(note => note.id === selectedAnnotationId && !note.removed)) selectedAnnotationId = null;
+    const annotationCounts = new Map<string, number>();
+    const annotationsByObject = new Map<string, CanvasAnnotation[]>();
+    for (const note of savedLayout.annotations ?? []) {
+      const notes = annotationsByObject.get(note.anchor.object_id) ?? [];
+      notes.push(note); annotationsByObject.set(note.anchor.object_id, notes);
+      if (!note.removed) annotationCounts.set(note.anchor.object_id, (annotationCounts.get(note.anchor.object_id) ?? 0) + 1);
+    }
     for (const frame of frames.values()) {
       frame.root.classList.toggle("is-delete-locked", Boolean(frame.placement.delete_locked));
       frame.root.setAttribute("data-delete-locked", String(Boolean(frame.placement.delete_locked)));
@@ -2408,8 +2584,8 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       if (!lockBadge) { lockBadge = element("span", "canvas-frame-lock", "🔒"); frame.root.append(lockBadge); }
       lockBadge.hidden = !frame.placement.delete_locked;
       lockBadge.title = ct("deleteLockHint"); lockBadge.setAttribute("aria-label", ct("deleteLockedState"));
-      frame.native?.setAnnotations(savedLayout.annotations ?? []);
-      const count = savedLayout.annotations?.filter(note => !note.removed && note.anchor.object_id === frame.object.id).length ?? 0;
+      frame.native?.setAnnotations(annotationsByObject.get(frame.object.id) ?? []);
+      const count = annotationCounts.get(frame.object.id) ?? 0;
       const badge = frame.root.querySelector<HTMLButtonElement>(".canvas-annotation-badge");
       if (badge) { badge.hidden = !count; badge.textContent = annotationLabel(count); badge.setAttribute("aria-label", annotationLabel(count)); }
     }
@@ -2451,7 +2627,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     readerToggle.setAttribute("aria-label", readerToggle.textContent);
     readerWidth.setAttribute("aria-label", ct("readerOutlineWidth"));
     workSettingsButton.textContent = ct("workSettings"); workSettingsButton.title = ct("workSettings"); workSettingsButton.setAttribute("aria-label", ct("workSettings"));
-    for (const node of [annotationsButton, allAnnotationsButton]) { node.textContent = annotationLabel(); node.setAttribute("aria-label", annotationLabel()); }
+    for (const node of [annotationsButton, allAnnotationsButton, readerAnnotation]) { node.textContent = annotationLabel(); node.setAttribute("aria-label", annotationLabel()); }
     graphHost.setAttribute("aria-label", ct("canvas"));
     connectionsButton.textContent = ct("dataConnections"); connectionsButton.title = ct("dataConnections"); connectionsButton.setAttribute("aria-label", ct("dataConnections"));
     moreSummary.setAttribute("aria-label", ct("moreMenu")); moreSummary.title = ct("more");
@@ -2470,7 +2646,7 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     if (readingKey) paintReaderOutline(true);
     actual.title = ct("actualSize"); actual.setAttribute("aria-label", ct("actualSize"));
     jump.setAttribute("aria-label", ct("openItem")); if (jump.options[0]) jump.options[0].textContent = ct("openItem");
-    for (const frame of frames.values()) { const label = frame.workRecord ? pt("editRecord") : ct("open"); frame.openButton.textContent = label; frame.openButton.title = label; frame.openButton.setAttribute("aria-label", label); frame.native?.refreshLabels(); frame.workRecord?.refreshLabels(); paintReplySummary(frame); }
+    for (const frame of frames.values()) { const label = frame.workRecord ? pt("editRecord") : ct("open"); frame.openButton.textContent = label; frame.openButton.title = label; frame.openButton.setAttribute("aria-label", label); frame.native?.refreshLabels(); frame.workRecord?.refreshLabels(); frame.sigil?.refreshLabels(); paintReplySummary(frame); }
     emptyTitle.textContent = ct("emptyCanvas"); emptyHelp.textContent = ct("emptyHelp"); paintStatus(); paintDrafts(); paintRemovedButton(); paintProposals(); paintSelectionTools();
     if (removedDialog.open) paintRemovedList();
   }
@@ -2486,7 +2662,18 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
     reveal(object);
   }
   const unsubscribeLocale = onLocale(labels); labels();
-  return { update, getSelection, setOverviewMeta, selectObject, getScope: () => ({ workspace: scopeWorkspace || "all", task: scopeTask }),
+  return { update, getSelection, setOverviewMeta, selectObject, closeReading: closeReader,
+    async openObject(objectId: string, nodeId?: string, inPlace = false) {
+      if (reader.open && (readingKey !== objectId || inPlace)) {
+        const closed = new Promise<void>(resolve => reader.addEventListener("close", () => resolve(), { once: true }));
+        closeReader(); await closed;
+      }
+      selectObject(objectId);
+      const frame = frames.get(objectId);
+      if (nodeId !== undefined) frame?.sourceSkeleton?.select(nodeId);
+      if (inPlace) activate(objectId); else openReader(objectId);
+      handlers.onSelect(getSelection());
+    }, getScope: () => ({ workspace: scopeWorkspace || "all", task: scopeTask }),
     prepareFeedback,
     select(replyId: string) {
       const object = objectForContent("reply", replyId) ?? resolveObject(replyId);
@@ -2525,6 +2712,6 @@ export function mountCanvas(host: HTMLElement, handlers: Handlers) {
       locateIntent = { kind: "object", id: object.id };
       reveal(object);
     },
-    destroy() { persistWorkspaceSession(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.clearTimeout(readerSaveTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistWorkspaceSession); window.removeEventListener("beforeunload", persistWorkspaceSession); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); selectionController.abort(); unsubscribeLocale(); unsubscribeTypography(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); } graph.dispose(); reader.remove(); selectionReader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
+    destroy() { cleanup.destroy(); persistWorkspaceSession(); destroyed = true; cancelAnimationFrame(wheelFrame); viewResize.disconnect(); window.clearTimeout(saveTimer); window.clearTimeout(viewTimer); window.clearTimeout(readerSaveTimer); window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); window.removeEventListener("blur", releasePan); window.removeEventListener("mouseup", middleUp, true); window.removeEventListener("pagehide", persistWorkspaceSession); window.removeEventListener("beforeunload", persistWorkspaceSession); window.removeEventListener("pointerdown", closeMore, true); window.removeEventListener("resize", placeSelectionTools); graphHost.removeEventListener("mousedown", middleDown, true); selectionController.abort(); unsubscribeLocale(); unsubscribeTypography(); unsubscribeDrafts(); unsubscribeData(); themeController.abort(); dataflow.destroy(); connections.destroy(); annotationsPanel.destroy(); insert.destroy(); ideaEditor.destroy(); for (const frame of frames.values()) { frame.editor?.destroy(); frame.native?.destroy(); frame.workRecord?.destroy(); frame.sigil?.destroy(); frame.sourceTable?.destroy(); frame.sourceSkeleton?.destroy(); } graph.dispose(); reader.remove(); selectionReader.remove(); drafts.remove(); overview.remove(); layers.remove(); proposals.remove(); removedDialog.remove(); root.remove(); },
   };
 }

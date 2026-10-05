@@ -1,0 +1,175 @@
+/* The Canvas view swaps the app palette (there --paper is the card surface), so sigil cards use
+   the Canvas studio variables directly, with the light palette as fallback. */
+.sigil-card {
+  --sigil-ink: var(--studio-ink, #1c1a16); --sigil-soft: var(--studio-soft, #5c574e); --sigil-mute: var(--studio-mute, #8a8478);
+  --sigil-line: var(--studio-line-strong, rgba(28, 26, 22, .18)); --sigil-mint: var(--studio-mint, #2a8a78); --sigil-lilac: var(--studio-lilac, #8461aa);
+  --sigil-blue: #4f8df5; --sigil-amber: #c88a1a; --sigil-orange: #e07a2f; --sigil-red: #dc4c4c;
+  /* Accent colors as text, mixed toward the ink so small text stays at 4.5:1 in both themes. */
+  --sigil-orange-text: color-mix(in srgb, var(--sigil-orange) 68%, var(--sigil-ink)); --sigil-mint-text: color-mix(in srgb, var(--sigil-mint) 72%, var(--sigil-ink));
+  --sigil-lilac-text: color-mix(in srgb, var(--sigil-lilac) 70%, var(--sigil-ink)); --sigil-red-text: color-mix(in srgb, var(--sigil-red) 70%, var(--sigil-ink));
+  --sigil-blue-text: color-mix(in srgb, var(--sigil-blue) 68%, var(--sigil-ink));
+  flex: 1; min-height: 0; box-sizing: border-box; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: start; gap: 8px 14px;
+  padding: 18px; overflow: auto; color: var(--sigil-ink); background: var(--studio-paper, #fffcf7);
+}
+.canvas-frame.is-plain .sigil-card { border: 1px solid var(--sigil-line); border-radius: var(--radius-md); box-shadow: var(--studio-shadow, 0 8px 28px rgba(28, 26, 22, .07)); }
+.sigil-card-kind { grid-column: 1; align-self: center; color: var(--sigil-lilac-text); font: 600 11px/1.3 var(--font); letter-spacing: .08em; cursor: help; }
+.sigil-card-state { grid-column: 2; grid-row: 1; justify-self: end; padding: 4px 8px; border: 1px solid var(--sigil-line); border-radius: 999px; color: var(--sigil-soft); font: 600 11px/1.2 var(--font); }
+.sigil-card[data-state="frozen"] .sigil-card-state, .sigil-card[data-state="completed"] .sigil-card-state { color: var(--sigil-mint-text); border-color: color-mix(in srgb, var(--sigil-mint) 45%, transparent); }
+.sigil-card[data-state="running"] .sigil-card-state { color: var(--sigil-blue-text); border-color: color-mix(in srgb, var(--sigil-blue) 45%, transparent); }
+.sigil-card[data-state="paused"] .sigil-card-state, .sigil-card[data-state="unavailable"] .sigil-card-state { color: var(--sigil-orange-text); border-color: color-mix(in srgb, var(--sigil-orange) 45%, transparent); }
+.sigil-card-title { grid-column: 1 / -1; min-width: 0; margin: 0; color: var(--sigil-ink); font: 650 20px/1.3 var(--font); overflow-wrap: anywhere; }
+.sigil-card-explain, .sigil-card-owner, .sigil-card-goal, .sigil-card-run, .sigil-card-label, .sigil-card-steps, .sigil-card-outside, .sigil-card-review, .sigil-card-actions, .sigil-card-notice { grid-column: 1 / -1; margin: 0; }
+.sigil-card-explain, .sigil-card-owner { color: var(--sigil-soft); font: 12px/1.5 var(--font); overflow-wrap: anywhere; }
+.sigil-card-stage, .sigil-card-delivery { grid-column: 1 / -1; margin: 0; font: 12px/1.5 var(--font); overflow-wrap: anywhere; }
+.sigil-card-stage { padding: 8px 10px; border-left: 2px solid var(--sigil-lilac); color: var(--sigil-ink); background: color-mix(in srgb, var(--sigil-lilac) 8%, transparent); }
+.sigil-card-delivery { display: grid; gap: 4px; color: var(--sigil-soft); }
+.sigil-card-delivery[hidden], .sigil-card-stage[hidden], .sigil-card-delivery-error[hidden], .sigil-card-delivery-info:empty { display: none; }
+.sigil-card-delivery-info { display: grid; gap: 4px; }
+.sigil-card-delivery p { margin: 0; }
+.sigil-card-delivery-error { color: var(--sigil-orange-text); }
+.sigil-card-action.is-primary { border-color: var(--sigil-lilac); background: color-mix(in srgb, var(--sigil-lilac) 12%, transparent); }
+.sigil-card-goal { color: var(--sigil-ink); font: 13px/1.5 var(--font); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.sigil-card-run { display: grid; gap: 4px; }
+.sigil-card-run:empty { display: none; }
+.sigil-card-run p { margin: 0; }
+.sigil-card-executor { color: var(--sigil-ink); font: 600 13px/1.4 var(--font); }
+.sigil-card-source { color: var(--sigil-soft); font: 12px/1.4 var(--font); overflow-wrap: anywhere; }
+.sigil-card-claim { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); color: var(--sigil-ink); background: color-mix(in srgb, var(--sigil-orange) 13%, transparent); font: 12px/1.4 var(--font); }
+.sigil-card-label { margin-top: 4px; color: var(--sigil-soft); font: 600 11px/1.3 var(--font); letter-spacing: .04em; }
+.sigil-card-steps { display: grid; gap: 6px; padding: 0; list-style: none; }
+.sigil-card-step { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; color: var(--sigil-ink); font: 13px/1.4 var(--font); }
+.sigil-card-step-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sigil-card-step.is-next .sigil-card-step-title { font-weight: 650; }
+.sigil-card-step[data-light="skipped"] .sigil-card-step-title { text-decoration: line-through; color: var(--sigil-soft); }
+.sigil-card-step > small, .sigil-card-more, .sigil-card-empty { color: var(--sigil-soft); font: 12px/1.4 var(--font); }
+.sigil-card-blocked { grid-column: 2 / -1; margin: 0; color: var(--sigil-orange-text); font: 12px/1.45 var(--font); overflow-wrap: anywhere; }
+.sigil-card-step > .sigil-card-toggle, .sigil-card-step > .sigil-card-step-details { grid-column: 2 / -1; }
+.sigil-card-toggle { justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: 24px; max-width: 100%; box-sizing: border-box; padding: 2px 9px;
+  border: 1px solid var(--sigil-line); border-radius: 999px; color: var(--sigil-soft); background: transparent; font: 600 11px/1.4 var(--font); text-align: left; cursor: pointer; }
+.sigil-card-toggle[aria-expanded]::after { content: "▸"; font-size: 10px; }
+.sigil-card-toggle[aria-expanded="true"]::after { content: "▾"; }
+.sigil-card-toggle.has-markers { color: var(--sigil-lilac-text); border-color: color-mix(in srgb, var(--sigil-lilac) 45%, transparent); }
+.sigil-card-toggle:hover, .sigil-card-toggle:focus-visible { border-color: var(--sigil-lilac); outline: none; }
+.sigil-card-outside { display: grid; gap: 6px; justify-items: start; }
+.sigil-card-outside:empty { display: none; }
+.sigil-card-outside > .sigil-card-step-details { justify-self: stretch; }
+.sigil-card-step-details { display: grid; gap: 6px; min-width: 0; padding: 6px 0 6px 10px; border-left: 2px solid var(--sigil-line); }
+.sigil-card-gap { margin: 0; color: var(--sigil-soft); font: 600 11px/1.4 var(--font); }
+.sigil-card-marker-list, .sigil-card-files { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.sigil-card-marker-list li { display: grid; gap: 1px; font: 12px/1.45 var(--font); }
+.sigil-card-marker-list strong { color: var(--sigil-lilac-text); font-weight: 600; }
+.sigil-card-marker-list span { color: var(--sigil-soft); overflow-wrap: anywhere; }
+.sigil-card-file { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 1px 8px; font: 12px/1.45 var(--font); }
+.sigil-card-file-status { color: var(--sigil-soft); font: 700 11px/1.4 var(--font); text-align: center; cursor: help; }
+.sigil-card-file[data-status="A"] .sigil-card-file-status { color: var(--sigil-mint-text); }
+.sigil-card-file[data-status="D"] .sigil-card-file-status { color: var(--sigil-red-text); }
+.sigil-card-file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; border: 0; color: var(--sigil-ink); background: none; font: inherit; text-align: left; }
+button.sigil-card-file-path { cursor: pointer; }
+button.sigil-card-file-path:hover, button.sigil-card-file-path:focus-visible { text-decoration: underline; outline: none; }
+.sigil-card-file-meta { color: var(--sigil-soft); font: 11px/1.4 var(--font); white-space: nowrap; }
+.sigil-card-file-scope { grid-column: 2 / -1; justify-self: start; padding: 0 6px; border-radius: 999px; color: var(--sigil-lilac-text); background: color-mix(in srgb, var(--sigil-lilac) 10%, transparent); font: 600 10px/1.6 var(--font); }
+.sigil-card-checks { display: grid; gap: 6px; min-width: 0; }
+.sigil-card-checks > .sigil-card-action { justify-self: start; }
+.sigil-card-checks-title { margin: 0; color: var(--sigil-soft); font: 600 11px/1.4 var(--font); letter-spacing: .04em; }
+.sigil-card-check-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.sigil-card-check { display: grid; gap: 4px; min-width: 0; font: 12px/1.45 var(--font); }
+.sigil-card-check-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.sigil-card-check-status { flex: none; padding: 0 7px; border-radius: 999px; color: var(--sigil-soft); background: color-mix(in srgb, var(--sigil-mute) 14%, transparent); font: 600 11px/1.6 var(--font); }
+.sigil-card-check[data-status="running"] .sigil-card-check-status { color: var(--sigil-blue-text); background: color-mix(in srgb, var(--sigil-blue) 12%, transparent); }
+.sigil-card-check[data-status="passed"] .sigil-card-check-status { color: var(--sigil-mint-text); background: color-mix(in srgb, var(--sigil-mint) 12%, transparent); }
+.sigil-card-check[data-status="failed"] .sigil-card-check-status { color: var(--sigil-red-text); background: color-mix(in srgb, var(--sigil-red) 12%, transparent); }
+.sigil-card-check[data-status="waiting"] .sigil-card-check-status, .sigil-card-check[data-status="needs_approval"] .sigil-card-check-status {
+  color: var(--sigil-orange-text); background: color-mix(in srgb, var(--sigil-orange) 8%, transparent); }
+.sigil-card-check-label { min-width: 0; color: var(--sigil-ink); font-weight: 600; overflow-wrap: anywhere; }
+.sigil-card-check-meta { color: var(--sigil-soft); font: 11px/1.4 var(--font); white-space: nowrap; }
+.sigil-card-check-argv { justify-self: start; max-width: 100%; box-sizing: border-box; padding: 1px 6px; border-radius: 4px; color: var(--sigil-ink);
+  background: var(--studio-canvas-2, #f1f1eb); font: 11px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
+.sigil-card-check-text { margin: 0; color: var(--sigil-soft); overflow-wrap: anywhere; white-space: pre-wrap; }
+.sigil-card-check-error { margin: 0; color: var(--sigil-red-text); overflow-wrap: anywhere; }
+.sigil-card-check-disturbed { margin: 0; color: var(--sigil-lilac-text); overflow-wrap: anywhere; cursor: help; }
+.sigil-card-check-tail { max-height: 132px; margin: 0; padding: 6px 8px; overflow: auto; border-radius: var(--radius-sm); color: var(--sigil-ink);
+  background: var(--studio-canvas-2, #f1f1eb); font: 11px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; }
+.sigil-card-check-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.sigil-card-check-actions .sigil-card-action { min-height: 26px; padding: 0 10px; }
+.sigil-card-approvals, .sigil-card-amendments { grid-column: 1 / -1; display: grid; gap: 6px; margin: 0; }
+.sigil-card-approvals:empty, .sigil-card-amendments:empty { display: none; }
+.sigil-card-approvals { padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--sigil-orange) 8%, transparent); }
+.sigil-card-approvals-title { margin: 0; color: var(--sigil-orange-text); font: 600 12px/1.4 var(--font); }
+.sigil-card-approval-list, .sigil-card-amendment-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.sigil-card-approval { display: grid; gap: 4px; justify-items: start; min-width: 0; font: 12px/1.45 var(--font); }
+.sigil-card-approval-label { color: var(--sigil-ink); font-weight: 600; overflow-wrap: anywhere; }
+.sigil-card-amendments { justify-items: start; }
+.sigil-card-amendment-list { justify-self: stretch; padding: 6px 0 6px 10px; border-left: 2px solid var(--sigil-line); }
+.sigil-card-amendment { display: grid; gap: 2px; justify-items: start; min-width: 0; font: 12px/1.45 var(--font); }
+.sigil-card-amendment strong { color: var(--sigil-ink); font-weight: 600; overflow-wrap: anywhere; }
+.sigil-card-amendment span { color: var(--sigil-soft); overflow-wrap: anywhere; }
+.sigil-card-amendment[data-reverted="true"] strong { color: var(--sigil-soft); text-decoration: line-through; }
+.sigil-card-amendment-reverted { color: var(--sigil-soft); font: 600 11px/1.4 var(--font); }
+.sigil-card-amendment .sigil-card-action, .sigil-card-approval .sigil-card-action { min-height: 26px; margin-top: 2px; padding: 0 10px; }
+.sigil-card-step > .sigil-card-action { grid-column: 2 / -1; justify-self: start; min-height: 26px; padding: 0 10px; }
+.sigil-card-observe { margin: 0; color: var(--sigil-soft); font: 12px/1.4 var(--font); overflow-wrap: anywhere; }
+.sigil-card-observe.is-warning { color: var(--sigil-orange-text); }
+.sigil-light { --light: var(--sigil-mute); width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--light); background: var(--light); }
+.sigil-light[data-light="ready"], .sigil-light[data-light="done_unverified"] { background: transparent; }
+.sigil-light[data-light="running"] { --light: var(--sigil-blue); animation: sigil-pulse 1.4s ease-in-out infinite; }
+.sigil-light[data-light="verifying"] { --light: var(--sigil-amber); }
+.sigil-light[data-light="passed"], .sigil-light[data-light="done_unverified"] { --light: var(--sigil-mint); }
+.sigil-light[data-light="failed"] { --light: var(--sigil-red); }
+.sigil-light[data-light="needs_you"] { --light: var(--sigil-orange); }
+.sigil-light[data-light="skipped"] { background: transparent; border-style: dashed; }
+@keyframes sigil-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--light) 30%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .sigil-light[data-light="running"] { animation: none; } }
+.sigil-card-review p, .sigil-card-review ul { margin: 0; }
+.sigil-card-errors { color: var(--sigil-orange-text); font: 600 12px/1.4 var(--font); }
+.sigil-card-ready { color: var(--sigil-mint-text); font: 600 12px/1.4 var(--font); }
+.sigil-card-issues { display: grid; gap: 4px; margin: 6px 0 0; padding-left: 18px; color: var(--sigil-ink); font: 12px/1.45 var(--font); overflow-wrap: anywhere; }
+.sigil-card-warnings { margin-top: 6px; color: var(--sigil-soft); font: 12px/1.4 var(--font); }
+.sigil-card-warnings summary { cursor: pointer; }
+.sigil-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.sigil-card-action { min-height: 30px; padding: 0 12px; border: 1px solid var(--sigil-line); border-radius: var(--radius-sm); color: var(--sigil-ink); background: transparent; font: 600 12px/1 var(--font); cursor: pointer; }
+.sigil-card-action:hover:not(:disabled), .sigil-card-action:focus-visible { border-color: var(--sigil-lilac); outline: none; }
+.sigil-card-action:disabled { opacity: .45; cursor: not-allowed; }
+.sigil-card-notice { color: var(--sigil-orange-text); font: 12px/1.4 var(--font); }
+.sigil-card-notice:empty { display: none; }
+
+/* Confirmation dialogs reuse the shared board dialog palette; only the layout differs. */
+.board-dialog.sigil-dialog { width: min(640px, calc(100vw - 32px)); padding: 22px; }
+/* They attach to <body>. Outside the Canvas view (whose body defines the Canvas palette and
+   remaps the app one onto it), e.g. in the sigil workspace, map the Canvas variables they use
+   to the app palette their surface follows instead of the light fallbacks. */
+body:not(.mode-focus.view-replies) .board-dialog.sigil-dialog {
+  --studio-paper: var(--surface); --studio-canvas-2: var(--surface-2); --studio-ink: var(--paper); --studio-soft: var(--mute);
+  --studio-line: var(--line); --studio-line-strong: var(--line-strong); --studio-mint: var(--mint);
+  --studio-lilac: var(--lilac); --studio-lilac-soft: color-mix(in srgb, var(--lilac) 14%, transparent);
+}
+/* There the shared dark dialog button rule also outranks the light theme one; keep secondary
+   buttons on the light dialog surface. */
+body[data-theme="light"]:not(.mode-focus.view-replies) .board-dialog.sigil-dialog button:not(.primary) {
+  background: var(--studio-canvas, #f7f6f2); color: var(--studio-ink); border-color: var(--studio-line);
+}
+body[data-theme="light"]:not(.mode-focus.view-replies) .board-dialog.sigil-dialog button:not(.primary):hover:not(:disabled) {
+  background: var(--studio-canvas-2); border-color: var(--studio-line-strong);
+}
+.board-dialog.sigil-dialog form { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
+.board-dialog.sigil-dialog .sigil-dialog-title { margin: 0; font: 650 18px/1.3 var(--font); }
+.board-dialog.sigil-dialog .sigil-dialog-subtitle { margin: 6px 0 0; color: var(--studio-soft, #5c574e); font: 600 12px/1.3 var(--font); letter-spacing: .04em; }
+.board-dialog.sigil-dialog p { margin: 0; font: 13px/1.5 var(--font); overflow-wrap: anywhere; }
+.board-dialog.sigil-dialog .sigil-dialog-consent { padding: 10px 12px; border-radius: var(--radius-sm); color: var(--studio-ink, #1c1a16); background: var(--studio-lilac-soft, rgba(158, 124, 192, .22)); }
+.board-dialog.sigil-dialog code { padding: 1px 5px; border-radius: 4px; background: var(--studio-canvas-2, #f1f1eb); font-size: 12px; overflow-wrap: anywhere; }
+.sigil-dialog-commands, .sigil-dialog-warnings { display: grid; gap: 6px; margin: 0; padding-left: 20px; font: 13px/1.45 var(--font); }
+.sigil-dialog-commands li { display: grid; gap: 2px; }
+.sigil-dialog-commands small { color: var(--studio-soft, #5c574e); }
+.sigil-dialog-step { color: var(--studio-lilac, #8461aa); font: 600 11px/1.3 var(--font); }
+.sigil-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.sigil-dialog-input { min-height: 96px; }
+.sigil-dialog-command { margin: 0; padding: 8px 10px; overflow: auto; border-radius: var(--radius-sm); color: var(--studio-ink, #1c1a16);
+  background: var(--studio-canvas-2, #f1f1eb); font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.board-dialog.sigil-diff-dialog { width: min(920px, calc(100vw - 32px)); }
+.sigil-diff { max-height: min(62vh, 620px); margin: 0; padding: 8px 0; overflow: auto; border-radius: var(--radius-sm); color: var(--studio-ink, #1c1a16);
+  background: var(--studio-canvas-2, #f1f1eb); font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; }
+.sigil-diff:focus-visible { outline: 2px solid var(--studio-lilac, #8461aa); outline-offset: 2px; }
+.sigil-diff span { display: block; min-width: max-content; padding: 0 12px; }
+.sigil-diff .is-add { background: color-mix(in srgb, var(--studio-mint, #2a8a78) 18%, transparent); }
+.sigil-diff .is-del { background: color-mix(in srgb, #dc4c4c 18%, transparent); }
+.sigil-diff .is-hunk { color: var(--studio-soft, #5c574e); background: color-mix(in srgb, var(--studio-lilac, #8461aa) 10%, transparent); }
+.sigil-diff .is-meta { color: var(--studio-soft, #5c574e); font-weight: 600; }

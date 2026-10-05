@@ -66,6 +66,19 @@ body[data-theme="light"] .project-workspace .game-home {
 .gh-main, .gh-side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
 .gh-side { border-left: 1px solid var(--line); padding-left: 14px; }
 .gh-side-section { display: grid; gap: 8px; }
+.gh-overview-modes, .gh-skeleton-detail-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.gh-overview-modes button[aria-pressed="true"] { background: var(--project-selected); border-color: var(--mint); }
+.game-home[data-skeleton="true"] .gh-body { grid-template-columns: minmax(0, 1fr) minmax(340px, 410px); }
+.game-home[data-skeleton="true"] .gh-suggestions { display: none; }
+.game-home[data-skeleton="true"] .gh-composer { padding: 8px 12px; gap: 6px; }
+.game-home[data-skeleton="true"] .gh-composer-label > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.game-home[data-skeleton="true"][data-skeleton-selected="false"] .gh-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 8px; }
+.game-home[data-skeleton="true"][data-skeleton-selected="false"] .gh-side { border-left: 0; padding-left: 0; max-height: 32vh; }
+.game-home[data-skeleton="true"][data-skeleton-selected="false"] .gh-skeleton-collaboration { padding-top: 0; }
+.gh-skeleton-collaboration { border-top: 1px solid var(--line); padding-top: 12px; }
+.gh-skeleton-collaboration > summary { cursor: pointer; font-weight: 600; padding: 8px 0; }
+.gh-skeleton-collaboration[open] { display: grid; gap: 14px; }
+.gh-skeleton-collaboration > summary:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
 
 .gh-intro { display: grid; gap: 6px; }
 .gh-section { display: grid; align-content: start; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--project-detail); }
@@ -95,6 +108,8 @@ body[data-theme="light"] .project-workspace .game-home {
 .gh-loop th, .gh-loop td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .gh-loop th { color: var(--mute); font-weight: 600; }
 .gh-loop td:first-child { font-weight: 600; white-space: nowrap; }
+.gh-design-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.gh-design-links button { max-width: 100%; text-align: left; white-space: normal; }
 .gh-zone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
 .gh-zone-card { display: grid !important; gap: 4px; justify-items: start; text-align: left; min-height: 84px !important; padding: 12px !important; line-height: 1.35 !important; }
 .gh-zone-card small { color: var(--mute); font-weight: 400; }

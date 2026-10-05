@@ -13,6 +13,9 @@ type Words = {
   heading: string;
   help: string;
   current: string;
+  currentBlock: string;
+  currentStep: string;
+  currentItem: string;
   workspace: string;
   showRemoved: string;
   hideRemoved: string;
@@ -20,6 +23,8 @@ type Words = {
   close: string;
   empty: string;
   removedEmpty: string;
+  pending: string;
+  handled: string;
   authorYou: string;
   authorAgent: string;
   updated: string;
@@ -60,24 +65,26 @@ type Words = {
 const WORDS: Record<Locale, Words> = {
   "zh-CN": {
     heading: "注释", help: "注释会保留当前内容的快照。保存只更新画布，不会启动任务。",
-    current: "当前内容", workspace: "工作区全部", showRemoved: "显示已移除注释", hideRemoved: "隐藏已移除注释",
-    add: "添加注释", close: "关闭", empty: "这里还没有注释。", removedEmpty: "没有已移除的注释。",
+    current: "当前内容", currentBlock: "当前内容块", currentStep: "当前拍", currentItem: "当前项", workspace: "工作区全部", showRemoved: "显示已删除注释", hideRemoved: "隐藏已删除注释",
+    add: "添加注释", close: "关闭", empty: "这里还没有注释。", removedEmpty: "没有已删除的注释。",
     authorYou: "你", authorAgent: "Agent", updated: "来源已更新", removed: "来源已移除", unavailable: "来源暂不可用",
-    original: "原内容", annotation: "注释", noteRemoved: "注释已移除", edit: "编辑", view: "查看指向", discuss: "讨论这条注释",
-    remove: "移除", restore: "恢复", editorNew: "添加注释", editorEdit: "编辑注释", source: "指向",
+    pending: "未处理", handled: "已处理",
+    original: "原内容", annotation: "注释", noteRemoved: "已删除", edit: "编辑", view: "查看指向", discuss: "讨论这条注释",
+    remove: "删除", restore: "恢复", editorNew: "添加注释", editorEdit: "编辑注释", source: "指向",
     characters: "字符", cancelEdit: "收起", save: "保存到画布", saving: "正在保存…", selectTarget: "重新选择目标",
     targetRequired: "请先在画布中选择一个内容。", textRequired: "请填写注释内容。", textTooLong: "注释最多 8000 个字符。",
     sourceConflict: "来源版本已变化。请明确重新选择目标后再保存；草稿已保留。",
     annotationConflict: "这条注释已被更新。草稿已保留，请查看最新内容后决定如何继续。",
     saveFailed: "保存失败", draftUnsafe: "无法写入本地草稿；当前文本仍保留在面板中。",
     draftRestored: "已恢复未保存草稿。", artifact: "作品状态快照", artifactPreview: "作品预览", artifactState: "已保留的状态说明",
-    footer: "保存不会启动任务；最后点击 Canvas 的发送按钮，才会交给原任务。", untitled: "未命名内容", noContent: "未保存可显示的原文。",
+    footer: "保存不会启动任务。可在原聊天中要求“处理注释”，处理该聊天的全部未处理注释；也可选中注释后发送讨论。", untitled: "未命名内容", noContent: "未保存可显示的原文。",
   },
   en: {
     heading: "Annotations", help: "Annotations keep a snapshot of the selected content. Saving only updates the canvas; it does not start a task.",
-    current: "Current content", workspace: "Entire workspace", showRemoved: "Show removed annotations", hideRemoved: "Hide removed annotations",
+    current: "Current content", currentBlock: "Current block", currentStep: "Current beat", currentItem: "Current item", workspace: "Entire workspace", showRemoved: "Show removed annotations", hideRemoved: "Hide removed annotations",
     add: "Add annotation", close: "Close", empty: "There are no annotations here yet.", removedEmpty: "There are no removed annotations.",
     authorYou: "You", authorAgent: "Agent", updated: "Source updated", removed: "Source removed", unavailable: "Source unavailable",
+    pending: "Pending", handled: "Handled",
     original: "Original content", annotation: "Annotation", noteRemoved: "Annotation removed", edit: "Edit", view: "View target", discuss: "Discuss this annotation",
     remove: "Remove", restore: "Restore", editorNew: "Add annotation", editorEdit: "Edit annotation", source: "Target",
     characters: "characters", cancelEdit: "Collapse", save: "Save to canvas", saving: "Saving…", selectTarget: "Select target again",
@@ -86,7 +93,7 @@ const WORDS: Record<Locale, Words> = {
     annotationConflict: "This annotation changed. The draft is preserved; inspect the latest content before deciding how to continue.",
     saveFailed: "Save failed", draftUnsafe: "The local draft could not be written; the current text remains in this panel.",
     draftRestored: "An unsaved draft was restored.", artifact: "Artifact state snapshot", artifactPreview: "Artifact preview", artifactState: "Preserved state note",
-    footer: "Saving does not start a task. Only the final Canvas Send action passes it to the original task.", untitled: "Untitled content", noContent: "No displayable original text was saved.",
+    footer: "Saving does not start a task. Ask the original chat to handle annotations to process all its pending notes, or select a note and send a discussion.", untitled: "Untitled content", noContent: "No displayable original text was saved.",
   },};
 
 type SourceState = "available" | "updated" | "removed" | "unavailable";
@@ -117,6 +124,7 @@ export type CanvasAnnotationsHandlers = {
 
 export type CanvasAnnotationsPanel = {
   show(objectId?: string, annotationId?: string): Promise<void>;
+  showForAnchor(anchor: CanvasAnchor): Promise<void>;
   refresh(): void;
   destroy(): void;
 };
@@ -181,7 +189,21 @@ function clearDraft(draft: AnnotationDraft) {
   catch { /* The server result remains authoritative when local cleanup is unavailable. */ }
 }
 
-function mostRecentNewDraft(targetId: string): AnnotationDraft | undefined {
+function anchorTargetKey(anchor: CanvasAnchor): string {
+  return JSON.stringify([anchor.object_id, anchor.block_id ?? null, anchor.target ?? null, anchor.region ?? null]);
+}
+
+/** An object/block scope includes its children; a beat/item scope never includes siblings. */
+function matchesAnchorScope(anchor: CanvasAnchor, scope: CanvasAnchor): boolean {
+  const region = scope.region, actual = anchor.region;
+  return anchor.object_id === scope.object_id
+    && (!scope.block_id || anchor.block_id === scope.block_id)
+    && (!scope.target || (anchor.target?.kind === scope.target.kind && anchor.target.id === scope.target.id))
+    && (!region || Boolean(actual && actual.resource === region.resource && actual.unit === region.unit
+      && actual.x === region.x && actual.y === region.y && actual.width === region.width && actual.height === region.height));
+}
+
+function mostRecentNewDraft(targetId: string, anchor?: CanvasAnchor): AnnotationDraft | undefined {
   let latest: AnnotationDraft | undefined;
   try {
     for (let index = 0; index < localStorage.length; index++) {
@@ -190,7 +212,8 @@ function mostRecentNewDraft(targetId: string): AnnotationDraft | undefined {
       const raw = localStorage.getItem(key);
       if (!raw) continue;
       const parsed: unknown = JSON.parse(raw);
-      if (!validDraft(parsed) || parsed.kind !== "new" || parsed.target_id !== targetId) continue;
+      if (!validDraft(parsed) || parsed.kind !== "new" || parsed.target_id !== targetId
+        || (anchor && anchorTargetKey(parsed.anchor) !== anchorTargetKey(anchor))) continue;
       if (!latest || parsed.updated_at > latest.updated_at) latest = { ...parsed, anchor: copyAnchor(parsed.anchor) };
     }
   } catch { /* Recovery is optional; the in-memory draft is still retained. */ }
@@ -235,44 +258,71 @@ function snapshotInfo(value: unknown) {
   return { title: values[0] || "", text: values.slice(1).join(" · ") };
 }
 
-function objectTitle(board: BoardSnapshot, object: CanvasObject): string {
+type SourceIndex = { board?: BoardSnapshot; objects: Map<string, CanvasObject>; removed: Set<string>; replies: Map<string, NonNullable<BoardSnapshot["replies"]>[number]>; nodes: Map<string, BoardSnapshot["nodes"][number]>; targetLabels: Map<ReplyBlock, Map<string, string>> };
+
+function sourceIndex(board: BoardSnapshot | undefined): SourceIndex {
+  return { board, objects: new Map(board?.canvas?.objects.map(object => [object.id, object]) ?? []),
+    removed: new Set(board?.canvas?.items.filter(item => item.removed).map(item => item.item_id) ?? []),
+    replies: new Map(board?.replies?.map(reply => [reply.id, reply]) ?? []), nodes: new Map(board?.nodes.map(node => [node.id, node]) ?? []), targetLabels: new Map() };
+}
+
+function objectTitle(index: SourceIndex, object: CanvasObject): string {
   const content = object.content;
   switch (content.type) {
-    case "node": return board.nodes.find(node => node.id === content.id)?.title || "";
-    case "reply": return board.replies?.find(reply => reply.id === content.id)?.title || "";
+    case "node": return index.nodes.get(content.id)?.title || "";
+    case "reply": return index.replies.get(content.id)?.title || "";
     case "block": return content.block.title || "";
     case "work_record": return content.record_id;
+    case "sigil": return content.sigil_id;
     case "source_table": return content.table.title;
+    case "source_skeleton": return content.skeleton.title;
     case "text": case "image": case "shape": return content.title;
   }
 }
 
-function anchoredBlock(board: BoardSnapshot, object: CanvasObject, blockId: string | undefined): ReplyBlock | undefined {
+function anchoredBlock(index: SourceIndex, object: CanvasObject, blockId: string | undefined): ReplyBlock | undefined {
   if (!blockId) return undefined;
   const content = object.content;
   if (content.type === "block") return content.block.id === blockId ? content.block : undefined;
   if (content.type !== "reply") return undefined;
-  return board.replies?.find(reply => reply.id === content.id)?.blocks.find(block => block.id === blockId);
+  return index.replies.get(content.id)?.blocks.find(block => block.id === blockId);
 }
 
-function sourceState(board: BoardSnapshot | undefined, annotation: CanvasAnnotation): SourceState {
-  if (!board?.canvas) return "unavailable";
-  const object = board.canvas.objects.find(item => item.id === annotation.anchor.object_id);
+function sourceState(index: SourceIndex, annotation: CanvasAnnotation): SourceState {
+  if (!index.board?.canvas) return "unavailable";
+  const object = index.objects.get(annotation.anchor.object_id);
   if (!object) return "removed";
-  if (board.canvas.items.find(item => item.item_id === object.id)?.removed) return "removed";
-  const block = anchoredBlock(board, object, annotation.anchor.block_id);
+  if (index.removed.has(object.id)) return "removed";
+  const block = anchoredBlock(index, object, annotation.anchor.block_id);
   if (annotation.anchor.block_id && !block && !(object.content.type === "node" && annotation.anchor.block_id === "text")) return "removed";
   if (annotation.anchor.target && block && !targetExists(block, annotation.anchor.target)) return "removed";
   return object.content_revision === annotation.anchor.content_revision ? "available" : "updated";
 }
 
-function sourceLabel(board: BoardSnapshot | undefined, annotation: CanvasAnnotation, fallback: string) {
-  if (!board?.canvas) return fallback;
-  const object = board.canvas.objects.find(item => item.id === annotation.anchor.object_id);
+function sourceLabel(index: SourceIndex, annotation: CanvasAnnotation, fallback: string) {
+  if (!index.board?.canvas) return fallback;
+  const object = index.objects.get(annotation.anchor.object_id);
   if (!object) return fallback;
-  const title = objectTitle(board, object);
-  const block = anchoredBlock(board, object, annotation.anchor.block_id);
-  return [title, block?.title].filter((value, index, all) => Boolean(value) && all.indexOf(value) === index).join(" / ") || fallback;
+  const title = objectTitle(index, object);
+  const block = anchoredBlock(index, object, annotation.anchor.block_id);
+  const selected = annotation.anchor.target;
+  let targetTitle: string | undefined;
+  if (block && selected) {
+    let labels = index.targetLabels.get(block);
+    if (!labels) {
+      labels = new Map();
+      const zh = currentLocale() === "zh-CN";
+      if (block.type === "sequence") block.steps.forEach((step, position) => labels!.set(`step:${step.id}`, `${zh ? `第 ${position + 1} 拍` : `Beat ${position + 1}`}: ${step.title}`));
+      if (block.type === "comparison") block.options.forEach(option => labels!.set(`option:${option.id}`, option.title));
+      if (block.type === "graph") {
+        block.nodes.forEach(node => labels!.set(`graph_node:${node.id}`, node.title));
+        block.edges.forEach(edge => labels!.set(`graph_edge:${edge.id}`, edge.label || edge.id));
+      }
+      index.targetLabels.set(block, labels);
+    }
+    targetTitle = labels.get(`${selected.kind}:${selected.id}`) || fallback;
+  }
+  return [title, block?.title, targetTitle].filter((value, index, all) => Boolean(value) && all.indexOf(value) === index).join(" / ") || fallback;
 }
 
 function sourceReads(anchor: CanvasAnchor): CanvasRead[] {
@@ -334,6 +384,7 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
   for (const button of [currentScope, workspaceScope, removedToggle, add]) button.type = "button";
   controls.append(currentScope, workspaceScope, removedToggle, add);
   const list = element("div", "canvas-annotations-list"); list.setAttribute("role", "region");
+  const more = element("button", "canvas-annotations-more") as HTMLButtonElement; more.type = "button"; more.hidden = true;
   const editor = element("form", "canvas-annotation-editor"); editor.noValidate = true;
   const editorHeading = element("h3");
   const target = element("p", "canvas-annotation-target");
@@ -349,7 +400,7 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
   editorActions.append(collapse, reselect, save);
   editor.append(editorHeading, target, text, count, error, editorActions);
   const footer = element("p", "canvas-annotations-footer");
-  dialog.append(header, help, controls, list, editor, footer);
+  dialog.append(header, help, controls, list, more, editor, footer);
   document.body.append(dialog);
 
   let destroyed = false;
@@ -361,6 +412,10 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
   let errorMessage = "";
   let draftUnsafe = false;
   let pendingAnnotationId: string | undefined;
+  let offeredAnchor: CanvasAnchor | undefined;
+  let visibleLimit = 100;
+  let annotationById = new Map<string, CanvasAnnotation>();
+  let index = sourceIndex(undefined);
 
   const persist = (value: AnnotationDraft) => {
     value.updated_at = Date.now();
@@ -368,12 +423,12 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
     if (draftUnsafe) errorMessage = words().draftUnsafe;
   };
 
-  const currentAnnotation = (id: string) => handlers.getAnnotations().find(annotation => annotation.id === id);
+  const currentAnnotation = (id: string) => annotationById.get(id);
 
-  function sourceFor(annotation: CanvasAnnotation, board: BoardSnapshot | undefined) {
+  function sourceFor(annotation: CanvasAnnotation) {
     const snapshot = snapshotInfo(annotation.snapshot);
     const fallback = snapshot.title || words().untitled;
-    return { snapshot, title: sourceLabel(board, annotation, fallback), state: sourceState(board, annotation) };
+    return { snapshot, title: sourceLabel(index, annotation, fallback), state: sourceState(index, annotation) };
   }
 
   function setError(message = "") { errorMessage = message; }
@@ -391,17 +446,18 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
     return button;
   }
 
-  function renderCard(annotation: CanvasAnnotation, board: BoardSnapshot | undefined, copy: Words) {
+  function renderCard(annotation: CanvasAnnotation, copy: Words) {
     const card = element("article", "canvas-annotation-card");
     card.dataset.annotationId = annotation.id;
     if (annotation.removed) card.classList.add("is-removed");
     if (draft?.annotation_id === annotation.id) card.classList.add("is-editing");
-    const source = sourceFor(annotation, board);
+    const source = sourceFor(annotation);
     const head = element("header", "canvas-annotation-card-head");
     const name = element("h3", "canvas-annotation-source", source.title);
     const meta = element("div", "canvas-annotation-meta");
     const author = element("span", "canvas-annotation-author", annotation.source_id ? copy.authorAgent : copy.authorYou);
     meta.append(author);
+    if (!annotation.removed) meta.append(element("span", `canvas-annotation-state is-${annotation.status === "handled" ? "handled" : "pending"}`, copy[annotation.status === "handled" ? "handled" : "pending"]));
     if (source.state !== "available") meta.append(element("span", `canvas-annotation-state is-${source.state}`, copy[source.state]));
     if (annotation.removed) meta.append(element("span", "canvas-annotation-state is-removed", copy.noteRemoved));
     head.append(name, meta); card.append(head);
@@ -416,7 +472,7 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
     const rendered = element("div", "canvas-annotation-rendered"); renderLightText(rendered, annotation.text); body.append(rendered); card.append(body);
 
     const media = element("div", "canvas-annotation-media");
-    if (annotation.anchor.image) media.append(referencePreview(annotation.anchor.image, referenceState(board?.canvas, annotation.anchor.object_id, annotation.anchor.image), undefined, annotation.anchor.region));
+    if (annotation.anchor.image) media.append(referencePreview(annotation.anchor.image, referenceState(index.board?.canvas, annotation.anchor.object_id, annotation.anchor.image), undefined, annotation.anchor.region));
     const snapshot = plainRecord(annotation.snapshot);
     if (!annotation.anchor.image && snapshot?.type === "image" && typeof snapshot.src === "string") {
       media.append(referencePreview({ object_id: annotation.anchor.object_id, content_revision: annotation.anchor.content_revision, src: snapshot.src, alt: typeof snapshot.alt === "string" ? snapshot.alt : "", title: typeof snapshot.title === "string" ? snapshot.title : "" }, source.state === "available" ? "saved" : "changed", undefined, annotation.anchor.region));
@@ -447,7 +503,7 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
     if (!active) return;
     const annotation = active.kind === "edit" ? currentAnnotation(active.annotation_id) : undefined;
     const snapshot = annotation ? snapshotInfo(annotation.snapshot) : { title: "", text: "" };
-    const name = sourceLabel(handlers.getBoard(), { ...(annotation ?? { id: active.annotation_id, revision: active.expected_revision, snapshot: null, removed: false, text: active.text }), anchor: active.anchor } as CanvasAnnotation, snapshot.title || words().untitled);
+    const name = sourceLabel(index, { ...(annotation ?? { id: active.annotation_id, revision: active.expected_revision, snapshot: null, removed: false, text: active.text }), anchor: active.anchor } as CanvasAnnotation, snapshot.title || words().untitled);
     editorHeading.textContent = active.kind === "new" ? copy.editorNew : copy.editorEdit;
     target.textContent = `${copy.source}: ${name}`;
     if (text.value !== active.text) text.value = active.text;
@@ -466,7 +522,8 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
     dialog.lang = currentLocale();
     heading.textContent = copy.heading; close.setAttribute("aria-label", copy.close); close.title = copy.close;
     help.textContent = copy.help; footer.textContent = copy.footer;
-    currentScope.textContent = copy.current; workspaceScope.textContent = copy.workspace;
+    currentScope.textContent = offeredAnchor?.target ? (offeredAnchor.target.kind === "step" ? copy.currentStep : copy.currentItem) : offeredAnchor?.block_id ? copy.currentBlock : copy.current;
+    workspaceScope.textContent = copy.workspace;
     currentScope.hidden = !targetObjectId;
     workspaceScope.hidden = !targetObjectId;
     currentScope.setAttribute("aria-pressed", String(scope === "current"));
@@ -475,13 +532,20 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
     removedToggle.textContent = showRemoved ? copy.hideRemoved : copy.showRemoved; removedToggle.disabled = busy;
     add.textContent = copy.add; add.disabled = busy || Boolean(draft);
 
-    const board = handlers.getBoard();
+    index = sourceIndex(handlers.getBoard());
     let annotations = handlers.getAnnotations();
-    if (scope === "current" && targetObjectId) annotations = annotations.filter(annotation => annotation.anchor.object_id === targetObjectId);
+    annotationById = new Map(annotations.map(annotation => [annotation.id, annotation]));
+    if (scope === "current" && targetObjectId) annotations = annotations.filter(annotation => offeredAnchor
+      ? matchesAnchorScope(annotation.anchor, offeredAnchor)
+      : annotation.anchor.object_id === targetObjectId);
     if (!showRemoved) annotations = annotations.filter(annotation => !annotation.removed);
+    annotations.sort((a, b) => Number(a.removed) - Number(b.removed) || Number(a.status === "handled") - Number(b.status === "handled"));
+    if (pendingAnnotationId) visibleLimit = Math.max(visibleLimit, annotations.findIndex(annotation => annotation.id === pendingAnnotationId) + 1);
     list.replaceChildren();
     if (!annotations.length) list.append(element("p", "canvas-annotations-empty", showRemoved ? copy.removedEmpty : copy.empty));
-    else list.append(...annotations.map(annotation => renderCard(annotation, board, copy)));
+    else list.append(...annotations.slice(0, visibleLimit).map(annotation => renderCard(annotation, copy)));
+    more.hidden = annotations.length <= visibleLimit;
+    if (!more.hidden) more.textContent = currentLocale() === "zh-CN" ? `再显示 ${Math.min(100, annotations.length - visibleLimit)} 条` : `Show ${Math.min(100, annotations.length - visibleLimit)} more`;
     renderEditor(copy);
   }
 
@@ -512,11 +576,11 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
     window.setTimeout(() => text.focus(), 0);
   }
 
-  async function beginNew() {
+  async function beginNew(explicitAnchor?: CanvasAnchor) {
     if (busy || draft) return;
     busy = true; setError(""); render();
     try {
-      const anchor = await handlers.capture();
+      const anchor = explicitAnchor ?? offeredAnchor ?? await handlers.capture();
       if (!anchor) { setError(words().targetRequired); return; }
       draft = { version: 1, kind: "new", target_id: anchor.object_id, annotation_id: crypto.randomUUID(), expected_revision: 0, anchor: copyAnchor(anchor), text: "", updated_at: Date.now() };
       persist(draft);
@@ -529,7 +593,7 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
     if (!active || active.kind !== "new" || busy) return;
     busy = true; setError(""); render();
     try {
-      const anchor = await handlers.capture();
+      const anchor = offeredAnchor ?? await handlers.capture();
       if (!anchor) { setError(words().targetRequired); return; }
       const previousKey = draftKey(active.target_id, active.annotation_id);
       const next: AnnotationDraft = { ...active, target_id: anchor.object_id, anchor: copyAnchor(anchor), expected_revision: 0, request_id: undefined, needs_reselect: false, updated_at: Date.now() };
@@ -617,13 +681,16 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
   workspaceScope.addEventListener("click", () => { if (!busy) { scope = "workspace"; render(); } });
   removedToggle.addEventListener("click", () => { if (!busy) { showRemoved = !showRemoved; render(); } });
   add.addEventListener("click", () => { void beginNew(); });
+  more.addEventListener("click", () => { visibleLimit += 100; render(); });
   close.addEventListener("click", () => { if (!busy) dialog.close("close"); });
   collapse.addEventListener("click", () => { if (!busy) { draft = undefined; setError(""); render(); } });
   reselect.addEventListener("click", () => { void reselectTarget(); });
   editor.addEventListener("submit", event => { event.preventDefault(); void saveDraft(); });
   text.addEventListener("input", () => {
     if (!draft || busy) return;
-    draft.text = text.value; draft.request_id = undefined; persist(draft); render();
+    draft.text = text.value; draft.request_id = undefined; setError(""); persist(draft);
+    count.textContent = `${characterCount(draft.text)} / ${TEXT_LIMIT} ${words().characters}`;
+    error.textContent = errorMessage; error.hidden = !errorMessage;
   });
   dialog.addEventListener("cancel", event => { if (busy) event.preventDefault(); });
   const unlistenLocale = onLocale(() => render());
@@ -631,6 +698,7 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
   return {
     async show(objectId?: string, annotationId?: string) {
       if (destroyed) return;
+      offeredAnchor = undefined;
       targetObjectId = objectId;
       scope = objectId ? "current" : "workspace";
       pendingAnnotationId = annotationId;
@@ -645,7 +713,20 @@ export function canvasAnnotations(handlers: CanvasAnnotationsHandlers): CanvasAn
       if (!dialog.open) dialog.showModal();
       window.requestAnimationFrame(() => locatePendingAnnotation());
     },
-    refresh() { render(); },
+    async showForAnchor(anchor: CanvasAnchor) {
+      await this.show(anchor.object_id);
+      offeredAnchor = copyAnchor(anchor);
+      const same = draft?.kind === "new" && anchorTargetKey(draft.anchor) === anchorTargetKey(anchor);
+      if (draftUnsafe && !same) { setError(words().draftUnsafe); render(); return; }
+      if (!same) draft = mostRecentNewDraft(anchor.object_id, anchor);
+      if (!draft) { await beginNew(anchor); return; }
+      if (draft.anchor.content_revision !== anchor.content_revision) {
+        draft.needs_reselect = true;
+        setError(words().sourceConflict);
+      } else setError(words().draftRestored);
+      render(); text.focus();
+    },
+    refresh() { if (dialog.open) render(); },
     destroy() {
       if (destroyed) return;
       destroyed = true; unlistenLocale();

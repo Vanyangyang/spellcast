@@ -7,8 +7,8 @@ Windows packaging of the native helper has been exercised in this repository. Ot
 | Receipt | Meaning |
 | --- | --- |
 | Native hook execution / context output | `spellcast-hook` wrote `{hookSpecificOutput:{...}}` to stdout. This is not proof the model read it. |
-| Model-triggered checkpoint | The main task called `spellcast_checkpoint` and got `ready`. |
-| Observer complete / window ready | The child called `spellcast_observer_complete`, or a bubble window initialized. |
+| Model-triggered checkpoint | The main task called `spellcast_checkpoint`; `scheduled` starts an App-managed Claude observation, while `ready` supplies a Codex child brief. Neither proves completion. |
+| Observer complete / window ready | The App runner completed a Claude ticket, the Codex child called `spellcast_observer_complete`, or a bubble window initialized. |
 
 Installing the plugin is not hook trust. Codex still requires an explicit trust step. Do not use `--dangerously-bypass-hook-trust`.
 
@@ -32,7 +32,7 @@ Installing the plugin is not hook trust. Codex still requires an explicit trust 
 - `SessionStart` matcher `startup\|resume\|clear\|compact`. Resume/compact always refresh ON context even if `policy_revision` is unchanged.
 - `UserPromptSubmit` only emits on a setting change, a missed startup, or recovery. Unchanged turns are empty.
 - Child skip follows the Codex hook contract: native non-empty `agent_id`/`agentId` (UserPromptSubmit SubAgent spawn) skips regardless of `agent_type` (`default`, `terra_max`, or other). Compat markers still skip: `is_subagent=true`, non-empty `subagent_id`, or exact `agent_type` `child`/`subagent`/`observer`. `parent_session_id` and `spawned_by` alone do not skip. Unknown extra fields are ignored and never written to diag. SubagentStart/Stop are not registered. This is schema adaptation, not a claim that a local cold-start failure is attributed.
-- When the App switch is ON, the injected bootstrap is the **self-contained** parent/child protocol for native MCP. It does not point at Skill or `asides.md`. Checkpoint, observer spawn, and complete are background work, not main-chat progress. The main task does not pre-judge bubble value. Only `ready` starts a child. This document does not claim a later cold task has been run.
+- When the App switch is ON, the injected bootstrap is the **self-contained** checkpoint protocol for native MCP. It does not point at Skill or `asides.md`. Checkpoint, observer spawn, and complete are background work, not main-chat progress. The main task does not pre-judge bubble value. With App provider `claude`, `scheduled` exposes no brief and the App executes its fixed fresh Claude Code Opus 5.5 xhigh runner and completes the ticket directly. Only `ready` with `brief.provider=codex` starts an actual isolated Codex child. Every non-ready status forbids child spawn and immediate retry. This document does not claim a later cold task has been run.
 - `board_focused` does not withdraw asides; the server checkpoint still gates actual focus.
 - Pause or OFF after an injected ON emits one short stop notice.
 
@@ -42,4 +42,6 @@ Package generation writes hook `--endpoint` and MCP `url` together. Do not point
 
 ## Child protocol
 
-The bootstrap carries the parent protocol and the child brief to forward. Skill remains for Canvas, feedback, explicit memory, and aside fallback on hosts without this hook.
+The bootstrap carries the checkpoint protocol and Codex child instructions to forward. Hook output never injects `CLAUDE_OBSERVER_RUNNER_PATH` or authorizes a Claude courier. Both plugin packages still include `hooks/claude-observer-runner.mjs` for App use. If an older App returns `ready` with `brief.provider=claude`, report the App version or capability mismatch once and remain silent without a courier or provider fallback. Skill remains for Canvas, feedback, explicit memory, and aside fallback on hosts without this hook.
+
+The App switch remains authoritative. `spellcast_checkpoint(snapshot=null)` cancels observation for the originating source and stops its App runner process; changed checkpoints invalidate old tickets. Finishing a normal main reply does not require cancelling an aside that remains valid. Locale, source identity, single-use tickets, non-blocking thoughts, and native Codex completion retain their existing semantics.

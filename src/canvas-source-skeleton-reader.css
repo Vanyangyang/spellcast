@@ -1,0 +1,46 @@
+/* Reader typography belongs to the saved reading settings; Canvas cards keep their own density. */
+.canvas-reader:has(.canvas-source-skeleton) > header,
+.canvas-reader .canvas-source-skeleton {
+  width: 100%;
+  max-width: calc(480px + 704px * var(--canvas-reading-text-scale, 1));
+  box-sizing: border-box;
+  margin-inline: auto;
+}
+.canvas-reader .canvas-source-skeleton {
+  --skeleton-reader-body: calc(16px * var(--canvas-reading-text-scale, 1));
+  --skeleton-reader-ui: calc(16px * var(--canvas-interface-font-scale, 1));
+  min-height: 0;
+  padding: clamp(14px, 2vw, 32px);
+  gap: 18px;
+}
+.canvas-reader .canvas-source-skeleton-body:not(.is-narrow) {
+  grid-template-columns: minmax(260px, min(32%, 420px)) minmax(0, 1fr);
+  gap: clamp(18px, 2vw, 32px);
+}
+.canvas-reader .canvas-source-skeleton-detail { padding-left: clamp(18px, 2vw, 32px); }
+.canvas-reader .canvas-source-skeleton .gs-detail {
+  max-inline-size: 44em;
+  font-size: var(--skeleton-reader-body);
+  line-height: 1.7;
+  gap: 20px;
+}
+.canvas-reader .canvas-source-skeleton .gs-detail :is(.gs-detail-lead, .gs-detail-prose, .gs-notes, .gs-steps, blockquote) {
+  font-size: inherit;
+  line-height: inherit;
+}
+.canvas-reader .canvas-source-skeleton .gs-detail .gs-detail-title { font-size: calc(30px * var(--canvas-title-font-scale, 1)); line-height: 1.3; }
+.canvas-reader .canvas-source-skeleton :is(.gs-section-heading, .gs-detail-section h3) { font-size: calc(20px * var(--canvas-title-font-scale, 1)); line-height: 1.4; }
+.canvas-reader .canvas-source-skeleton .gs-group-title { font-size: calc(22px * var(--canvas-title-font-scale, 1)); }
+.canvas-reader .canvas-source-skeleton .gs-node-row { padding: 12px 14px; gap: 6px; }
+.canvas-reader .canvas-source-skeleton .gs-node-row .gs-card-title { font-size: var(--skeleton-reader-ui); }
+.canvas-reader .canvas-source-skeleton :is(.gs-card-summary, .gs-stage p, .gs-result span) { font-size: calc(14px * var(--canvas-interface-font-scale, 1)); }
+.canvas-reader .canvas-source-skeleton :is(.gs-card-footer, .gs-group-count, .gs-group-needs-reconciliation, .gs-state, .gs-kind, .gs-provenance small, .gs-evidence-label, .gs-sources summary) { font-size: calc(13px * var(--canvas-interface-font-scale, 1)); }
+.canvas-reader .canvas-source-skeleton :is(.gs-map, .gs-stage-title, .gs-result strong, .gs-relation strong) { font-size: var(--skeleton-reader-ui); }
+.canvas-reader .canvas-source-skeleton :is(.canvas-source-skeleton-button, .gs-search-input, .gs-search-clear, .gs-result, .gs-crumbs button, .gs-detail button),
+.canvas-reader .canvas-source-skeleton .gs-map button:not(.gs-node-row):not(.gs-group-title) { font-size: calc(14px * var(--canvas-interface-font-scale, 1)); }
+.canvas-reader .canvas-source-skeleton :is(.gs-crumb-current, .gs-crumb-separator, .canvas-source-skeleton-meta, .canvas-source-skeleton-source-status) { font-size: calc(13px * var(--canvas-interface-font-scale, 1)); }
+.canvas-reader .canvas-source-skeleton .gs-search-input { min-height: 38px; }
+.canvas-reader .canvas-source-skeleton .gs-formula code { font-size: calc(14px * var(--canvas-reading-text-scale, 1)); line-height: 1.6; }
+.canvas-reader .canvas-source-skeleton-source-text { font-size: calc(15px * var(--canvas-reading-text-scale, 1)); line-height: 1.7; }
+.canvas-reader .canvas-source-skeleton-source-head strong { font-size: var(--skeleton-reader-ui); }
+.canvas-reader .canvas-source-skeleton-body.is-narrow .canvas-source-skeleton-detail { padding: 14px; }

@@ -1,0 +1,299 @@
+/* Per-client completion cards. Each client that can finish a task gets one fixed identity, keyed on the
+   card's data-client (completions.ts), so a stack holding several clients reads at a glance:
+     codex   indigo aurora glass: blue-to-violet gradient rim, soft glow, round 20px card, glowing check,
+             springy slide-in from the right.
+     claude  warm paper card: cream, clay spine, deep-brown ink, serif title. The only light card in the stack.
+     grok    black console slab: square corners, hairline border, white signal bar, stepped arrival.
+   Every card also carries an origin tag (.origin) naming the client, so identity never rests on colour alone.
+   completions.ts gives any client without its own look data-client="codex", so it gets the Codex card.
+   Loaded after night-desk-notices.css; delete this import (and file) to give every client that file's
+   mint ink-glass card.
+   Text roles are the same for every client: the reply (.summary) is the card's subject, three lines at most;
+   the task's name (.title) is one quiet line of context above it. Only paint changes here: the card height
+   budget (completions.rs: 148px per card), click-through and focus are untouched. `body` in every selector wins over the shared sheets however the build orders them. */
+
+/* A card that slides in sideways (Codex) must not make the list briefly scroll horizontally. */
+body #completions {
+  overflow-x: hidden;
+}
+
+/* ---- Origin tag: same box for every client, so it never changes the status row's height. ---- */
+body #completions .origin {
+  flex: none;
+  padding: 0 7px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  letter-spacing: 0.04em;
+}
+/* ---- Codex: indigo aurora glass ---- */
+body #completions .completion-bubble[data-client="codex"] {
+  --codex-glass: rgba(16, 19, 40, 0.96);
+  --codex-glass-hover: rgba(21, 25, 51, 0.98);
+  --codex-blue: #7aa9ff;
+  --codex-violet: #a98cff;
+  --codex-text: #eef0ff;
+  --codex-muted: rgba(220, 226, 255, 0.68);
+  --codex-accent: #b3c6ff;
+  border-radius: 20px;
+  /* The glass is the padding-box layer; the rim gradient under it shows through the transparent border.
+     The last layer is the card's plain colour, which also keeps background-color meaningful. */
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--codex-glass), var(--codex-glass)) padding-box,
+    linear-gradient(135deg, rgba(122, 169, 255, 0.78), rgba(169, 140, 255, 0.58) 55%, rgba(122, 169, 255, 0.2)) border-box,
+    var(--codex-glass);
+  box-shadow: 0 10px 28px rgba(6, 8, 28, 0.46), 0 0 26px rgba(122, 140, 255, 0.16);
+  /* `backwards`, not `both`: the slide must not outlive the animation and pin opacity over .dismissing. */
+  animation: codex-pop 480ms cubic-bezier(0.34, 1.45, 0.64, 1) backwards;
+}
+body #completions .completion-bubble[data-client="codex"]:hover,
+body #completions .completion-bubble[data-client="codex"]:focus-within {
+  background:
+    linear-gradient(var(--codex-glass-hover), var(--codex-glass-hover)) padding-box,
+    linear-gradient(135deg, rgba(122, 169, 255, 1), rgba(169, 140, 255, 0.82) 55%, rgba(122, 169, 255, 0.4)) border-box,
+    var(--codex-glass-hover);
+}
+/* The shared left bar becomes a soft aurora wash from the top-left corner. */
+body #completions .completion-bubble[data-client="codex"]::before {
+  inset: 0;
+  width: auto;
+  background: radial-gradient(90% 75% at 0% 0%, rgba(122, 169, 255, 0.2), transparent 62%);
+}
+body #completions [data-client="codex"] .status {
+  color: var(--codex-muted);
+}
+body #completions [data-client="codex"] .done {
+  color: var(--codex-accent);
+  font-weight: 600;
+}
+body #completions [data-client="codex"] .check {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--codex-blue), var(--codex-violet));
+  color: #0d1030;
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(140, 160, 255, 0.55);
+  animation: codex-ring 900ms ease-out 180ms backwards;
+}
+body #completions [data-client="codex"] .origin {
+  color: var(--codex-accent);
+  border-color: rgba(140, 165, 255, 0.5);
+  background: rgba(122, 150, 255, 0.14);
+}
+body #completions [data-client="codex"] .project {
+  color: var(--codex-muted);
+}
+body #completions [data-client="codex"] .title {
+  color: var(--codex-muted);
+}
+body #completions [data-client="codex"] .summary {
+  color: var(--codex-text);
+}
+body #completions [data-client="codex"] .hint {
+  color: var(--codex-accent);
+}
+body #completions [data-client="codex"] .dismiss {
+  color: var(--codex-text);
+}
+body #completions [data-client="codex"] .dismiss:hover {
+  background: rgba(150, 170, 255, 0.18);
+}
+body #completions [data-client="codex"] button:focus-visible {
+  outline-color: var(--codex-blue);
+  border-radius: 16px;
+}
+
+/* ---- Claude: warm paper ---- */
+body #completions .completion-bubble[data-client="claude"] {
+  --claude-paper: rgba(248, 243, 234, 0.97);
+  --claude-paper-hover: rgba(252, 248, 241, 0.99);
+  --claude-ink: #2b2118;
+  --claude-muted: rgba(43, 33, 24, 0.68);
+  --claude-clay: #d97757;
+  --claude-clay-deep: #b94c28;
+  --claude-clay-ink: #a4452a;
+  border-radius: 14px;
+  border: 1px solid rgba(122, 86, 56, 0.3);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55), transparent 55%),
+    var(--claude-paper);
+  box-shadow: 0 8px 22px rgba(60, 35, 15, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  /* `backwards`, not `both`: the settle must not outlive the animation and pin opacity over .dismissing. */
+  animation: claude-settle 420ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+body #completions .completion-bubble[data-client="claude"]:hover,
+body #completions .completion-bubble[data-client="claude"]:focus-within {
+  border-color: rgba(185, 76, 40, 0.55);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7), transparent 55%),
+    var(--claude-paper-hover);
+}
+body #completions .completion-bubble[data-client="claude"]::before {
+  width: 4px;
+  background: linear-gradient(#e59a7e, var(--claude-clay) 45%, var(--claude-clay-deep));
+}
+body #completions [data-client="claude"] .status {
+  color: var(--claude-muted);
+}
+body #completions [data-client="claude"] .done {
+  color: var(--claude-clay-ink);
+  font-weight: 600;
+}
+body #completions [data-client="claude"] .check {
+  border-color: transparent;
+  background: var(--claude-clay-deep);
+  color: #fff;
+}
+body #completions [data-client="claude"] .origin {
+  color: var(--claude-clay-ink);
+  border-color: rgba(185, 76, 40, 0.45);
+  background: rgba(217, 119, 87, 0.14);
+}
+body #completions [data-client="claude"] .project {
+  color: var(--claude-muted);
+}
+body #completions [data-client="claude"] .title {
+  color: var(--claude-muted);
+}
+/* The reply is set in the paper card's serif. The CJK serif ships at 500 only (see night-desk-notices.css),
+   and Latin 500 maps to the real 600 cut. */
+body #completions [data-client="claude"] .summary {
+  color: var(--claude-ink);
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 13.5px;
+  line-height: 1.42;
+}
+body #completions [data-client="claude"] .hint {
+  color: var(--claude-clay-ink);
+}
+body #completions [data-client="claude"] .dismiss {
+  color: var(--claude-muted);
+}
+body #completions [data-client="claude"] .dismiss:hover {
+  background: rgba(43, 33, 24, 0.08);
+  color: var(--claude-ink);
+}
+body #completions [data-client="claude"] button:focus-visible {
+  outline-color: var(--claude-clay-deep);
+  border-radius: 12px;
+}
+/* The shared error line is peach for the dark cards and would vanish on paper. */
+body #completions [data-client="claude"] .error {
+  color: #9a3412;
+}
+
+/* ---- Grok Build: console slab ---- */
+body #completions .completion-bubble[data-client="grok"] {
+  --grok-ink: rgba(9, 9, 11, 0.96);
+  --grok-ink-hover: rgba(14, 14, 17, 0.98);
+  --grok-line: rgba(255, 255, 255, 0.22);
+  --grok-line-hover: rgba(255, 255, 255, 0.5);
+  --grok-signal: #f5f5f2;
+  --grok-text: rgba(255, 255, 255, 0.76);
+  --grok-muted: rgba(255, 255, 255, 0.58);
+  border-radius: 4px;
+  border: 1px solid var(--grok-line);
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent 46%),
+    var(--grok-ink);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(0, 0, 0, 0.5);
+  /* `backwards`, not `both`: the wipe's clip-path must not outlive the animation and cut the shadow. */
+  animation: grok-wipe 300ms steps(12, end) backwards, grok-fade 120ms linear backwards;
+}
+body #completions .completion-bubble[data-client="grok"]:hover,
+body #completions .completion-bubble[data-client="grok"]:focus-within {
+  border-color: var(--grok-line-hover);
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), transparent 46%),
+    var(--grok-ink-hover);
+}
+body #completions .completion-bubble[data-client="grok"]::before {
+  width: 2px;
+  background: var(--grok-signal);
+}
+body #completions [data-client="grok"] .status {
+  color: var(--grok-muted);
+  letter-spacing: 0.1em;
+}
+body #completions [data-client="grok"] .done {
+  color: var(--grok-signal);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+body #completions [data-client="grok"] .check {
+  border-color: transparent;
+  border-radius: 2px;
+  background: var(--grok-signal);
+  color: #09090b;
+  font-weight: 700;
+}
+body #completions [data-client="grok"] .origin {
+  border-radius: 2px;
+  color: var(--grok-signal);
+  border-color: rgba(255, 255, 255, 0.4);
+  background: transparent;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+body #completions [data-client="grok"] .project {
+  color: var(--grok-muted);
+}
+body #completions [data-client="grok"] .title {
+  color: var(--grok-muted);
+}
+body #completions [data-client="grok"] .summary {
+  color: #fff;
+}
+body #completions [data-client="grok"] .hint {
+  color: var(--grok-muted);
+}
+/* A shell prompt marks the hint as the next action; decorative, and the task button's aria-label is its name. */
+body #completions [data-client="grok"] .hint::before {
+  content: "› ";
+  color: var(--grok-signal);
+}
+body #completions [data-client="grok"] .dismiss {
+  border-radius: 3px;
+  color: var(--grok-text);
+}
+body #completions [data-client="grok"] .dismiss:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+body #completions [data-client="grok"] button:focus-visible {
+  outline-color: var(--grok-signal);
+  border-radius: 3px;
+}
+
+@keyframes codex-pop {
+  from { opacity: 0; transform: translateX(20px) scale(0.94); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes codex-ring {
+  from { box-shadow: 0 0 0 0 rgba(140, 160, 255, 0.6), 0 0 10px rgba(140, 160, 255, 0.55); }
+  to { box-shadow: 0 0 0 9px rgba(140, 160, 255, 0), 0 0 10px rgba(140, 160, 255, 0.55); }
+}
+@keyframes claude-settle {
+  from { opacity: 0; transform: translateY(10px) scale(0.965); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes grok-wipe {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes grok-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body #completions .completion-bubble[data-client="codex"],
+  body #completions [data-client="codex"] .check,
+  body #completions .completion-bubble[data-client="claude"],
+  body #completions .completion-bubble[data-client="grok"] {
+    animation: none;
+  }
+}

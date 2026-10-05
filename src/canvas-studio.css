@@ -246,7 +246,7 @@ body.mode-focus.view-replies .settings-sheet input {
   border-color: var(--studio-line);
 }
 
-body.mode-focus.view-replies .board-dialog button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]) {
+body.mode-focus.view-replies .board-dialog button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]):not(:where(.canvas-source-skeleton button)) {
   background: var(--studio-canvas);
   color: var(--studio-ink);
   border-color: var(--studio-line);
@@ -400,7 +400,6 @@ body.mode-focus.view-replies .settings-observer .observer-switch,
 body.mode-focus.view-replies .settings-observer .observer-switch-title,
 body.mode-focus.view-replies .settings-observer .observer-switch-state,
 body.mode-focus.view-replies .settings-observer .observer-switch:has(input:checked) .observer-switch-state,
-body.mode-focus.view-replies .observer-points,
 body.mode-focus.view-replies .setup-status,
 body.mode-focus.view-replies .setup-details-body {
   color: var(--studio-ink);

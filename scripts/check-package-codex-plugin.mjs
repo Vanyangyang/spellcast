@@ -115,6 +115,7 @@ function assertPackage(dest, port) {
     ".codex-plugin/plugin.json",
     "hooks/observer-bootstrap.txt",
     "hooks/observer-stop.txt",
+    "hooks/claude-observer-runner.mjs",
     "hooks/hooks.json",
     "INSTALL.md",
     "LICENSE",

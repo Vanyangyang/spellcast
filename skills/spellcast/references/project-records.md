@@ -66,14 +66,44 @@ write repository files or send a task.
 
 ## AI-first game workspace: goals and proposals
 
-The game home shows one projection of the connected repository at three scales:
-**overview** (player loop table from `Atlas/domains/cycle.md`, world, regions, dungeons and
+The game home opens the interactive **game structure** when the connected repository contains
+`Assets/Documents/GameDesign/Skeleton.json`. It presents the core loop and systems, with
+region, level, rule and worldbuilding branches; selecting a node opens its purpose, steps,
+relationships and AI actions in place. **View evidence** is an auxiliary reader, never the
+default structure view. Node states distinguish retained rules, shapes awaiting new content
+and worldbuilding basis. They do not assert implementation or player verification.
+
+**Existing implementation** keeps the repository projection at three scales:
+**overview** (player loop table from `GameDesign/Overview.md`, with `Atlas/domains/cycle.md`
+as a fallback only when the new source is absent; world, regions, dungeons and
 the zones that declare routes), **experience** (one zone: route, locations, encounters,
 rewards, related missions and design mentions) and **object** (one location: design intent,
 configuration facts, static code leads, Unity/player verification boundary, proposals). Every
 item carries its source path and SHA-256 and a class: configuration fact, design intent,
 code lead (a static text match, never runtime proof) or AI inference. Unity and real-player
 verification is not connected to Spellcast and stays unknown; do not claim it.
+
+For repositories without `Skeleton.json`, when `Assets/Documents/GameDesign/Overview.md` exists, the temporary document-review entry
+becomes **设计与机制 / Design & mechanics**. Its four reading entries open the game overview,
+content structure, mechanics index and worldbuilding index. The source browser groups the
+remaining mechanism and production references; it does not turn them into mandatory review
+tasks or import old configuration values as confirmed design. A user-authorized retirement
+may remove old repository documents after preserving complete recovery sources; retain user
+annotations and changed review records, and archive only the authorized unchanged AI reviews.
+
+A goal from a selected structure node uses `scale: "overview"`, `entity_kind: "design_node"`
+and that node's stable `entity_id`. Its sources include the structure SHA-256 and the
+node's reference documents. Read that node and its sources; preserve the goal's subject
+in the response proposal so adopted content appears under the same node. A whole-structure
+goal uses `entity_kind: "game_skeleton"`. These are design contexts, not runtime entity IDs.
+Selected rule nodes may contain `rule.trigger`, `conditions`, `effects`, `exceptions`,
+`formulas` and `conflicts`. Read these fields before proposing a change; a summary or
+source link alone is not the full rule. `provenance` records exact source hashes and line
+ranges. `archived: true` identifies historical evidence, never a current configuration or
+a file to restore automatically. `needs_reconciliation` preserves conflicting design
+claims without choosing a winner; `supporting_reference` marks production constraints.
+The structure file is a read-only repository projection, not an automatic canonical-object
+import. AI actions only prepare the composer; sending and adoption remain explicit.
 
 A **goal** is the user's natural-language request, saved first and delivered only when the
 user explicitly chooses a bound Codex task; without one it stays unsent. A goal is not a work

@@ -120,10 +120,32 @@ pub struct SetupReport {
     pub hook_trust: Option<HookTrust>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub components: Option<SetupComponents>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccgui_plugin_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_enabled: Option<bool>,
+    /// Claude's managed source and registered plugin cache match this build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_resources_current: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_reload_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_verified: Option<bool>,
+    /// CC GUI's data home exists on this machine (Claude only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccgui_detected: Option<bool>,
+    /// CC GUI's installed send-back plugin matches this build and is enabled there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccgui_plugin_current: Option<bool>,
+    /// That plugin holds this machine's host-link key and is switched on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ccgui_paired: Option<bool>,
 }
 
 impl SetupReport {
-    fn base(client: &str, kind: SetupKind, note: &str) -> Self {
+    pub(crate) fn base(client: &str, kind: SetupKind, note: &str) -> Self {
         Self {
             client: client.into(),
             kind,
@@ -144,6 +166,15 @@ impl SetupReport {
             partial: false,
             hook_trust: None,
             components: None,
+            ccgui_plugin_path: None,
+            plugin_version: None,
+            plugin_enabled: None,
+            plugin_resources_current: None,
+            native_reload_required: None,
+            runtime_verified: None,
+            ccgui_detected: None,
+            ccgui_plugin_current: None,
+            ccgui_paired: None,
         }
     }
 }
@@ -1638,6 +1669,31 @@ fn run_owned(program: &Path, args: &[&str], env: &CliEnv, timeout: Duration) -> 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     apply_cli_env(&mut cmd, env);
+    run_owned_command(cmd, timeout)
+}
+
+/// Reuse the bounded native process runner without injecting Codex configuration.
+/// Proxy, authentication, permission, and model environment remain inherited.
+pub(crate) fn run_claude_owned(
+    program: &Path,
+    args: &[&str],
+    user_home: &Path,
+    claude_home: &Path,
+    timeout: Duration,
+) -> Result<CliOutcome, String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir(user_home)
+        .env("HOME", user_home)
+        .env("USERPROFILE", user_home)
+        .env("CLAUDE_CONFIG_DIR", claude_home);
+    run_owned_command(cmd, timeout).map_err(|err| err.replace("Codex CLI", "Claude Code CLI"))
+}
+
+fn run_owned_command(mut cmd: Command, timeout: Duration) -> Result<CliOutcome, String> {
 
     #[cfg(windows)]
     let job = create_kill_on_close_job()?;

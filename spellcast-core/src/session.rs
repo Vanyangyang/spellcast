@@ -703,6 +703,7 @@ mod tests {
         assert!(independent.parent_id.is_none());
         assert!(session.board.edges.is_empty());
         let context = CapturedContext {
+            host_pin: None,
             project: "calendar".into(),
             goal: "A realistic week".into(),
             change: "Lunch resolved".into(),

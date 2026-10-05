@@ -75,9 +75,17 @@ pub enum CanvasContent {
         project_id: String,
         record_id: String,
     },
+    /// A live reference to a sigil (法阵) plan and its run, stored outside Canvas content.
+    Sigil {
+        sigil_id: String,
+    },
     /// Source snapshot for reading and annotation. It is refreshed explicitly.
     SourceTable {
         table: CanvasSourceTable,
+    },
+    /// Read-only project skeleton snapshot with stable node IDs for Canvas anchors.
+    SourceSkeleton {
+        skeleton: crate::canvas_skeleton::CanvasSourceSkeleton,
     },
     Text {
         #[serde(default)]
@@ -204,7 +212,9 @@ impl CanvasContent {
             Self::Node { .. } => "node",
             Self::Reply { .. } => "reply",
             Self::WorkRecord { .. } => "work_record",
+            Self::Sigil { .. } => "sigil",
             Self::SourceTable { .. } => "source_table",
+            Self::SourceSkeleton { .. } => "source_skeleton",
             Self::Text { .. } => "text",
             Self::Image { .. } => "image",
             Self::Shape { .. } => "shape",
@@ -234,7 +244,9 @@ impl CanvasContent {
                 validate_id(project_id)?;
                 validate_id(record_id)
             }
+            Self::Sigil { sigil_id } => validate_id(sigil_id),
             Self::SourceTable { table } => table.validate(),
+            Self::SourceSkeleton { skeleton } => skeleton.validate(),
             Self::Text { title, text } => {
                 chars_at_most(title, 160, TITLE)?;
                 check(!text.trim().is_empty(), "文字对象需要有正文。")?;
@@ -260,7 +272,9 @@ impl CanvasContent {
         match self {
             Self::Reply { .. } => (640.0, 560.0),
             Self::WorkRecord { .. } => (480.0, 300.0),
+            Self::Sigil { .. } => (480.0, 360.0),
             Self::SourceTable { .. } => (760.0, 360.0),
+            Self::SourceSkeleton { .. } => (760.0, 560.0),
             Self::Image { .. } => (480.0, 360.0),
             Self::Shape { .. } => (240.0, 160.0),
             Self::Node { .. } | Self::Text { .. } => (380.0, 300.0),
@@ -310,6 +324,14 @@ pub struct CanvasOrigin {
 }
 
 /// A durable note with a backend-captured snapshot of the exact content it discussed.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasAnnotationStatus {
+    #[default]
+    Pending,
+    Handled,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct CanvasAnnotation {
     pub id: String,
@@ -321,8 +343,13 @@ pub struct CanvasAnnotation {
     pub origin: Option<CanvasOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
+    /// Originating task of the anchored object, independent of the annotation author.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_source_id: Option<String>,
     #[serde(default)]
     pub removed: bool,
+    #[serde(default)]
+    pub status: CanvasAnnotationStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]

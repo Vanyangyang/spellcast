@@ -187,7 +187,7 @@
 .canvas-reader { width: calc(100vw - 24px); max-width: none; height: calc(100vh - 24px); max-height: none; padding: 0; overflow: hidden; }
 .canvas-selection-reader { width: calc(100vw - 24px); max-width: none; height: calc(100vh - 24px); max-height: none; padding: 0; overflow: hidden; }
 .board-dialog.canvas-reader, .board-dialog.canvas-selection-reader { font-size: calc(14px * var(--canvas-interface-font-scale, 1)); }
-.board-dialog:is(.canvas-reader, .canvas-selection-reader) button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]) { font-size: calc(13px * var(--canvas-interface-font-scale, 1)); }
+.board-dialog:is(.canvas-reader, .canvas-selection-reader) button:not(.canvas-overview-open):not(.canvas-layer-pick):not(.primary):not([data-feedback-view]):not(:where(.canvas-source-skeleton button)) { font-size: calc(13px * var(--canvas-interface-font-scale, 1)); }
 .canvas-reader-text-size { flex: none; min-width: 56px; font-variant-numeric: tabular-nums; }
 .canvas-reader .rb-root { font-size: calc(14px * var(--canvas-reading-text-scale, 1)); }
 .canvas-reader .rb-block-title { font-size: calc(17px * var(--canvas-title-font-scale, 1)); }

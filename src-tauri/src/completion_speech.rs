@@ -1,8 +1,9 @@
-//! Quiet, offline completion speech. No titles or reply content leave the inbox.
+//! Quiet, offline completion reminder: a short tone for each client that finished, then one spoken phrase. No titles
+//! or reply content leave the inbox.
 use std::{collections::HashSet, path::Path, time::{SystemTime, UNIX_EPOCH}};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
-use crate::completion_hook::{self, Completion};
+use crate::{completion_hook::{self, Completion}, completion_sound::{self, Sound}};
 
 pub const COOLDOWN_MS: u64 = 90_000;
 const MERGE_MS: u64 = 3_000;
@@ -116,14 +117,16 @@ pub fn set_enabled(root: &Path, enabled: bool) -> Result<VoiceSettings, String> 
     settings(root)
 }
 
-fn claim_slot(root: &Path, now: u64) -> Result<bool, String> {
+/// The cooldown belongs to a client's tone: a Claude finish 30 seconds after a Codex one is still worth hearing.
+fn claim_slot(root: &Path, sound: Sound, now: u64) -> Result<bool, String> {
+    let key = format!("last_voice_at:{}", sound.key());
     let mut db = preferences(root)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
-    let last: Option<u64> = tx.query_row("SELECT value FROM completion_preferences WHERE key='last_voice_at'",
-        [], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
+    let last: Option<u64> = tx.query_row("SELECT value FROM completion_preferences WHERE key=?1",
+        [&key], |row| row.get(0)).optional().map_err(|e| e.to_string())?;
     if last.is_some_and(|last| now.saturating_sub(last) < COOLDOWN_MS) { return Ok(false); }
-    tx.execute("INSERT INTO completion_preferences(key,value) VALUES ('last_voice_at',?1)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![now]).map_err(|e| e.to_string())?;
+    tx.execute("INSERT INTO completion_preferences(key,value) VALUES (?1,?2)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, now]).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(true)
 }
@@ -145,52 +148,69 @@ fn local_hour() -> u16 { 0 }
 pub struct SpeechPolicy {
     started: u64,
     seen: HashSet<(String, String)>,
-    pending: HashSet<(String, String)>,
+    pending: Vec<((String, String), Sound)>,
     due: Option<u64>,
 }
 
 impl SpeechPolicy {
     pub fn new(started: u64) -> Self {
-        Self { started, seen: HashSet::new(), pending: HashSet::new(), due: None }
+        Self { started, seen: HashSet::new(), pending: Vec::new(), due: None }
     }
 
-    fn ready(&mut self, items: &[Completion], now: u64, enabled: bool, hour: u16) -> bool {
+    /// The tones to play now, one per client that finished in the merged window, in the order they arrived.
+    fn ready(&mut self, items: &[Completion], now: u64, enabled: bool, hour: u16) -> Vec<Sound> {
         let quiet = !enabled || !(8..22).contains(&hour);
         let visible: HashSet<_> = items.iter().map(|item| (item.thread_id.clone(), item.turn_id.clone())).collect();
-        self.pending.retain(|key| visible.contains(key));
+        self.pending.retain(|(key, _)| visible.contains(key));
         for item in items {
             let key = (item.thread_id.clone(), item.turn_id.clone());
             if self.seen.insert(key.clone()) && item.completed_at_ms > self.started && !quiet {
-                self.pending.insert(key);
+                self.pending.push((key, Sound::of(&item.client)));
                 self.due.get_or_insert(now.saturating_add(MERGE_MS));
             }
         }
-        if quiet || self.pending.is_empty() { self.pending.clear(); self.due = None; return false; }
+        if quiet || self.pending.is_empty() { self.pending.clear(); self.due = None; return Vec::new(); }
         if self.due.is_some_and(|due| now >= due) {
-            self.pending.clear(); self.due = None;
-            return true;
+            let mut sounds = Vec::new();
+            for (_, sound) in self.pending.drain(..) { if !sounds.contains(&sound) { sounds.push(sound); } }
+            self.due = None;
+            return sounds;
         }
-        false
+        Vec::new()
     }
 
     pub fn tick(&mut self, root: &Path, items: &[Completion]) -> Result<(), String> {
         let now = now_ms();
         let voice = settings(root)?;
-        if self.ready(items, now, voice.enabled && voice.supported, local_hour()) && claim_slot(root, now)? {
+        let mut sounds = Vec::new();
+        for sound in self.ready(items, now, voice.enabled && voice.supported, local_hour()) {
+            if claim_slot(root, sound, now)? { sounds.push(sound); }
+        }
+        if !sounds.is_empty() {
             let root = root.to_owned();
             std::thread::spawn(move || {
-                if let Err(err) = speak(&root) { eprintln!("Completion speech unavailable: {err}"); }
+                if let Err(err) = speak(&root, &sounds) { eprintln!("Completion speech unavailable: {err}"); }
             });
         }
         Ok(())
     }
 }
 
+/// Each tone, then the spoken phrase once. A tone that cannot play never costs the phrase.
+pub fn speak(root: &Path, sounds: &[Sound]) -> Result<(), String> {
+    if !settings(root)?.enabled || !(8..22).contains(&local_hour()) { return Ok(()); }
+    for sound in sounds {
+        if let Err(err) = completion_sound::play(*sound) { eprintln!("Completion sound unavailable: {err}"); }
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        if !settings(root).map(|s| s.enabled).unwrap_or(false) { return Ok(()); }
+    }
+    say(root)
+}
+
 #[cfg(windows)]
-pub fn speak(root: &Path) -> Result<(), String> {
+fn say(root: &Path) -> Result<(), String> {
     use std::{os::windows::process::CommandExt, process::{Command, Stdio}, time::{Duration, Instant}};
     // Scripts are fixed per UI locale. Task content is never interpolated into a shell or read aloud.
-    if !settings(root)?.enabled || !(8..22).contains(&local_hour()) { return Ok(()); }
     let script = powershell_script(ui_locale(root)?);
     let executable = std::env::var_os("SystemRoot").map(std::path::PathBuf::from)
         .ok_or_else(|| copy(root, "找不到 Windows 系统目录。", "Windows system directory was not found."))?
@@ -219,42 +239,65 @@ pub fn speak(root: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn speak(_root: &Path) -> Result<(), String> { Ok(()) }
+fn say(_root: &Path) -> Result<(), String> { Ok(()) }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn item(turn: &str, at: u64) -> Completion { Completion { thread_id: "thread".into(), turn_id: turn.into(),
-        title: String::new(), summary: String::new(), project: String::new(), completed_at_ms: at, client: "codex".into() } }
+    fn item_of(client: &str, thread: &str, turn: &str, at: u64) -> Completion { Completion { thread_id: thread.into(), turn_id: turn.into(),
+        title: String::new(), summary: String::new(), project: String::new(), completed_at_ms: at, client: client.into(), host: None } }
+    fn item(turn: &str, at: u64) -> Completion { item_of("codex", "thread", turn, at) }
+    const NONE: Vec<Sound> = Vec::new();
+    fn codex() -> Vec<Sound> { vec![Sound::Codex] }
     #[test]
     fn completion_speech_merges_and_does_not_replay_restored_or_dismissed_items() {
         let mut policy=SpeechPolicy::new(100);
-        assert!(!policy.ready(&[item("old",99)],101,true,12));
-        assert!(!policy.ready(&[item("a",102)],102,true,12));
-        assert!(!policy.ready(&[item("a",102),item("b",103)],103,true,12));
-        assert!(policy.ready(&[item("a",102),item("b",103)],3102,true,12));
-        assert!(!policy.ready(&[item("a",102),item("b",103)],6102,true,12));
-        assert!(!policy.ready(&[item("c",6200)],6200,true,12));
-        assert!(!policy.ready(&[],9500,true,12));
+        assert_eq!(policy.ready(&[item("old",99)],101,true,12), NONE);
+        assert_eq!(policy.ready(&[item("a",102)],102,true,12), NONE);
+        assert_eq!(policy.ready(&[item("a",102),item("b",103)],103,true,12), NONE);
+        assert_eq!(policy.ready(&[item("a",102),item("b",103)],3102,true,12), codex());
+        assert_eq!(policy.ready(&[item("a",102),item("b",103)],6102,true,12), NONE);
+        assert_eq!(policy.ready(&[item("c",6200)],6200,true,12), NONE);
+        assert_eq!(policy.ready(&[],9500,true,12), NONE);
+    }
+    #[test]
+    fn completion_speech_plays_one_tone_per_client_in_arrival_order() {
+        let mut policy=SpeechPolicy::new(100);
+        let claude = item_of("claude","c1","stop-1",102);
+        let codex_a = item_of("codex","x1","t1",103);
+        let codex_b = item_of("codex","x2","t2",104);
+        let grok = item_of("grok","g1","t3",105);
+        let all = [claude.clone(),codex_a.clone(),codex_b.clone(),grok.clone()];
+        assert_eq!(policy.ready(&all,110,true,12), NONE);
+        assert_eq!(policy.ready(&all,3110,true,12), vec![Sound::Claude, Sound::Codex, Sound::Grok]);
+        // A card dismissed inside the merge window is not announced; the rest still are.
+        let mut policy=SpeechPolicy::new(100);
+        assert_eq!(policy.ready(&all,110,true,12), NONE);
+        assert_eq!(policy.ready(&[codex_a.clone(),grok.clone()],2000,true,12), NONE);
+        assert_eq!(policy.ready(&[codex_a,grok],3110,true,12), vec![Sound::Codex, Sound::Grok]);
     }
     #[test]
     fn completion_speech_quiet_hours_and_mute_drop_backlog() {
         let mut policy=SpeechPolicy::new(100);
-        assert!(!policy.ready(&[item("a",101)],101,true,22));
-        assert!(!policy.ready(&[item("a",101)],10000,true,8));
-        assert!(!policy.ready(&[item("b",10001)],10001,false,12));
-        assert!(!policy.ready(&[item("b",10001)],14000,true,12));
-        assert!(!policy.ready(&[item("c",14001)],14001,true,21));
-        assert!(!policy.ready(&[item("c",14001)],18000,true,22));
-        assert!(!policy.ready(&[item("c",14001)],100000,true,8));
+        assert_eq!(policy.ready(&[item("a",101)],101,true,22), NONE);
+        assert_eq!(policy.ready(&[item("a",101)],10000,true,8), NONE);
+        assert_eq!(policy.ready(&[item("b",10001)],10001,false,12), NONE);
+        assert_eq!(policy.ready(&[item("b",10001)],14000,true,12), NONE);
+        assert_eq!(policy.ready(&[item("c",14001)],14001,true,21), NONE);
+        assert_eq!(policy.ready(&[item("c",14001)],18000,true,22), NONE);
+        assert_eq!(policy.ready(&[item("c",14001)],100000,true,8), NONE);
     }
     #[test]
     fn completion_speech_settings_and_cooldown_survive_restart() {
         let p=std::env::temp_dir().join(format!("spellcast-voice-{}",uuid::Uuid::new_v4()));
         assert!(settings(&p).unwrap().enabled);
         set_enabled(&p,false).unwrap(); assert!(!settings(&p).unwrap().enabled);
-        assert!(claim_slot(&p,100000).unwrap()); assert!(!claim_slot(&p,110000).unwrap());
-        assert!(!claim_slot(&p,90000).unwrap()); assert!(claim_slot(&p,190000).unwrap());
+        let codex = Sound::Codex;
+        assert!(claim_slot(&p,codex,100000).unwrap()); assert!(!claim_slot(&p,codex,110000).unwrap());
+        assert!(!claim_slot(&p,codex,90000).unwrap()); assert!(claim_slot(&p,codex,190000).unwrap());
+        // Another client's tone has its own cooldown, and its slot does not consume Codex's.
+        assert!(claim_slot(&p,Sound::Claude,110000).unwrap()); assert!(!claim_slot(&p,Sound::Claude,120000).unwrap());
+        assert!(!claim_slot(&p,codex,200000).unwrap()); assert!(claim_slot(&p,Sound::Grok,200000).unwrap());
         std::fs::remove_dir_all(p).unwrap();
     }
     #[test]
@@ -278,11 +321,11 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
-    #[ignore = "plays one quiet phrase through the Windows default audio device"]
+    #[ignore = "plays the three tones and one quiet phrase through the Windows default audio device"]
     fn completion_voice_native_smoke() {
         assert!((8..22).contains(&local_hour()), "Respect quiet hours; run the audible smoke check during daytime.");
         let p=std::env::temp_dir().join(format!("spellcast-voice-smoke-{}",uuid::Uuid::new_v4()));
-        speak(&p).unwrap();
+        speak(&p, &[Sound::Codex, Sound::Claude, Sound::Grok]).unwrap();
         std::fs::remove_dir_all(p).unwrap();
     }
 }

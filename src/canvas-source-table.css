@@ -1,8 +1,29 @@
-.canvas-source-table { display: grid; align-content: start; gap: 10px; min-width: 0; padding: 14px; line-height: 1.5; }
-.canvas-source-table-badge { justify-self: start; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--lilac); }
+.canvas-source-table { --source-ink: var(--studio-ink, var(--paper)); --source-panel: var(--studio-paper, var(--panel, #20242b)); --source-detail: var(--studio-canvas-2, var(--panel, #171a20)); --source-line: var(--studio-line, var(--line)); --source-mute: var(--studio-soft, var(--mute)); display: grid; align-content: start; gap: 10px; width: 100%; height: 100%; min-width: 0; min-height: 200px; box-sizing: border-box; padding: 14px; position: relative; container-type: inline-size; line-height: 1.5; color: var(--source-ink); background: var(--source-panel); }
+.canvas-source-table-header { display: flex; justify-content: space-between; align-items: start; gap: 8px; min-width: 0; }
+.canvas-source-table-tools { position: relative; flex: none; }
+.canvas-source-table-tools > summary { list-style: none; white-space: nowrap; }
+.canvas-source-table-tools > summary::-webkit-details-marker { display: none; }
+.canvas-source-table-button { min-height: 32px; padding: 6px 9px; border: 1px solid var(--source-line); border-radius: 8px; background: var(--source-detail); color: var(--source-ink); font: 14px/1.35 var(--font); cursor: pointer; }
+.canvas-source-table-button:disabled { opacity: .6; cursor: wait; }
+.canvas-source-table :is(button, summary):focus-visible { outline: 2px solid var(--studio-mint, var(--mint)); outline-offset: 2px; }
+.canvas-source-table-actions { position: absolute; z-index: 15; right: 0; top: calc(100% + 6px); display: grid; gap: 6px; width: 280px; max-width: calc(100cqw - 28px); box-sizing: border-box; padding: 10px; border: 1px solid var(--source-line); border-radius: 10px; background: var(--source-panel); box-shadow: 0 10px 28px #0003; }
+.canvas-source-table-actions > button { text-align: left; }
+.canvas-source-table-meta { min-width: 0; color: var(--source-mute); font-size: 12px; }
+.canvas-source-table-meta summary { cursor: pointer; }
+.canvas-source-table-meta small { display: block; padding: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.canvas-source-table-badge { justify-self: start; border: 1px solid var(--source-line); border-radius: 999px; padding: 2px 8px; color: var(--lilac); }
 .canvas-source-table-scroll { min-width: 0; overflow: auto; }
 .canvas-source-table table { width: 100%; min-width: 540px; border-collapse: collapse; }
-.canvas-source-table th, .canvas-source-table td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-.canvas-source-table th { color: var(--mute); font-weight: 600; }
+.canvas-source-table th, .canvas-source-table td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--source-line); }
+.canvas-source-table th { color: var(--source-mute); font-weight: 600; }
 .canvas-source-table td:first-child { font-weight: 600; white-space: nowrap; }
-.canvas-source-table-source, .canvas-source-table-note { color: var(--mute); overflow-wrap: anywhere; }
+.canvas-source-table-source, .canvas-source-table-note { color: var(--source-mute); overflow-wrap: anywhere; }
+.canvas-source-table-error { margin: 0; color: var(--studio-warn, #a65b25); font-size: 13px; overflow-wrap: anywhere; }
+.canvas-source-table-source-view { position: fixed; inset: 16px; margin: auto; width: min(960px, calc(100vw - 32px)); height: min(82vh, 760px); max-height: calc(100vh - 32px); z-index: 16; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 8px; min-width: 0; box-sizing: border-box; padding: 14px; overflow: auto; background: var(--source-panel); color: var(--source-ink); border: 1px solid var(--source-line); border-radius: 12px; box-shadow: 0 18px 70px #0003; }
+.canvas-source-table-source-view::backdrop { background: #1c1a164d; }
+.canvas-source-table-source-head { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 12px; min-width: 0; background: var(--source-panel); }
+.canvas-source-table-source-head strong { flex: 1 1 180px; min-width: 0; max-height: 4.5em; overflow: auto; overflow-wrap: anywhere; }
+.canvas-source-table-source-head > button { flex: none; max-width: 100%; overflow-wrap: anywhere; }
+.canvas-source-table-source-status { margin: 0; color: var(--source-mute); font-size: 12px; overflow-wrap: anywhere; }
+.canvas-source-table-source-text { min-width: 0; min-height: 0; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--source-line); border-radius: 8px; background: var(--source-detail); color: var(--source-ink); white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 ui-monospace, Consolas, monospace; }
+@container (max-width: 320px) { .canvas-source-table-header { flex-wrap: wrap; } .canvas-source-table-tools { margin-left: auto; } .canvas-source-table-source-head { flex-wrap: wrap; } }

@@ -1,12 +1,13 @@
 //! Local Codex notify adapter. The Codex database is opened read-only; our inbox is separate.
 use std::{fs, path::{Path, PathBuf}, process::Command, time::{Duration, SystemTime, UNIX_EPOCH}};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::{de::{MapAccess, Visitor}, Deserialize, Deserializer, Serialize};
+use serde_json::{value::RawValue, Value};
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, Item, Table};
 
 pub const CLIENT_CODEX: &str = "codex";
 pub const CLIENT_GROK: &str = "grok";
+pub const CLIENT_CLAUDE: &str = "claude";
 
 fn default_client() -> String { CLIENT_CODEX.to_string() }
 
@@ -18,9 +19,13 @@ pub struct Completion {
     pub summary: String,
     pub project: String,
     pub completed_at_ms: u64,
-    /// Which host produced this completion: `codex` (notify hook) or `grok` (Grok Build notification hook).
+    /// Which host produced this completion: `codex` (notify hook), `grok` (Grok Build hook) or `claude` (Claude Code `Stop` hook).
     #[serde(default = "default_client")]
     pub client: String,
+    /// Runtime only, never stored: the host that can take the user back to this task (`ccgui` for a Claude task
+    /// whose CC GUI window is connected). Without it a card can only be closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -38,6 +43,13 @@ pub fn grok_home() -> Result<PathBuf, String> {
         std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
             .map(|p| PathBuf::from(p).join(".grok"))
     }).ok_or_else(|| "找不到 Grok Build 用户目录。".into())
+}
+
+pub fn claude_home() -> Result<PathBuf, String> {
+    std::env::var_os("CLAUDE_CONFIG_DIR").filter(|p| !p.is_empty()).map(PathBuf::from).or_else(|| {
+        std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+            .map(|p| PathBuf::from(p).join(".claude"))
+    }).ok_or_else(|| "找不到 Claude Code 用户目录。".into())
 }
 
 pub fn root() -> Result<PathBuf, String> {
@@ -73,8 +85,55 @@ pub fn thread_url(id: &str) -> Result<String, String> {
     Ok(format!("codex://threads/{parsed}"))
 }
 
-fn short(text: &str, limit: usize) -> String {
+pub(crate) fn short(text: &str, limit: usize) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(limit).collect()
+}
+
+/// `[label](target)` reads as just its label.
+fn unlink(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let link = after.find("](").and_then(|mid| after[mid + 2..].find(')').map(|end| (mid, mid + 2 + end)));
+        match link {
+            Some((mid, end)) if !after[..mid].contains('[') => {
+                out.push_str(&rest[..open]);
+                out.push_str(&after[..mid]);
+                rest = &after[end + 1..];
+            }
+            _ => { out.push_str(&rest[..=open]); rest = after; }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A model's reply as plain card text. The markdown it writes (headings, bullets, `**bold**`, backticks, links,
+/// fenced code) is noise on a small card, and fenced code is not a summary.
+pub(crate) fn plain(text: &str) -> String {
+    let mut lines = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("```") { fenced = !fenced; continue; }
+        if fenced || line.is_empty() || line.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '=' | '*' | '_')) { continue; }
+        let line = line.trim_start_matches('>').trim_start();
+        let line = line.trim_start_matches('#').trim_start();
+        let line = ["- ", "* ", "+ "].iter().find_map(|bullet| line.strip_prefix(bullet)).unwrap_or(line);
+        lines.push(unlink(line).replace("**", "").replace('`', "").replace('|', " "));
+    }
+    lines.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Card summary: plain text of at most `limit` characters, ending in an ellipsis when it was cut.
+pub(crate) fn brief(text: &str, limit: usize) -> String {
+    let flat = short(&plain(text), usize::MAX);
+    if flat.chars().count() <= limit { return flat; }
+    let mut cut: String = flat.chars().take(limit.saturating_sub(1)).collect();
+    cut.truncate(cut.trim_end().len());
+    cut.push('…');
+    cut
 }
 
 pub fn capture(root: &Path, raw: &str) -> Result<bool, String> {
@@ -93,7 +152,7 @@ pub fn capture(root: &Path, raw: &str) -> Result<bool, String> {
     let db = inbox(root)?;
     let inserted = db.execute("INSERT OR IGNORE INTO completions
         (thread_id,turn_id,title,summary,project,completed_at_ms,client) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![thread,turn,short(title,100),short(summary,240),short(project,60),at,CLIENT_CODEX])
+        params![thread,turn,short(title,100),brief(summary,240),short(project,60),at,CLIENT_CODEX])
         .map_err(|e| e.to_string())?;
     Ok(inserted > 0)
 }
@@ -159,35 +218,55 @@ fn project_of(cwd: &str) -> String {
     cwd.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or("").to_string()
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
+/// The canonical lowercase UUID of a hook's session, or an error naming the host that sent a bad one.
+fn session_uuid(raw: &str, host: &str) -> Result<String, String> {
+    let session = raw.trim().to_ascii_lowercase();
+    if session.is_empty() { return Err(format!("{host} 通知缺少会话标识。")); }
+    if uuid::Uuid::parse_str(&session).map(|u| u.to_string() != session).unwrap_or(true) {
+        return Err(format!("{host} 会话标识无效。"));
+    }
+    Ok(session)
+}
+
+/// A finished turn from a host that reports its own title and summary (Grok Build, Claude Code).
+struct Hosted<'a> {
+    client: &'a str, session: &'a str, turn: &'a str,
+    title: &'a str, summary: &'a str, project: &'a str, at: u64,
+}
+
+fn record_hosted(root: &Path, item: &Hosted) -> Result<bool, String> {
+    let db = inbox(root)?;
+    // Two events can describe the same turn; keep one bubble.
+    let duplicate: Option<(String, u64)> = db.query_row(
+        "SELECT summary,completed_at_ms FROM completions WHERE thread_id=?1 ORDER BY sequence DESC LIMIT 1",
+        [item.session], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(|e| e.to_string())?;
+    if duplicate.is_some_and(|(last, when)| last == brief(item.summary, 240) && item.at.saturating_sub(when) < 5_000) {
+        return Ok(false);
+    }
+    let inserted = db.execute("INSERT OR IGNORE INTO completions
+        (thread_id,turn_id,title,summary,project,completed_at_ms,client) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        params![item.session,item.turn,short(item.title,100),brief(item.summary,240),short(item.project,60),item.at,item.client])
+        .map_err(|e| e.to_string())?;
+    Ok(inserted > 0)
+}
+
 /// Turn a Grok Build hook into one completion bubble; the message is a bounded summary.
 pub fn capture_grok(root: &Path, grok_home: &Path, hook: &GrokHook) -> Result<bool, String> {
     if !hook.is_completion() { return Ok(false); }
-    let session = hook.session.trim().to_ascii_lowercase();
-    if session.is_empty() { return Err("Grok 通知缺少会话标识。".into()); }
-    if uuid::Uuid::parse_str(&session).map(|u| u.to_string() != session).unwrap_or(true) {
-        return Err("Grok 会话标识无效。".into());
-    }
+    let session = session_uuid(&hook.session, "Grok")?;
     let meta = grok_session(grok_home, &session);
     let project = if hook.cwd.trim().is_empty() { project_of(&meta.cwd) } else { project_of(&hook.cwd) };
     // A brand-new session has no generated title yet; the project name reads better than a placeholder.
     let title = if !meta.title.is_empty() { meta.title } else if !project.is_empty() { project.clone() } else { "Grok Build".to_string() };
     let summary = if hook.message.trim().is_empty() { meta.last_turn } else { hook.message.clone() };
-    let at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
-    let db = inbox(root)?;
-    // turn_complete and task_complete can describe the same turn; keep one bubble.
-    let duplicate: Option<(String, u64)> = db.query_row(
-        "SELECT summary,completed_at_ms FROM completions WHERE thread_id=?1 ORDER BY sequence DESC LIMIT 1",
-        [&session], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(|e| e.to_string())?;
-    if duplicate.is_some_and(|(last, when)| last == short(&summary, 240) && at.saturating_sub(when) < 5_000) {
-        return Ok(false);
-    }
+    let at = now_ms();
     let prompt = hook.prompt_id.trim();
     let turn = if prompt.is_empty() || prompt.len() > 128 { format!("{}-{at}", hook.event.trim()) } else { format!("stop-{prompt}") };
-    let inserted = db.execute("INSERT OR IGNORE INTO completions
-        (thread_id,turn_id,title,summary,project,completed_at_ms,client) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![session,turn,short(&title,100),short(&summary,240),short(&project,60),at,CLIENT_GROK])
-        .map_err(|e| e.to_string())?;
-    Ok(inserted > 0)
+    record_hosted(root, &Hosted { client: CLIENT_GROK, session: &session, turn: &turn, title: &title, summary: &summary, project: &project, at })
 }
 
 /// Entry point for `spellcast --grok-notify <root>`.
@@ -207,6 +286,157 @@ pub fn grok_notify(root: &Path) {
     }
 }
 
+/// One Claude Code `Stop` hook invocation, as seen by the `--claude-notify` helper.
+///
+/// Claude Code pipes a JSON envelope on stdin: `session_id`, `cwd`, `transcript_path`,
+/// `hook_event_name` and, for `Stop`, `last_assistant_message`. `Stop` fires only when the main
+/// agent finishes a turn (never on a user interrupt); subagents report through `SubagentStop`.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct ClaudeHook {
+    pub event: String,
+    pub session: String,
+    pub cwd: String,
+    pub message: String,
+    pub transcript: String,
+    /// A subagent or observer child. Only the conversation the user is in gets a bubble.
+    pub child: bool,
+}
+
+impl ClaudeHook {
+    pub fn from_stdin(stdin: &str) -> ClaudeHook {
+        let data: Value = serde_json::from_str(stdin).unwrap_or(Value::Null);
+        let text = |key: &str| data[key].as_str().unwrap_or("").trim().to_string();
+        // Same markers `spellcast-hook` skips; a role name alone (`--agent reviewer`) is still the main session.
+        let child = data["is_subagent"] == true || data["isSubagent"] == true
+            || !text("agent_id").is_empty() || !text("subagent_id").is_empty()
+            || matches!(text("agent_type").to_ascii_lowercase().as_str(), "child" | "subagent" | "observer");
+        ClaudeHook {
+            event: text("hook_event_name"), session: text("session_id"), cwd: text("cwd"),
+            message: text("last_assistant_message"), transcript: text("transcript_path"), child,
+        }
+    }
+
+    fn is_completion(&self) -> bool { self.event == "Stop" && !self.child }
+}
+
+/// What Spellcast can learn from the tail of `~/.claude/projects/<cwd>/<session>.jsonl`.
+#[derive(Default)]
+struct ClaudeTranscript { title: String, reply: String }
+
+fn assistant_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks.iter().filter(|b| b["type"] == "text")
+            .filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" "),
+        _ => String::new(),
+    }
+}
+
+/// Only the last 512 KiB is read: titles are rewritten as a session goes on, and a long one is many MiB.
+fn claude_transcript(path: &str) -> ClaudeTranscript {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 512 * 1024;
+    let path = Path::new(path);
+    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") { return ClaudeTranscript::default(); }
+    let Ok(mut file) = fs::File::open(path) else { return ClaudeTranscript::default(); };
+    let start = file.metadata().map(|m| m.len()).unwrap_or(0).saturating_sub(TAIL);
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(start)).and_then(|_| file.take(TAIL).read_to_end(&mut bytes)).is_err() {
+        return ClaudeTranscript::default();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    // A tail read begins mid-line; that fragment is not a record.
+    let lines: Vec<&str> = text.lines().skip(usize::from(start > 0)).collect();
+    let (mut custom, mut generated) = (String::new(), String::new());
+    let mut found = ClaudeTranscript::default();
+    for line in lines.iter().rev() {
+        let Ok(record) = serde_json::from_str::<Value>(line) else { continue; };
+        let pick = |key: &str| record[key].as_str().map(str::trim).unwrap_or("").to_string();
+        match record["type"].as_str() {
+            Some("custom-title") if custom.is_empty() => custom = pick("customTitle"),
+            Some("ai-title") if generated.is_empty() => generated = pick("aiTitle"),
+            Some("assistant") if found.reply.is_empty() && record["isSidechain"] != true => {
+                found.reply = assistant_text(&record["message"]["content"]);
+            }
+            _ => {}
+        }
+    }
+    found.title = if custom.is_empty() { generated } else { custom };
+    found
+}
+
+/// Turn a Claude Code `Stop` hook into one completion bubble.
+pub fn capture_claude(root: &Path, hook: &ClaudeHook) -> Result<bool, String> {
+    if !hook.is_completion() { return Ok(false); }
+    let session = session_uuid(&hook.session, "Claude")?;
+    let transcript = claude_transcript(&hook.transcript);
+    let project = project_of(&hook.cwd);
+    // A prompt is not a name: without a session title the card shows only the project, and CC GUI's own title
+    // (completion_title.rs) replaces this one as soon as it exists.
+    let title = transcript.title.clone();
+    // The hook carries the final reply; the transcript is not guaranteed to hold it yet at Stop time.
+    let summary = if hook.message.is_empty() { transcript.reply } else { hook.message.clone() };
+    let at = now_ms();
+    record_hosted(root, &Hosted { client: CLIENT_CLAUDE, session: &session, turn: &format!("stop-{at}"),
+        title: &title, summary: &summary, project: &project, at })
+}
+
+/// CC GUI sets this on the CLI of a Leader-managed child chat; the CLI's `Stop` hook and Codex's notify program
+/// inherit it. The child's parent chat reports its results, so the child's turns get no bubble.
+pub const CCGUI_LEADER_CHILD_ENV: &str = "CCGUI_LEADER_CHILD";
+
+fn leader_child(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "1")
+}
+
+fn launched_for_leader_child() -> bool {
+    leader_child(std::env::var_os(CCGUI_LEADER_CHILD_ENV).as_deref())
+}
+
+/// Entry point for `spellcast --claude-notify <root>`.
+/// Nothing is written to stdout: a `Stop` hook's stdout is parsed by Claude Code as a decision.
+pub fn claude_notify(root: &Path) {
+    use std::io::Read;
+    let mut stdin = String::new();
+    let _ = std::io::stdin().take(2 * 1024 * 1024).read_to_string(&mut stdin);
+    if launched_for_leader_child() { return; }
+    // A one-off `claude -p "<question>"` (a script, or CC GUI's auto-title plugin naming a chat) has no one to tell.
+    if crate::claude_process::claude_command_line().is_some_and(|line| crate::claude_process::is_one_shot_print(&line)) { return; }
+    if let Err(err) = capture_claude(root, &ClaudeHook::from_stdin(&stdin)) {
+        eprintln!("Spellcast Claude completion capture failed: {err}");
+    }
+}
+
+pub const HOST_CCGUI: &str = "ccgui";
+
+/// The bridge knows a Claude conversation by this source id, which its host plugin registers.
+pub fn claude_source(thread_id: &str) -> String {
+    format!("claude:{thread_id}")
+}
+
+/// Drop Claude completions whose chat was attended after the task finished. The CC GUI plugin attests
+/// explicit attention (a chat selected, or its window focused on it), so a later one means the result was
+/// seen — the same moment a Codex task goes from unread to read. `attention` is the bridge's latest
+/// attention for a source, `None` when no CC GUI window reports for it.
+pub fn dismiss_viewed(root: &Path, items: Vec<Completion>, attention: &dyn Fn(&str) -> Option<u64>) -> Result<Vec<Completion>, String> {
+    let mut kept = Vec::with_capacity(items.len());
+    for item in items {
+        let viewed = item.client == CLIENT_CLAUDE
+            && attention(&claude_source(&item.thread_id)).is_some_and(|at| at > item.completed_at_ms);
+        if viewed { dismiss(root, &item.thread_id, &item.turn_id)?; } else { kept.push(item); }
+    }
+    Ok(kept)
+}
+
+/// Mark the Claude tasks whose CC GUI window is connected, so a double-click can go back to the chat.
+/// Never stored: it follows the window coming and going.
+pub fn mark_openable(items: &mut [Completion], connected: &dyn Fn(&str) -> bool) {
+    for item in items {
+        item.host = (item.client == CLIENT_CLAUDE && connected(&claude_source(&item.thread_id)))
+            .then(|| HOST_CCGUI.to_string());
+    }
+}
+
 pub fn pending(root: &Path) -> Result<Vec<Completion>, String> {
     let db = inbox(root)?;
     let mut query = db.prepare("SELECT thread_id,turn_id,title,summary,project,completed_at_ms,client
@@ -215,7 +445,7 @@ pub fn pending(root: &Path) -> Result<Vec<Completion>, String> {
         ORDER BY sequence DESC").map_err(|e| e.to_string())?;
     let rows = query.query_map([], |row| Ok(Completion {
         thread_id: row.get(0)?, turn_id: row.get(1)?, title: row.get(2)?, summary: row.get(3)?,
-        project: row.get(4)?, completed_at_ms: row.get(5)?, client: row.get(6)?,
+        project: row.get(4)?, completed_at_ms: row.get(5)?, client: row.get(6)?, host: None,
     })).map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
@@ -243,7 +473,7 @@ fn thread_database(home: &Path) -> Option<PathBuf> {
 pub fn visible(root: &Path, home: &Path, read_sync: &mut crate::completion_read::ReadSync) -> Result<Vec<Completion>, String> {
     let candidates = pending(root)?;
     if candidates.is_empty() { return Ok(candidates); }
-    // Grok Build completions carry their own metadata; Codex read state and thread DB do not apply.
+    // Grok Build and Claude Code completions carry their own metadata; Codex read state and thread DB do not apply.
     let (mut shown, codex): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|c| c.client != CLIENT_CODEX);
     if !codex.is_empty() {
         // Unknown identities stay queued until Codex has persisted their metadata.
@@ -293,6 +523,8 @@ pub fn notify(root: &Path, raw: &str) {
             if let Err(err) = command.spawn() { eprintln!("Original Codex notification failed: {err}"); }
         }
     }
+    // The original notify above still runs for a child; only Spellcast's own bubble is skipped.
+    if launched_for_leader_child() { return; }
     if let Err(err) = capture(root, raw) { eprintln!("Spellcast completion capture failed: {err}"); }
 }
 
@@ -507,6 +739,174 @@ pub fn uninstall_grok(grok_home: &Path) -> Result<String, String> {
     let had_legacy = remove_legacy_notification_hook(grok_home)?;
     if !had_file && !had_legacy { return Err("Grok 里没有 Spellcast 完成通知，未修改。".into()); }
     Ok("已移除 Grok Build 完成通知。".into())
+}
+
+const CLAUDE_NOTIFY_FLAG: &str = "--claude-notify";
+const SETTINGS_LABEL: &str = "Claude Code 的 settings.json";
+const INDENT: &str = "  ";
+
+pub fn claude_settings_path(claude_home: &Path) -> PathBuf { claude_home.join("settings.json") }
+
+/// A JSON object kept as written: member order and each value's exact text survive an edit.
+struct Members(Vec<(String, Box<RawValue>)>);
+
+impl<'de> Deserialize<'de> for Members {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Collect;
+        impl<'de> Visitor<'de> for Collect {
+            type Value = Members;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str("a JSON object") }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Members, A::Error> {
+                let mut members = Vec::new();
+                while let Some(entry) = map.next_entry::<String, Box<RawValue>>()? { members.push(entry); }
+                Ok(Members(members))
+            }
+        }
+        deserializer.deserialize_map(Collect)
+    }
+}
+
+fn members_of(text: &str) -> Result<Vec<(String, String)>, serde_json::Error> {
+    serde_json::from_str::<Members>(text)
+        .map(|members| members.0.into_iter().map(|(key, value)| (key, value.get().to_string())).collect())
+}
+
+/// A `{}` or `[]` whose items are already text and sit one level below `depth`.
+fn container(open: char, close: char, items: &[String], depth: usize) -> String {
+    if items.is_empty() { return format!("{open}{close}"); }
+    let pad = INDENT.repeat(depth + 1);
+    let body = items.iter().map(|item| format!("{pad}{item}")).collect::<Vec<_>>().join(",\n");
+    format!("{open}\n{body}\n{}{close}", INDENT.repeat(depth))
+}
+
+fn object_text(members: &[(String, String)], depth: usize) -> String {
+    let items: Vec<String> = members.iter().map(|(key, value)| format!("{}: {value}", Value::String(key.clone()))).collect();
+    container('{', '}', &items, depth)
+}
+
+/// Exec form (`args` set): Claude Code spawns the helper directly, so a path with spaces needs no quoting.
+fn claude_group_text(root: &Path) -> String {
+    let quote = |text: &str| Value::String(text.to_string()).to_string();
+    let group = format!(r#"{{
+  "hooks": [
+    {{
+      "type": "command",
+      "command": {},
+      "args": ["{CLAUDE_NOTIFY_FLAG}", {}],
+      "timeout": 10
+    }}
+  ]
+}}"#, quote(&helper_path(root).to_string_lossy()), quote(&root.to_string_lossy()));
+    group.replace('\n', &format!("\n{}", INDENT.repeat(3)))
+}
+
+fn group_runs_claude_notify(group: &Value) -> bool {
+    group["hooks"].as_array().is_some_and(|hooks| hooks.iter().any(|hook| {
+        hook["args"].as_array().is_some_and(|args| args.iter().any(|arg| arg == CLAUDE_NOTIFY_FLAG))
+    }))
+}
+
+fn text_runs_claude_notify(group: &str) -> bool {
+    serde_json::from_str::<Value>(group).is_ok_and(|group| group_runs_claude_notify(&group))
+}
+
+fn read_settings(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("读不了 {}：{err}", path.display())),
+    }
+}
+
+/// Rewrite settings.json with `edit` applied to the groups of `hooks.Stop`. Everything else is copied from
+/// the original text — member order, formatting, every other hook — so only the Stop array differs.
+/// A file that is not a JSON object, or has a `hooks`/`Stop` of the wrong shape, is refused.
+fn edit_claude_stop(existing: Option<&str>, edit: impl FnOnce(&mut Vec<String>)) -> Result<String, String> {
+    let original = existing.map(|t| t.trim_start_matches('\u{feff}')).filter(|t| !t.trim().is_empty()).unwrap_or("{}");
+    let mut top = members_of(original).map_err(|e| format!("{SETTINGS_LABEL} 不是有效的 JSON 对象，已保护：{e}"))?;
+    let hooks_at = top.iter().position(|(key, _)| key == "hooks");
+    let mut hooks = match hooks_at {
+        Some(at) => members_of(&top[at].1).map_err(|_| format!("{SETTINGS_LABEL} 的 hooks 不是对象，已保护。"))?,
+        None => Vec::new(),
+    };
+    let stop_at = hooks.iter().position(|(key, _)| key == "Stop");
+    let mut groups: Vec<String> = match stop_at {
+        Some(at) => serde_json::from_str::<Vec<Box<RawValue>>>(&hooks[at].1)
+            .map_err(|_| format!("{SETTINGS_LABEL} 的 hooks.Stop 不是数组，已保护。"))?
+            .into_iter().map(|group| group.get().to_string()).collect(),
+        None => Vec::new(),
+    };
+    edit(&mut groups);
+    // Containers we emptied go away; ones that were never there are not created.
+    match (stop_at, groups.is_empty()) {
+        (Some(at), true) => { hooks.remove(at); }
+        (Some(at), false) => hooks[at].1 = container('[', ']', &groups, 2),
+        (None, false) => hooks.push(("Stop".into(), container('[', ']', &groups, 2))),
+        (None, true) => {}
+    }
+    match (hooks_at, hooks.is_empty()) {
+        (Some(at), true) => { top.remove(at); }
+        (Some(at), false) => top[at].1 = object_text(&hooks, 1),
+        (None, false) => top.push(("hooks".into(), object_text(&hooks, 1))),
+        (None, true) => {}
+    }
+    let mut text = object_text(&top, 0);
+    if existing.map_or(true, |t| t.trim().is_empty() || t.ends_with('\n')) { text.push('\n'); }
+    // JSON strings cannot hold a raw newline, so every newline here is layout and safe to convert.
+    if original.contains("\r\n") { text = text.replace("\r\n", "\n").replace('\n', "\r\n"); }
+    Ok(text)
+}
+
+/// Whether Claude Code's settings already run this inbox's helper when a turn ends.
+pub fn claude_hook_installed(claude_home: &Path, root: &Path) -> bool {
+    let Ok(Some(text)) = read_settings(&claude_settings_path(claude_home)) else { return false; };
+    let Ok(doc) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else { return false; };
+    let helper = helper_path(root);
+    let (helper_text, root_text) = (helper.to_string_lossy(), root.to_string_lossy());
+    doc["hooks"]["Stop"].as_array().into_iter().flatten()
+        .filter_map(|group| group["hooks"].as_array()).flatten()
+        .any(|hook| hook["command"].as_str() == Some(helper_text.as_ref())
+            && hook["args"][0] == CLAUDE_NOTIFY_FLAG && hook["args"][1].as_str() == Some(root_text.as_ref()))
+        && helper.is_file()
+}
+
+/// Add a `Stop` hook group to `<claude_home>/settings.json` that captures Claude Code turn completions.
+/// The user's other settings and hooks are left exactly as written; the previous file is backed up.
+pub fn install_claude(claude_home: &Path, root: &Path, executable: &Path) -> Result<String, String> {
+    let path = claude_settings_path(claude_home);
+    let existing = read_settings(&path)?;
+    let group = claude_group_text(root);
+    // Computed before the helper is copied, so a settings file we refuse leaves nothing behind.
+    let body = edit_claude_stop(existing.as_deref(), |groups| {
+        groups.retain(|group| !text_runs_claude_notify(group));
+        groups.push(group);
+    })?;
+    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    crate::configure::commit_with_backup(&helper_path(root), &fs::read(executable).map_err(|e| e.to_string())?)?;
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(helper_path(root), fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    }
+    // Claude Code and other hook managers also write this file; do not overwrite an edit made meanwhile.
+    if read_settings(&path)? != existing {
+        return Err("Claude 配置已被其他程序修改；未替换，请重试。".into());
+    }
+    crate::configure::commit_with_backup(&path, body.as_bytes())?;
+    Ok(format!("已安装 Claude Code 完成通知：{}", path.display()))
+}
+
+pub fn uninstall_claude(claude_home: &Path) -> Result<String, String> {
+    let path = claude_settings_path(claude_home);
+    let existing = read_settings(&path)?;
+    let mut found = false;
+    let body = edit_claude_stop(existing.as_deref(), |groups| {
+        let before = groups.len();
+        groups.retain(|group| !text_runs_claude_notify(group));
+        found = groups.len() != before;
+    })?;
+    if !found { return Err("Claude Code 里没有 Spellcast 完成通知，未修改。".into()); }
+    crate::configure::commit_with_backup(&path, body.as_bytes())?;
+    Ok("已移除 Claude Code 完成通知。".into())
 }
 
 #[cfg(test)]
@@ -741,4 +1141,287 @@ mod tests {
         assert_eq!(fs::read_to_string(grok_hook_path(&home)).unwrap(), "not-json");
         fs::remove_dir_all(p).unwrap();
     }
+    const CLAUDE_SESSION: &str = "a09c1947-841e-48c0-8817-6b82325eef08";
+    fn lf(text: &str) -> String { text.replace("\r\n", "\n") }
+    fn claude_stop(extra: Value) -> String {
+        let mut data = serde_json::json!({"session_id":CLAUDE_SESSION,"hook_event_name":"Stop","cwd":"G:\\VibeProj\\spellcast",
+            "stop_hook_active":false,"last_assistant_message":"Stop 钩子已接入，Claude 卡片会出现。"});
+        for (key, value) in extra.as_object().unwrap() { data[key] = value.clone(); }
+        data.to_string()
+    }
+    fn claude_transcript_file(dir: &Path, records: &[Value]) -> String {
+        let path = dir.join(format!("{CLAUDE_SESSION}.jsonl"));
+        fs::write(&path, records.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n").unwrap();
+        path.to_string_lossy().into_owned()
+    }
+    #[test]
+    fn claude_stop_hook_becomes_a_claude_bubble_without_codex() {
+        let p=dir(); let root=p.join("inbox");
+        let transcript = claude_transcript_file(&p, &[
+            serde_json::json!({"type":"ai-title","aiTitle":"旧标题"}),
+            serde_json::json!({"type":"last-prompt","lastPrompt":"接 Claude Code 的 Stop 钩子"}),
+            serde_json::json!({"type":"ai-title","aiTitle":"接入 Claude Stop 钩子"}),
+            serde_json::json!({"type":"assistant","isSidechain":false,"message":{"content":[{"type":"text","text":"transcript reply"}]}}),
+        ]);
+        let hook = ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"transcript_path":transcript})));
+        assert_eq!(hook.event,"Stop"); assert_eq!(hook.session,CLAUDE_SESSION); assert!(!hook.child);
+        assert!(capture_claude(&root,&hook).unwrap());
+        // The same Stop delivered twice in a row is one bubble.
+        assert!(!capture_claude(&root,&hook).unwrap());
+        let list=pending(&root).unwrap(); assert_eq!(list.len(),1);
+        assert_eq!(list[0].client,CLIENT_CLAUDE); assert_eq!(list[0].thread_id,CLAUDE_SESSION);
+        assert_eq!(list[0].title,"接入 Claude Stop 钩子"); assert_eq!(list[0].project,"spellcast");
+        assert_eq!(list[0].summary,"Stop 钩子已接入，Claude 卡片会出现。");
+        // No Codex thread database exists, yet the Claude completion shows and can be dismissed.
+        let mut read_sync = crate::completion_read::ReadSync::default();
+        let shown = visible(&root,&p.join("no-codex"),&mut read_sync).unwrap();
+        assert_eq!(shown.len(),1); assert_eq!(shown[0].client,CLIENT_CLAUDE);
+        dismiss(&root,CLAUDE_SESSION,&shown[0].turn_id).unwrap();
+        assert!(visible(&root,&p.join("no-codex"),&mut read_sync).unwrap().is_empty());
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn claude_stop_ignores_children_other_events_and_bad_sessions() {
+        let p=dir(); let root=p.join("inbox");
+        for payload in [
+            claude_stop(serde_json::json!({"hook_event_name":"SubagentStop","agent_id":"agent-1"})),
+            claude_stop(serde_json::json!({"hook_event_name":"UserPromptSubmit"})),
+            claude_stop(serde_json::json!({"agent_id":"agent-1"})),
+            claude_stop(serde_json::json!({"subagent_id":"obs-1"})),
+            claude_stop(serde_json::json!({"isSubagent":true})),
+            claude_stop(serde_json::json!({"agent_type":"observer"})),
+            "not json".to_string(), String::new(),
+        ] { assert!(!capture_claude(&root,&ClaudeHook::from_stdin(&payload)).unwrap(), "{payload}"); }
+        assert!(pending(&root).unwrap().is_empty());
+        for bad in ["../../evil", "", "{a09c1947-841e-48c0-8817-6b82325eef08}", "abc123"] {
+            let hook = ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"session_id":bad})));
+            assert!(capture_claude(&root,&hook).is_err(), "{bad}");
+        }
+        // A main session started with --agent keeps its bubble: a role name alone is not a child marker.
+        let role = ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"agent_type":"reviewer"})));
+        assert!(capture_claude(&root,&role).unwrap());
+        assert_eq!(pending(&root).unwrap().len(),1);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn only_the_exact_ccgui_marker_makes_a_leader_child() {
+        use std::ffi::OsStr;
+        assert!(leader_child(Some(OsStr::new("1"))));
+        for other in [None, Some(OsStr::new("")), Some(OsStr::new("0")), Some(OsStr::new("true")), Some(OsStr::new(" 1"))] {
+            assert!(!leader_child(other), "{other:?}");
+        }
+    }
+    #[test]
+    fn claude_transcript_fills_gaps_and_reads_only_the_tail() {
+        let p=dir();
+        // No reply in the envelope and no title records: the transcript's last text reply stands in, and the title
+        // stays empty rather than quoting the last prompt.
+        let transcript = claude_transcript_file(&p, &[
+            serde_json::json!({"type":"last-prompt","lastPrompt":"  修一下\n登录页  "}),
+            serde_json::json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"sidechain"}]}}),
+            serde_json::json!({"type":"assistant","isSidechain":false,"message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"text","text":"登录页已修好"}]}}),
+            serde_json::json!({"type":"assistant","isSidechain":false,"message":{"content":[{"type":"tool_use","name":"Bash"}]}}),
+        ]);
+        let root=p.join("one");
+        let hook = ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"transcript_path":transcript,"last_assistant_message":""})));
+        assert!(capture_claude(&root,&hook).unwrap());
+        let item=pending(&root).unwrap().remove(0);
+        assert_eq!(item.title,""); assert_eq!(item.summary,"登录页已修好");
+        // A custom title (/rename) wins over the generated one, however old.
+        let transcript = claude_transcript_file(&p, &[
+            serde_json::json!({"type":"custom-title","customTitle":"我起的名字"}),
+            serde_json::json!({"type":"ai-title","aiTitle":"生成的名字"}),
+        ]);
+        let root=p.join("two");
+        capture_claude(&root,&ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"transcript_path":transcript})))).unwrap();
+        assert_eq!(pending(&root).unwrap()[0].title,"我起的名字");
+        // Without a transcript there is no title (the card falls back to the project); a transcript path that is not a .jsonl file is never read.
+        let root=p.join("three"); fs::write(p.join("secret.txt"),"{\"type\":\"ai-title\",\"aiTitle\":\"leak\"}").unwrap();
+        let hook = ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"transcript_path":p.join("secret.txt").to_string_lossy()})));
+        capture_claude(&root,&hook).unwrap();
+        assert_eq!(pending(&root).unwrap()[0].title,""); assert_eq!(pending(&root).unwrap()[0].project,"spellcast");
+        // Long sessions: a title written in the tail is found past a cut first line; one before the tail is not read.
+        let filler = serde_json::json!({"type":"attachment","text":"x".repeat(700_000)});
+        let early = serde_json::json!({"type":"ai-title","aiTitle":"early title"});
+        let late = serde_json::json!({"type":"ai-title","aiTitle":"late title"});
+        let root=p.join("four");
+        let transcript = claude_transcript_file(&p, &[early.clone(), filler.clone(), late]);
+        capture_claude(&root,&ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"transcript_path":transcript})))).unwrap();
+        assert_eq!(pending(&root).unwrap()[0].title,"late title");
+        let root=p.join("five");
+        let transcript = claude_transcript_file(&p, &[early, filler]);
+        capture_claude(&root,&ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"transcript_path":transcript})))).unwrap();
+        assert_eq!(pending(&root).unwrap()[0].title,"");
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn card_summary_is_plain_text_that_ends_in_an_ellipsis_when_cut() {
+        let reply = "## 结论\n\n你说的**两点**都对：\n- 见 [说明](https://example.com/a) 里的 `codex exec`\n- 第二条\n\n```rust\nfn main() {}\n```\n> 引用\n| a | b |\n|---|---|\n---";
+        assert_eq!(plain(reply), "结论 你说的两点都对： 见 说明 里的 codex exec 第二条 引用 a b");
+        assert_eq!(brief("  done \n now ", 240), "done now");
+        assert_eq!(brief("[x] kept and [y](z", 240), "[x] kept and [y](z");
+        let long = "字".repeat(300);
+        let cut = brief(&long, 240);
+        assert_eq!(cut.chars().count(), 240); assert!(cut.ends_with('…'));
+        assert_eq!(brief(&"字".repeat(240), 240).chars().count(), 240);
+        assert!(!brief(&"字".repeat(240), 240).ends_with('…'));
+        // The stored summary is what the 5 second duplicate check compares: a cut reply must still be recognised.
+        let p=dir(); let root=p.join("inbox");
+        let hook = ClaudeHook::from_stdin(&claude_stop(serde_json::json!({"last_assistant_message":long})));
+        assert!(capture_claude(&root,&hook).unwrap()); assert!(!capture_claude(&root,&hook).unwrap());
+        assert_eq!(pending(&root).unwrap()[0].summary, cut);
+        fs::remove_dir_all(p).unwrap();
+    }
+    const CLAUDE_SETTINGS: &str = r#"{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "theme": "dark",
+  "env": {
+    "KEEP": "1"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo keep-session"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo keep-stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "effortLevel": "high"
+}
+"#;
+    #[test]
+    fn claude_hook_install_adds_one_stop_group_and_uninstall_restores_the_file() {
+        let p=dir(); let home=p.join("claude"); fs::create_dir_all(&home).unwrap();
+        let root=p.join("with space").join("completion"); let exe=p.join("fake.exe"); fs::write(&exe,b"helper").unwrap();
+        let settings=claude_settings_path(&home);
+        let original=lf(CLAUDE_SETTINGS); fs::write(&settings,&original).unwrap();
+        assert!(!claude_hook_installed(&home,&root));
+        install_claude(&home,&root,&exe).unwrap(); install_claude(&home,&root,&exe).unwrap();
+        assert!(claude_hook_installed(&home,&root));
+        assert_eq!(fs::read(helper_path(&root)).unwrap(),b"helper");
+        let text=fs::read_to_string(&settings).unwrap();
+        let doc: Value=serde_json::from_str(&text).unwrap();
+        let stop=doc["hooks"]["Stop"].as_array().unwrap(); assert_eq!(stop.len(),2);
+        assert_eq!(stop[0]["hooks"][0]["command"],"echo keep-stop");
+        let ours=&stop[1]["hooks"][0];
+        assert_eq!(ours["type"],"command"); assert_eq!(ours["timeout"],10);
+        assert_eq!(ours["command"].as_str().unwrap(),helper_path(&root).to_string_lossy());
+        // Exec form: the root travels as its own argument, so the space in it needs no quoting.
+        assert_eq!(ours["args"],serde_json::json!([CLAUDE_NOTIFY_FLAG,root.to_string_lossy()]));
+        // Member order and everything before the new group are byte-for-byte what the user had.
+        let keep=original.find("      }\n    ]\n  },\n  \"effortLevel\"").unwrap();
+        assert!(text.starts_with(&original[..keep]), "{text}");
+        assert!(text.ends_with("  },\n  \"effortLevel\": \"high\"\n}\n"), "{text}");
+        assert!(settings.with_file_name("settings.json.spellcast.bak").exists());
+        uninstall_claude(&home).unwrap();
+        assert_eq!(fs::read_to_string(&settings).unwrap(),original);
+        assert!(uninstall_claude(&home).is_err()); assert!(!claude_hook_installed(&home,&root));
+        // CRLF files stay CRLF all the way through.
+        let crlf=original.replace('\n',"\r\n"); fs::write(&settings,&crlf).unwrap();
+        install_claude(&home,&root,&exe).unwrap();
+        assert!(!fs::read_to_string(&settings).unwrap().replace("\r\n","").contains('\n'));
+        uninstall_claude(&home).unwrap(); assert_eq!(fs::read_to_string(&settings).unwrap(),crlf);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn claude_hook_install_creates_and_removes_what_it_added_and_protects_odd_files() {
+        let p=dir(); let home=p.join("claude"); let root=p.join("completion");
+        let exe=p.join("fake.exe"); fs::write(&exe,b"helper").unwrap();
+        let settings=claude_settings_path(&home);
+        // No settings file at all: it is created, and removing the hook leaves an empty object.
+        install_claude(&home,&root,&exe).unwrap();
+        assert!(claude_hook_installed(&home,&root));
+        uninstall_claude(&home).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&fs::read_to_string(&settings).unwrap()).unwrap(),serde_json::json!({}));
+        // A file without hooks gets one and loses it again; unrelated keys keep their order.
+        fs::write(&settings,"{\n  \"theme\": \"dark\",\n  \"env\": {\n    \"A\": \"1\"\n  }\n}").unwrap();
+        install_claude(&home,&root,&exe).unwrap();
+        let text=fs::read_to_string(&settings).unwrap();
+        assert!(text.find("\"theme\"").unwrap() < text.find("\"env\"").unwrap() && text.find("\"env\"").unwrap() < text.find("\"hooks\"").unwrap());
+        assert!(!text.ends_with('\n'));
+        uninstall_claude(&home).unwrap();
+        assert_eq!(fs::read_to_string(&settings).unwrap(),"{\n  \"theme\": \"dark\",\n  \"env\": {\n    \"A\": \"1\"\n  }\n}");
+        // Files we cannot safely edit are refused untouched, and no helper is copied for them.
+        let fresh=p.join("fresh-root");
+        for bad in ["not-json", "[1,2]", "{\"hooks\":[]}", "{\"hooks\":{\"Stop\":{}}}"] {
+            fs::write(&settings,bad).unwrap();
+            let err=install_claude(&home,&fresh,&exe).unwrap_err();
+            assert!(err.contains("已保护"), "{bad}: {err}");
+            assert_eq!(fs::read_to_string(&settings).unwrap(),bad); assert!(!helper_path(&fresh).exists());
+        }
+        fs::remove_dir_all(p).unwrap();
+    }
+
+    const OTHER_CLAUDE: &str = "e2b1f6d4-5c3a-4f0e-9b7d-3a6c8d1f2e47";
+    fn claude_task(root: &Path, session: &str, message: &str) {
+        let payload = claude_stop(serde_json::json!({"session_id":session,"last_assistant_message":message}));
+        assert!(capture_claude(root,&ClaudeHook::from_stdin(&payload)).unwrap());
+    }
+    #[test]
+    fn a_claude_card_goes_away_once_its_chat_is_attended_after_the_task() {
+        let p=dir(); let root=p.join("inbox");
+        claude_task(&root,CLAUDE_SESSION,"第一轮"); claude_task(&root,OTHER_CLAUDE,"另一个会话"); capture(&root,&event("one")).unwrap();
+        let list=pending(&root).unwrap(); assert_eq!(list.len(),3);
+        let done=|session:&str| list.iter().find(|c| c.thread_id==session).unwrap().completed_at_ms;
+        let (after,before,same)=(done(CLAUDE_SESSION)+1,done(OTHER_CLAUDE)-1,done(OTHER_CLAUDE));
+        let attention=|source:&str| -> Option<u64> {
+            if source==claude_source(CLAUDE_SESSION) { Some(after) } else if source==claude_source(OTHER_CLAUDE) { Some(before) }
+            else { panic!("only Claude tasks ask the host: {source}") }
+        };
+        let kept=dismiss_viewed(&root,list.clone(),&attention).unwrap();
+        // Attended after the task: gone, and stays gone. Attended before it, and the Codex task: kept.
+        assert_eq!(kept.len(),2); assert!(kept.iter().all(|c| c.thread_id!=CLAUDE_SESSION));
+        assert_eq!(pending(&root).unwrap().len(),2);
+        // Attention in the very millisecond is not "after"; a chat no window reports for is never dismissed.
+        let tie=|source:&str| if source==claude_source(OTHER_CLAUDE) { Some(same) } else { None };
+        assert_eq!(dismiss_viewed(&root,kept.clone(),&tie).unwrap().len(),2);
+        // The next task of the attended chat is a new card, and only attention after it clears it.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        claude_task(&root,CLAUDE_SESSION,"第二轮");
+        let again=pending(&root).unwrap(); assert_eq!(again.len(),3);
+        assert_eq!(dismiss_viewed(&root,again.clone(),&attention).unwrap().len(),3);
+        let later=|_: &str| Some(u64::MAX);
+        assert_eq!(dismiss_viewed(&root,again,&later).unwrap().iter().filter(|c| c.client==CLIENT_CODEX).count(),1);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn only_claude_tasks_with_a_connected_chat_window_can_be_opened() {
+        let p=dir(); let root=p.join("inbox");
+        claude_task(&root,CLAUDE_SESSION,"一"); claude_task(&root,OTHER_CLAUDE,"二"); capture(&root,&event("one")).unwrap();
+        let mut list=pending(&root).unwrap();
+        let connected=|source:&str| source==claude_source(CLAUDE_SESSION);
+        mark_openable(&mut list,&connected);
+        fn host(list:&[Completion], session:&str) -> Option<String> { list.iter().find(|c| c.thread_id==session).unwrap().host.clone() }
+        assert_eq!(host(&list,CLAUDE_SESSION).as_deref(),Some(HOST_CCGUI));
+        assert_eq!(host(&list,OTHER_CLAUDE),None); assert_eq!(host(&list,THREAD),None);
+        // The mark is runtime state: it is serialised only while set, and never read back from the inbox.
+        let json=|c:&Completion| serde_json::to_value(c).unwrap();
+        assert_eq!(json(list.iter().find(|c| c.thread_id==CLAUDE_SESSION).unwrap())["host"],"ccgui");
+        assert!(json(list.iter().find(|c| c.thread_id==OTHER_CLAUDE).unwrap()).get("host").is_none());
+        assert!(pending(&root).unwrap().iter().all(|c| c.host.is_none()));
+        // A codex task is never opened through the CC GUI, even when the bridge answers for its id.
+        mark_openable(&mut list,&|_: &str| true);
+        assert_eq!(host(&list,THREAD),None); assert_eq!(host(&list,OTHER_CLAUDE).as_deref(),Some(HOST_CCGUI));
+        // The window goes away: the mark follows.
+        mark_openable(&mut list,&|_: &str| false);
+        assert!(list.iter().all(|c| c.host.is_none()));
+        assert_eq!(claude_source(CLAUDE_SESSION),format!("claude:{CLAUDE_SESSION}"));
+        fs::remove_dir_all(p).unwrap();
+    }
+
 }

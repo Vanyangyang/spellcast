@@ -10,7 +10,7 @@ use crate::inbox::now_ms;
 use crate::reply::validate_id;
 use crate::{
     capture_anchor_snapshot, validate_artifact_references, validate_image_references,
-    CanvasAnnotation, CanvasAppearance, CanvasArrangement, CanvasBinding, CanvasComposition,
+    CanvasAnnotation, CanvasAnnotationStatus, CanvasAppearance, CanvasArrangement, CanvasBinding, CanvasComposition,
     CanvasContent, CanvasLayout, CanvasObject, CanvasPlacement, NodePatch, ReplyBlock,
     ReplyPatchRequest, Session, SpellcastError,
 };
@@ -53,6 +53,8 @@ pub struct CanvasContentFields {
     pub fill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_table: Option<crate::canvas::CanvasSourceTable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_skeleton: Option<crate::canvas_skeleton::CanvasSourceSkeleton>,
 }
 
 impl CanvasContentFields {
@@ -75,6 +77,9 @@ impl CanvasContentFields {
         }
         if self.source_table.is_some() {
             names.push("source_table");
+        }
+        if self.source_skeleton.is_some() {
+            names.push("source_skeleton");
         }
         names
     }
@@ -756,6 +761,9 @@ fn create(
     if mode.agent && matches!(content, CanvasContent::SourceTable { .. }) {
         return Err((Content, Fail::protected(0, "来源表格只能由本地项目视图加入画布。")));
     }
+    if mode.agent && matches!(content, CanvasContent::SourceSkeleton { .. }) {
+        return Err((Content, Fail::protected(0, "骨架来源只能由本地项目视图加入画布。")));
+    }
     if content.is_legacy() {
         return Err((
             Content,
@@ -854,6 +862,9 @@ fn patch_content(
         expected,
         "对象内容已经更新，请重新读取后再修改。",
     )?;
+    if mode.agent && matches!(object.content, CanvasContent::SourceSkeleton { .. }) {
+        return Err(Fail::protected(object.content_revision, "骨架来源只能由本地项目视图刷新。"));
+    }
     if mode.agent && (object.user_edited || object.source_id.is_none()) {
         return Err(Fail::protected(
             object.content_revision,
@@ -870,8 +881,9 @@ fn patch_content(
         CanvasContent::Image { .. } => &["title", "src", "alt"],
         CanvasContent::Shape { .. } => &["title", "fill", "text"],
         CanvasContent::SourceTable { .. } => &["source_table"],
+        CanvasContent::SourceSkeleton { .. } => &["source_skeleton"],
         // References and block objects have no editable scalar fields in Canvas.
-        CanvasContent::WorkRecord { .. } | CanvasContent::Block { .. } => &[],
+        CanvasContent::WorkRecord { .. } | CanvasContent::Sigil { .. } | CanvasContent::Block { .. } => &[],
     };
     if let Some(name) = given.iter().find(|name| !allowed.contains(name)) {
         return Err(Fail::invalid(format!(
@@ -950,9 +962,17 @@ fn patch_content(
                     }
                     *table = replacement.clone();
                 }
+                CanvasContent::SourceSkeleton { skeleton } => {
+                    let replacement = fields.source_skeleton.as_ref().expect("validated source skeleton field");
+                    if !skeleton.same_source(replacement) {
+                        return Err(Fail::invalid("来源身份已经改变，不能用刷新覆盖另一份骨架。"));
+                    }
+                    *skeleton = replacement.clone();
+                }
                 CanvasContent::Node { .. }
                 | CanvasContent::Reply { .. }
                 | CanvasContent::WorkRecord { .. }
+                | CanvasContent::Sigil { .. }
                 | CanvasContent::Block { .. } => unreachable!(),
             }
             content.validate()?;
@@ -1550,6 +1570,15 @@ fn annotate(
         capture_anchor_snapshot(next, anchor, false)?
     };
     let source_id = mode.owner.map(String::from);
+    let target_source_id = if let Some(current) = &existing {
+        if current.anchor == *anchor {
+            current.target_source_id.clone()
+        } else {
+            annotation_target_source(next, anchor, origin.as_ref())
+        }
+    } else {
+        annotation_target_source(next, anchor, origin.as_ref())
+    };
     let mut candidate = CanvasAnnotation {
         id: id.to_string(),
         revision: existing.as_ref().map_or(1, |annotation| annotation.revision),
@@ -1558,7 +1587,15 @@ fn annotate(
         text: text.to_string(),
         origin,
         source_id,
+        target_source_id,
         removed: existing.as_ref().is_some_and(|annotation| annotation.removed),
+        status: existing.as_ref().map_or(CanvasAnnotationStatus::Pending, |annotation| {
+            if annotation.text != text || annotation.anchor != *anchor {
+                CanvasAnnotationStatus::Pending
+            } else {
+                annotation.status
+            }
+        }),
     };
     if serde_json::to_vec(&candidate)
         .map_err(|error| Fail::invalid(error.to_string()))?
@@ -1585,6 +1622,26 @@ fn annotate(
         next.board.canvas.annotations.push(candidate.clone());
     }
     Ok(candidate.revision)
+}
+
+fn annotation_target_source(
+    session: &Session,
+    anchor: &crate::inbox::CanvasAnchor,
+    origin: Option<&crate::canvas::CanvasOrigin>,
+) -> Option<String> {
+    if let Some(source) = origin.and_then(|origin| origin.source_id.clone()) { return Some(source); }
+    let object = session.board.canvas.object(&anchor.object_id)?;
+    if let CanvasContent::Node { id } = &object.content {
+        if let Some(source) = session.board.nodes.iter().find(|node| &node.id == id)
+            .and_then(|node| node.captured_context.as_ref())
+            .map(|captured| captured.source_id.clone()) {
+            return Some(source);
+        }
+    }
+    if origin.is_some_and(|origin| origin.thread_id.is_some() && !origin.cwd.is_empty()) {
+        return None;
+    }
+    object.source_id.clone()
 }
 
 fn remove_annotation(
@@ -1621,6 +1678,9 @@ fn remove_annotation(
     if target.removed != removed {
         target.removed = removed;
         target.revision += 1;
+        if !removed {
+            target.status = CanvasAnnotationStatus::Pending;
+        }
         if mode.mark_user {
             target.source_id = None;
         }
@@ -2325,6 +2385,109 @@ mod tests {
     };
 
     const AGENT: Option<&str> = Some("codex:one");
+
+    fn skeleton_fixture() -> crate::CanvasSourceSkeleton {
+        serde_json::from_value(serde_json::json!({
+            "title":"Game structure", "project_id":"project-1", "root":"G:/game/",
+            "path":"Assets/Documents/GameDesign/Skeleton.json", "hash":"a".repeat(64),
+            "documents":[{"path":"Assets/Documents/GameDesign/Guide.md","hash":"b".repeat(64)}],
+            "model": {"schema_version":1,"title":"Game structure","description":"Design map",
+                "entry_ids":["core"],"loop":[{"id":"explore","title":"Explore","summary":"Travel","node_ids":["core","map"]}],
+                "nodes":[
+                    {"id":"core","kind":"system","title":"Core","summary":"Entry","state":"rules_preserved","sources":[]},
+                    {"id":"map","kind":"region","title":"Map","summary":"Travel map","parent_id":"core","state":"structure_only",
+                        "notes":["Visit a place", "He said \"go\"\nnow"],"sources":["Assets/Documents/GameDesign/Guide.md"]}],
+                "relations":[{"from":"core","to":"map","label":"opens"}]}
+        })).unwrap()
+    }
+
+    #[test]
+    fn source_skeleton_local_refresh_preserves_layout_and_old_annotation() {
+        let source = skeleton_fixture();
+        let mut unix_case = source.clone();
+        unix_case.root = "/Repo/Game".into();
+        let mut unix_other = unix_case.clone();
+        unix_other.root = "/repo/Game".into();
+        assert!(!unix_case.same_source(&unix_other));
+        let mut session = Session::default();
+        let create = |skeleton| CanvasOperation::Create { id:"skeleton-1".into(),
+            content: CanvasContent::SourceSkeleton { skeleton }, origin:None,
+            placement: CanvasPlacementFields { x:Some(120.0), y:Some(80.0), ..Default::default() }, bindings:vec![] };
+        let denied = session.apply_canvas_batch(batch("skeleton-agent-create", vec![create(source.clone())]), AGENT).unwrap();
+        assert_eq!(denied.targets[0].status, CanvasTargetState::Protected);
+        assert!(session.apply_canvas_batch(batch("skeleton-local-create", vec![create(source.clone())]), None).unwrap().is_applied());
+        let placement = session.board.canvas.items[0].clone();
+        let anchor: crate::inbox::CanvasAnchor = serde_json::from_value(serde_json::json!({
+            "object_id":"skeleton-1","content_revision":1,"block_id":"map","selection":"Visit a place"
+        })).unwrap();
+        let (snapshot, _) = crate::capture_anchor_snapshot(&session, &anchor, false).unwrap();
+        assert_eq!(snapshot["node"]["id"], "map");
+        assert_eq!(snapshot["ancestors"][0]["id"], "core");
+        assert_eq!(snapshot["relations"][0]["label"], "opens");
+        assert!(snapshot.get("model").is_none());
+        let mut quoted = anchor.clone();
+        quoted.selection = Some("\"go\"\nnow".into());
+        assert!(crate::capture_anchor_snapshot(&session, &quoted, false).is_ok());
+        assert!(session.apply_canvas_batch(batch("skeleton-annotation", vec![CanvasOperation::Annotate {
+            id:"annotation-1".into(), expected_revision:0, anchor:anchor.clone(), text:"Review map".into()
+        }]), None).unwrap().is_applied());
+        let original_annotation = session.board.canvas.annotation("annotation-1").unwrap().clone();
+        let mut refreshed = source.clone();
+        refreshed.root = "g:\\game".into();
+        refreshed.hash = "c".repeat(64);
+        refreshed.model.nodes[1].summary = "Updated travel map".into();
+        let patch = |skeleton, expected_revision| CanvasOperation::PatchContent { id:"skeleton-1".into(), expected_revision,
+            fields:CanvasContentFields { source_skeleton:Some(skeleton), ..Default::default() } };
+        assert_eq!(session.apply_canvas_batch(batch("skeleton-agent-patch", vec![patch(refreshed.clone(), 1)]), AGENT).unwrap().targets[0].status, CanvasTargetState::Protected);
+        assert!(session.apply_canvas_batch(batch("skeleton-local-refresh", vec![patch(refreshed.clone(), 1)]), None).unwrap().is_applied());
+        assert_eq!(session.board.canvas.object("skeleton-1").unwrap().content_revision, 2);
+        assert_eq!(session.board.canvas.items[0], placement);
+        assert_eq!(session.board.canvas.annotation("annotation-1").unwrap(), &original_annotation);
+        assert!(crate::capture_anchor_snapshot(&session, &anchor, false).is_err());
+        let mut current = anchor.clone(); current.content_revision = 2;
+        assert!(crate::capture_anchor_snapshot(&session, &current, false).is_ok());
+        current.block_id = Some("removed".into());
+        assert!(crate::capture_anchor_snapshot(&session, &current, false).is_err());
+        let mut other = refreshed;
+        other.path = "Assets/Documents/GameDesign/Other.json".into();
+        assert_eq!(session.apply_canvas_batch(batch("skeleton-wrong-source", vec![patch(other, 2)]), None).unwrap().targets[0].status, CanvasTargetState::Invalid);
+    }
+
+    #[test]
+    fn source_skeleton_rejects_invalid_model_references_and_node_anchors() {
+        let source = skeleton_fixture();
+        let mut bad = source.clone();
+        bad.model.nodes[1].id = "core".into();
+        assert!(bad.validate().is_err());
+        let mut bad = source.clone();
+        bad.model.nodes[0].parent_id = Some("map".into());
+        assert!(bad.validate().is_err());
+        let mut bad = source.clone();
+        bad.model.loop_stages[0].node_ids.push("missing".into());
+        assert!(bad.validate().is_err());
+        let mut bad = source.clone();
+        bad.model.relations[0].to = "missing".into();
+        assert!(bad.validate().is_err());
+        let mut bad = source.clone();
+        bad.documents.clear();
+        assert!(bad.validate().is_err());
+        let mut serialized = serde_json::to_value(&source).unwrap();
+        serialized["model"]["nodes"][0]["notes"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<crate::CanvasSourceSkeleton>(serialized).is_err());
+
+        let mut session = Session::default();
+        assert!(session.apply_canvas_batch(batch("skeleton-anchor-create", vec![CanvasOperation::Create {
+            id:"skeleton-anchor".into(), content:CanvasContent::SourceSkeleton { skeleton: source },
+            origin:None, placement:CanvasPlacementFields::default(), bindings:vec![]
+        }]), None).unwrap().is_applied());
+        let mut anchor: crate::inbox::CanvasAnchor = serde_json::from_value(serde_json::json!({
+            "object_id":"skeleton-anchor","content_revision":1,"block_id":"map","selection":"Entry"
+        })).unwrap();
+        assert!(crate::capture_anchor_snapshot(&session, &anchor, false).is_err());
+        anchor.selection = None;
+        anchor.target = Some(crate::inbox::CanvasSubtarget::GraphNode { id:"map".into() });
+        assert!(crate::capture_anchor_snapshot(&session, &anchor, false).is_err());
+    }
 
     #[test]
     fn source_table_refresh_keeps_identity_and_layout_and_rejects_another_source() {

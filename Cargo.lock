@@ -1170,6 +1170,7 @@ version = "0.4.2"
 dependencies = [
  "axum",
  "http-body-util",
+ "libc",
  "rmcp",
  "rusqlite",
  "serde",
@@ -1181,6 +1182,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "uuid",
+ "windows-sys",
 ]
 
 [[package]]

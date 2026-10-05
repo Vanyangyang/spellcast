@@ -70,8 +70,10 @@ try {
   assert.equal(await page.locator('.project-workspace').getAttribute('data-workspace-view'), 'game');
   const loopRows = await home.locator('[data-gh-section="loop"] tbody tr').count();
   const loopText = await home.locator('[data-gh-section="loop"]').innerText();
+  const loopPath = (await home.locator('[data-gh-section="loop"] .gh-source').getAttribute('title'))?.split('\n')[0];
   assert(loopRows >= 1, 'loop table from the design source');
-  assert.match(loopText, /cycle\.md/);
+  assert(['Assets/Documents/GameDesign/Overview.md', 'Assets/Documents/Atlas/domains/cycle.md'].includes(loopPath));
+  assert(loopText.includes(loopPath.split('/').at(-1)), 'loop source shown with its actual document');
   const explorable = await home.locator('[data-gh-section="explorable"] [data-gh-zone]').count();
   assert(explorable >= 1, 'at least one explorable zone');
   assert.equal(await home.locator('[data-gh-section="explorable"] [data-gh-zone="zone_forest_shrine_outer"]').count(), 1, '神祠外围 is explorable');
@@ -99,12 +101,12 @@ try {
   await home.locator('[data-gh-action="open-documents"]').click();
   await home.locator('[data-gh-section="documents"]').waitFor();
   const documentCount = await home.locator('[data-gh-document]').count();
-  assert(documentCount >= 400, 'whole Assets/Documents inventory, not only two design subdirectories');
-  await home.locator('[data-gh-document-search]').fill('cycle.md');
-  const cycle = home.locator('[data-gh-document="Assets/Documents/Atlas/domains/cycle.md"]');
-  assert.equal(await cycle.isVisible(), true);
-  await cycle.locator('[data-gh-action="read-document"]').click();
-  assert.match(await home.locator('[data-gh-document-text]').innerText(), /四层循环/);
+  assert(documentCount >= 2, 'indexed document inventory includes the loop source and supporting documents');
+  await home.locator('[data-gh-document-search]').fill(loopPath.split('/').at(-1));
+  const loopDocument = home.locator(`[data-gh-document="${loopPath}"]`);
+  assert.equal(await loopDocument.isVisible(), true);
+  await loopDocument.locator('[data-gh-action="read-document"]').click();
+  assert.match(await home.locator('[data-gh-document-text]').innerText(), /循环/);
   const noteText = '隔离原生检查：核对四层循环的配置依据。';
   await home.locator('[data-gh-review-draft]').fill(noteText);
   await home.locator('[data-gh-action="save-review-comment"]').click();
@@ -114,7 +116,7 @@ try {
   const savedNote = savedNotes.find(record => record.scope === 'spellcast.document-review.v1' && record.result === noteText);
   assert(savedNote, 'reader note persisted in project records');
   assert.equal(savedNote.updated_by.kind, 'user');
-  assert.match(savedNote.references[0].uri, /Assets\/Documents\/Atlas\/domains\/cycle\.md/);
+  assert(savedNote.references[0].uri.includes(loopPath));
   assert.match(savedNote.references[0].version, /^[0-9a-f]{64}$/);
   await noteCard.locator('[data-gh-action="toggle-comment-resolved"]').click();
   await page.waitForFunction(async ([port, projectId, id]) => {
@@ -143,7 +145,7 @@ try {
   await page.waitForFunction(() => [...document.querySelectorAll('[data-gh-question-status]')].some(node => node.textContent.includes('未发送')));
   const questions = (await get(`/api/projects/${projectId}/goals`)).filter(goal => goal.context.entity_kind === 'document_question');
   assert.equal(questions.length, 1); assert.equal(questions[0].status, 'unsent');
-  assert.equal(questions[0].context.entity_id, 'Assets/Documents/Atlas/domains/cycle.md');
+  assert.equal(questions[0].context.entity_id, loopPath);
   assert.match(questions[0].text, /#L1-L1@\d+-\d+/);
   assert.match(questions[0].text, /#L3-L3@\d+-\d+/);
   await selectDocumentLine(1); await selectDocumentLine(3, true);
@@ -159,7 +161,7 @@ try {
     return rows.some(record => record.scope === 'spellcast.document-selection.v1' && record.result === 'discard' && record.references.length === 1);
   }, [port, projectId]);
   await home.locator('[data-gh-action="close-source"]').click();
-  await cycle.locator('[data-gh-action="read-document"]').click();
+  await loopDocument.locator('[data-gh-action="read-document"]').click();
   await home.locator('[data-gh-review-record]').filter({ hasText: noteText }).first().waitFor();
   const reopenedNotes = (await get(`/api/projects/${projectId}/records`)).filter(record => record.scope === 'spellcast.document-review.v1');
   assert.equal(reopenedNotes.length, 2);

@@ -1,4 +1,5 @@
 use crate::{
+    ccgui_window,
     completion_hook::{self, Completion},
     completion_speech, desktop, display_target,
 };
@@ -19,21 +20,47 @@ pub fn get_completions(
     Ok(state.0.lock().map_err(|e| e.to_string())?.clone())
 }
 
+/// A Claude task whose CC GUI window is connected: ask its plugin to open the chat, bring the window forward,
+/// and clear the card once the chat reports attention. If it never does, the card stays with an error, as
+/// a Codex card does when the app cannot be opened.
+async fn open_in_ccgui(app: &AppHandle, root: &std::path::Path, item: &Completion) -> Result<(), String> {
+    let silent = || {
+        completion_speech::copy(
+            root,
+            "CC GUI 没有响应。请确认它正在运行，并且 Spellcast 回发插件已连接。",
+            "CC GUI did not respond. Make sure it is running and the Spellcast plugin is connected.",
+        )
+    };
+    let bridge = app.state::<crate::AppState>().bridge.clone();
+    let ticket = bridge
+        .request_host_focus(&completion_hook::claude_source(&item.thread_id))
+        .map_err(|_| silent())?;
+    // The plugin switches the chat; the SDK cannot raise the window, so that happens here while the click is fresh.
+    ccgui_window::raise();
+    for _ in 0..30 {
+        if bridge.host_focus_acked(&ticket) {
+            return completion_hook::dismiss(root, &item.thread_id, &item.turn_id);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Err(silent())
+}
+
 #[tauri::command]
-pub fn open_completed_task(
+pub async fn open_completed_task(
     app: AppHandle,
     thread_id: String,
     turn_id: String,
 ) -> Result<(), String> {
     let root = completion_hook::root()?;
-    let state = app.state::<Arc<CompletionState>>();
-    let item = state
-        .0
-        .lock()
-        .map_err(|e| e.to_string())?
-        .iter()
-        .find(|item| item.thread_id == thread_id && item.turn_id == turn_id)
-        .cloned();
+    let item = {
+        let state = app.state::<Arc<CompletionState>>();
+        let items = state.0.lock().map_err(|e| e.to_string())?;
+        items
+            .iter()
+            .find(|item| item.thread_id == thread_id && item.turn_id == turn_id)
+            .cloned()
+    };
     let Some(item) = item else {
         return Err(completion_speech::copy(
             &root,
@@ -41,8 +68,11 @@ pub fn open_completed_task(
             "That completion notice is no longer available.",
         ));
     };
+    if item.host.as_deref() == Some(completion_hook::HOST_CCGUI) {
+        return open_in_ccgui(&app, &root, &item).await;
+    }
     if item.client != completion_hook::CLIENT_CODEX {
-        // Grok Build has no deep link back into the terminal; opening just clears the card.
+        // Grok Build, and Claude Code outside a connected CC GUI, have no way back to the session; opening just clears the card.
         return completion_hook::dismiss(&root, &thread_id, &turn_id);
     }
     completion_hook::activate(&root, &thread_id, &turn_id, |url| {
@@ -170,7 +200,7 @@ fn present(app: &AppHandle, items: &[Completion]) -> Result<(), String> {
     let screen = placed.screen;
     let width = 340.0_f64.min(screen.work_w - 32.0).max(180.0);
     let win = ensure_window(app)?;
-    let height = (items.len() as f64 * 140.0 + 68.0)
+    let height = (items.len() as f64 * 160.0 + 68.0)
         .min(screen.work_h - 32.0)
         .max(120.0);
     win.set_size(LogicalSize::new(width, height))
@@ -231,6 +261,21 @@ pub fn follow_fixed(app: &AppHandle) {
     }
 }
 
+/// Claude tasks are seen through their CC GUI window: a chat opened after the task finished clears its card,
+/// and a connected window lets a double-click go back to the chat.
+fn with_hosts(root: &std::path::Path, bridge: &spellcast_bridge::Bridge, items: Vec<Completion>) -> Vec<Completion> {
+    let attention = |source: &str| bridge.host_attention(source);
+    let mut items = match completion_hook::dismiss_viewed(root, items.clone(), &attention) {
+        Ok(kept) => kept,
+        Err(err) => {
+            eprintln!("Completion read state: {err}");
+            items
+        }
+    };
+    completion_hook::mark_openable(&mut items, &|source| bridge.host_attention(source).is_some());
+    items
+}
+
 pub fn start(app: AppHandle) {
     let mut speech = completion_speech::SpeechPolicy::new(completion_speech::now_ms());
     let state = Arc::new(CompletionState::default());
@@ -249,12 +294,18 @@ pub fn start(app: AppHandle) {
             return;
         };
         let mut read_sync = crate::completion_read::ReadSync::default();
+        let mut titles = crate::completion_title::Titles::default();
         let mut last_error = String::new();
         loop {
             let next = completion_hook::visible(&root, &home, &mut read_sync);
             match next {
-                Ok(items) => {
+                Ok(mut items) => {
                     last_error.clear();
+                    titles.apply(&mut items, &home);
+                    let items = match app.try_state::<crate::AppState>() {
+                        Some(host) => with_hosts(&root, &host.bridge, items),
+                        None => items,
+                    };
                     let changed = state.0.lock().map(|old| *old != items).unwrap_or(false);
                     if changed {
                         let items = items.clone();

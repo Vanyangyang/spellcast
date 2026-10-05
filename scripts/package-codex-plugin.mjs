@@ -256,11 +256,7 @@ export function assertWindowsShellOnOff({ pluginRoot, bootstrap, stop }) {
     const first = spawnShell("powershell", cmd, { input: start, env });
     if (first.exit !== 0) throw new Error(`powershell ON exit ${first.exit} err=${first.err}`);
     if (first.err && first.err.trim()) throw new Error(`powershell ON stderr: ${first.err}`);
-    const runner = join(pluginRoot, "hooks/claude-observer-runner.mjs");
-    const expectedBootstrap = existsSync(runner)
-      ? `${bootstrap}\nCLAUDE_OBSERVER_RUNNER_PATH=${JSON.stringify(runner)}`
-      : bootstrap;
-    expectHook(first.out, "powershell ON", "SessionStart", expectedBootstrap);
+    expectHook(first.out, "powershell ON", "SessionStart", bootstrap);
     mock.setOff();
     const second = spawnShell("cmd", cmd, { input: prompt, env });
     if (second.exit !== 0) throw new Error(`cmd OFF exit ${second.exit} err=${second.err}`);

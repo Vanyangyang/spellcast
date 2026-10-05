@@ -143,9 +143,27 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|n| text.contains(n))
 }
 
+/// Immutable non-Codex host route. Contains no authentication secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HostRoutePin {
+    pub source_id: String,
+    pub client: String,
+    pub engine: String,
+    pub native_session_id: String,
+    pub gui_session_id: String,
+    pub cwd: String,
+    pub client_instance_id: String,
+    pub window_id: String,
+    pub lease_id: String,
+    pub generation: u64,
+}
+
 /// Background captured when an Observer aside is kept. Not instructions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapturedContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_pin: Option<HostRoutePin>,
     pub project: String,
     pub goal: String,
     pub change: String,
@@ -550,6 +568,8 @@ pub struct BubbleRequest {
 /// What the user typed for the agent: from a popped bubble, or from the board's composer.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SayRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_pin: Option<HostRoutePin>,
     pub text: String,
     #[serde(default)]
     pub anchors: Vec<crate::inbox::CanvasAnchor>,

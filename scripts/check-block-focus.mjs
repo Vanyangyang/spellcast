@@ -124,9 +124,9 @@ try {
   report.checks.push('Workspace-first selection retains drafts; confirmed send uses the chosen task and exact anchor, and sent text cannot reappear under the old recipient after reselection');
   const receipt = { event: { seq: 101, at_ms: Date.now(), kind: 'say', text: '修改说明', source_id: 'task-a', object_id: 'object', anchors: [{ object_id: 'object', content_revision: 1, block_id: 'a' }] }, phase: 'submitted', client_message_id: 'native-101', desktop: { accepted_at_ms: Date.now(), host_status: 'submitted' } };
   feedback.deliveries.push(receipt);
-  await page.waitForFunction(() => document.querySelector('.composer-delivery-status')?.textContent.includes('已提交原任务'));
+  await page.waitForFunction(() => document.querySelector('.composer-delivery-status')?.textContent.includes('已发送 · 等待回复'));
   receipt.desktop.host_status = 'active';
-  await page.waitForFunction(() => document.querySelector('.composer-delivery-status')?.textContent.includes('原任务运行中'));
+  await page.waitForFunction(() => document.querySelector('.composer-delivery-status')?.textContent.includes('原聊天处理中 · 等待回复'));
   receipt.phase = 'failed'; receipt.error = '原任务本轮已结束，但尚未将结果写回这份画布。';
   await page.waitForFunction(() => document.querySelector('.composer-delivery-status')?.textContent.includes('尚未将结果写回'));
   assert.equal(await page.locator('#input').inputValue(), '只修改方案说明');

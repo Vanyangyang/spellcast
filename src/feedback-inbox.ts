@@ -49,6 +49,7 @@ function describeTarget(board: BoardSnapshot, target: ContentNavTarget, blockId?
 /** A request belongs to its recorded recipient, not every object it references. */
 function requestOrigin(event: AgentEvent, state: FeedbackState, board: BoardSnapshot): ContentOrigin {
   const receipt = state.deliveries.find(item => item.event.seq === event.seq);
+  if (event.host_pin) return resolveContentOrigin({ cwd: event.host_pin.cwd, thread_id: event.host_pin.native_session_id, source_id: event.host_pin.source_id }, event.source_id, []);
   const threadId = receipt?.desktop?.thread_id || event.target_thread_id;
   const bindings = state.bindings.filter(item => item.source_id === event.source_id && (!threadId || item.thread_id === threadId));
   if (receipt?.desktop?.cwd) return resolveContentOrigin({ cwd: receipt.desktop.cwd, thread_id: threadId || undefined, source_id: event.source_id || undefined }, event.source_id, bindings);
@@ -72,12 +73,13 @@ export function feedbackInbox(state: FeedbackState, board: BoardSnapshot): Inbox
     const origin = requestOrigin(event, state, board);
     row.taskLabel = origin.taskLabel || null;
     const target = event.target_thread_id || row.receipt?.desktop?.thread_id;
-    row.unbound = !state.bindings.some(binding => binding.source_id === event.source_id && (!target || binding.thread_id === target));
-    if (target && !state.bindings.some(binding => binding.source_id === event.source_id && binding.thread_id === target)) row.canRetry = Boolean(row.receipt?.desktop?.accepted_at_ms);
+    row.unbound = !event.host_pin && !state.bindings.some(binding => binding.source_id === event.source_id && (!target || binding.thread_id === target));
+    if (event.host_pin) row.canRetry = false;
+    else if (target && !state.bindings.some(binding => binding.source_id === event.source_id && binding.thread_id === target)) row.canRetry = Boolean(row.receipt?.desktop?.accepted_at_ms);
     const description = describeTarget(board, row.originalTarget, event.anchors?.[0]?.block_id || event.block_id);
     const explicit = event.kind === "say" || event.kind === "reply";
-    const historical = !explicit || (row.status === "queued" && !row.receipt?.desktop);
-    const view: FeedbackView = historical ? "activity" : ["responded", "handled"].includes(row.status) ? "replied" : "followup";
+    const historical = !explicit || (row.status === "queued" && !row.receipt?.desktop && !event.host_pin);
+    const view: FeedbackView = historical ? "activity" : ["responded", "handled", "completed"].includes(row.status) ? "replied" : "followup";
     const hasResult = Boolean(row.responseTarget && !row.responseTarget.missing && targetOnBoard(row.responseTarget, board));
     return { row, origin, view, title: description.title || event.title || "", context: excerpt(description.text, 500),
       attention: view === "followup" && (row.unbound || ["failed", "unknown", "unanswered", "none"].includes(row.status)),

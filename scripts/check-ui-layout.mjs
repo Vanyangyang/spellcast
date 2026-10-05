@@ -1,8 +1,8 @@
 /**
  * Isolated browser layout check for the main window, Canvas and settings at 1600/1320/880 and
  * narrow widths, including the Canvas selection dock (no repeated card title or "Work inside"), the
- * whole home card at the 880x640 desktop minimum (Chinese and English, dark and light) and the aside
- * explanation that folds on narrow windows (keyboard, width changes). It starts its own preview API on a temporary database and its own Vite
+ * whole home card at the 880x640 desktop minimum (Chinese and English, dark and light), its concise
+ * aside line, and the hidden empty activity area. It starts its own preview API on a temporary database and its own Vite
  * server, seeds the Canvas through MCP, and never contacts :47194 or the user's data.
  * Browser evidence only: native window placement is covered by the Tauri checks.
  *
@@ -120,19 +120,15 @@ try {
   const shot = async (page, name) => { await page.screenshot({ path: path.join(out, name) }); shots.push(name); };
   const overlaps = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-  // The aside explanation after its first line: folded (a native <details>) on narrow windows, shown
-  // without its toggle on wide ones. Content that is folded still counts as present.
+  // The home card keeps one concise aside line and hides the recent section until it has entries.
   const observerState = page => page.evaluate(() => {
-    const details = document.querySelector("#agent-observer-details"), summary = details.querySelector("summary");
-    const content = [...details.querySelectorAll(":scope > :not(summary)")];
-    const small = [...details.querySelectorAll("summary, li, p")].filter(n => n.checkVisibility() && parseFloat(getComputedStyle(n).fontSize) < 12).length;
+    const observer = document.querySelector(".agent-observer");
+    const hint = observer.querySelector(".agent-observer-hint");
+    const activity = document.querySelector(".agent-activity");
     return {
-      open: details.open,
-      toggle: summary.checkVisibility(),
-      shown: content.every(n => n.checkVisibility({ contentVisibilityAuto: true })),
-      complete: content.length === 2 && content.every(n => n.textContent.trim().length > 20),
-      small,
-      focus: document.activeElement?.id || document.activeElement?.tagName,
+      hintVisible: hint.checkVisibility(),
+      concise: hint.textContent.trim().length > 0 && !observer.querySelector(".observer-details, .observer-points"),
+      emptyActivityHidden: activity.hidden && !activity.checkVisibility(),
     };
   });
 
@@ -160,46 +156,11 @@ try {
     });
     const observer = await observerState(page);
     findings[`home-${width}${variant}`].observer = observer;
-    const narrow = width <= 1100;
     findings[`home-${width}${variant}`].observerProblems = [
-      ...(narrow && (observer.open || !observer.toggle || observer.shown) ? ["the aside explanation is not folded by default"] : []),
-      ...(!narrow && (observer.toggle || !observer.shown) ? ["the aside explanation is folded on a wide window"] : []),
-      ...(!observer.complete ? ["the aside explanation lost content"] : []),
+      ...(!observer.hintVisible || !observer.concise ? ["the concise aside explanation is missing"] : []),
+      ...(!observer.emptyActivityHidden ? ["empty recent activity still occupies the home card"] : []),
       ...(width === 880 && height === 640 && findings[`home-${width}${variant}`].hiddenBelow > 0 ? [`${findings[`home-${width}${variant}`].hiddenBelow}px of the card is hidden at the desktop minimum`] : []),
     ];
-    await page.context().close();
-  }
-
-  // Keyboard and width changes: the switch is followed by the fold's toggle; Enter and Space work it;
-  // widening shows everything and hands a focused toggle's focus to the switch; narrowing again
-  // brings the toggle back with the reader's last choice.
-  for (const locale of ["en", "zh-CN"]) {
-    const page = await open({ width: 880, height: 640, locale });
-    await page.waitForFunction(() => document.querySelector("#agent-setup-status")?.textContent.trim());
-    await page.focus("#agent-observer-enabled");
-    await page.keyboard.press("Tab");
-    const steps = { tabbed: await observerState(page) };
-    await page.keyboard.press("Enter");
-    steps.enter = await observerState(page);
-    steps.enterHidden = await page.evaluate(() => { const c = document.querySelector("#agent"); return c.scrollHeight - c.clientHeight; });
-    await shot(page, `home-880x640${locale === "zh-CN" ? "" : `-${locale}`}-details-open.png`);
-    await page.keyboard.press("Space");
-    steps.space = await observerState(page);
-    await page.keyboard.press("Space");
-    await page.setViewportSize({ width: 1320, height: 860 });
-    await page.waitForTimeout(300);
-    steps.wide = await observerState(page);
-    await page.setViewportSize({ width: 880, height: 640 });
-    await page.waitForTimeout(300);
-    steps.narrowAgain = await observerState(page);
-    const problems = [
-      ...(steps.tabbed.focus !== "SUMMARY" || steps.tabbed.open ? ["Tab from the switch does not reach the folded explanation"] : []),
-      ...(!steps.enter.open || !steps.enter.shown || steps.enter.small ? ["Enter does not unfold the whole explanation at 12px or more"] : []),
-      ...(steps.space.open || steps.space.shown ? ["Space does not fold it again"] : []),
-      ...(steps.wide.toggle || !steps.wide.open || !steps.wide.shown || steps.wide.focus !== "agent-observer-enabled" ? ["widening loses the explanation, its expanded state or the keyboard focus"] : []),
-      ...(!steps.narrowAgain.toggle || !steps.narrowAgain.open || !steps.narrowAgain.shown ? ["narrowing again does not keep the reader's choice"] : []),
-    ];
-    findings[`home-observer-keys-${locale}`] = { steps, observerProblems: problems };
     await page.context().close();
   }
 
@@ -279,8 +240,7 @@ try {
     ...(f.smallText?.length ? [`${name}: text below 12px (${f.smallText.join(", ")})`] : []),
   ]);
   await writeFile(path.join(out, "report.json"), JSON.stringify({ label, shots, findings, problems }, null, 2));
-  for (const [name, f] of Object.entries(findings)) if ("hiddenBelow" in f) console.log(`${name}: card ${f.cardWidth}px (${Math.round(f.share * 100)}% of width), title ${f.titleLines} line(s), ${f.hiddenBelow}px below the fold of ${f.visible}px; aside explanation ${f.observer.toggle ? (f.observer.open ? "unfolded" : "folded") : "shown in full"}`);
-  for (const [name, f] of Object.entries(findings)) if (f.steps) console.log(`${name}: Tab → ${f.steps.tabbed.focus}, Enter → ${f.steps.enter.open ? "open" : "closed"} (${f.steps.enterHidden}px then scrolls), Space → ${f.steps.space.open ? "open" : "closed"}, wide → ${f.steps.wide.shown ? "shown" : "hidden"} with focus on ${f.steps.wide.focus}, narrow again → ${f.steps.narrowAgain.open ? "open" : "closed"}`);
+  for (const [name, f] of Object.entries(findings)) if ("hiddenBelow" in f) console.log(`${name}: card ${f.cardWidth}px (${Math.round(f.share * 100)}% of width), title ${f.titleLines} line(s), ${f.hiddenBelow}px below the fold of ${f.visible}px; concise aside visible: ${f.observer.hintVisible}, empty activity hidden: ${f.observer.emptyActivityHidden}`);
   for (const [name, f] of Object.entries(findings)) if (f.stage) console.log(`${name}: canvas ${Math.round(f.stage.height)}px tall, composer ${Math.round(f.composer.height)}px (${(f.composerShare * 100).toFixed(1)}% of window)`);
   console.log(problems.length ? `\nProblems:\n- ${problems.join("\n- ")}` : "\nNo overlap, contrast or overflow problems found.");
   console.log(`${shots.length} screenshots in ${path.relative(root, out)}`);

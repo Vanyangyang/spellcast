@@ -2,6 +2,7 @@ import { projectOwnerGet, projectOwnerPost, mutateProject, newProjectRequestId, 
 import type { PlanningFields } from "./project-planning-model";
 import type { GameConnection, GameResponse } from "./project-game-api";
 import type { DeliveryPhase } from "./types";
+import type { GameSkeleton } from "./project-game-skeleton-model";
 
 export type SourceStamp = { path: string; hash: string };
 export type GameIssue = { severity: string; message: string; path: string };
@@ -15,6 +16,7 @@ export type GameOverview = {
   connection: GameConnection;
   world: { id: string; name: string; description?: string; starting_region_id?: string; region_order?: string[]; source: SourceStamp } | null;
   loop: PlayerLoop | null;
+  skeleton?: GameSkeleton | null;
   regions: OverviewRegion[];
   routed_zones: Array<OverviewZone & { dungeon_id: string; region_id: string }>;
   counts: Record<"regions" | "dungeons" | "zones" | "routed_zones" | "locations" | "contents" | "battles" | "loot_tables" | "missions" | "design_documents" | "code_files", number>;
