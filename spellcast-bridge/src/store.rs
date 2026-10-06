@@ -9,7 +9,7 @@ use serde::Serialize;
 use spellcast_core::types::MemoryItem;
 use spellcast_core::AgentEvent;
 
-const SCHEMA_VERSION: i64 = 4;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 pub struct Store {
     pub(crate) connection: Connection,
@@ -73,6 +73,7 @@ impl Store {
         crate::project_game::init_schema(&connection)?;
         crate::project_goals::init_schema(&connection)?;
         crate::sigil_store::init_schema(&connection)?;
+        crate::client_access::init_schema(&connection)?;
         Ok(Self { connection })
     }
 

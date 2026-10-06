@@ -1,0 +1,19 @@
+.client-access { display: grid; gap: 14px; min-width: 0; padding-top: 24px; border-top: 1px solid var(--setup-border, #343743); }
+.client-access h3, .client-access h4, .client-access p { margin: 0; }
+.client-access h4 { font-size: 1em; }
+.client-access-description, .client-access-status { color: var(--setup-muted, #aaa9b2); }
+.client-access-status[data-error="true"] { color: var(--studio-warning, #efc275); }
+.client-access-list { display: grid; gap: 12px; }
+.client-access-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--setup-border, #343743); border-radius: 10px; min-width: 0; }
+.client-access-identity { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr); gap: 6px 12px; margin: 0; }
+.client-access-identity dt { color: var(--setup-muted, #aaa9b2); }
+.client-access-identity dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-family: Consolas, monospace; }
+.client-access .client-access-scope { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; margin: 0; color: inherit; font: inherit; }
+.client-access .client-access-scope input { width: 18px; min-height: 18px; height: 18px; padding: 0; margin: 3px 0 0; flex-shrink: 0; accent-color: var(--setup-accent, #8fe2cb); }
+.client-access button, .client-access-confirmation button { justify-self: start; min-height: 40px; padding: 8px 14px; font: inherit; }
+.client-access-confirmation { width: min(720px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; box-sizing: border-box; padding: 24px; background: var(--studio-paper, #11131a); color: var(--studio-ink, #f4f1ea); font-family: var(--font, sans-serif); }
+.client-access-confirmation h2 { font-size: 1.4em; }
+.client-access-confirmation p { line-height: 1.6; }
+.client-access-confirmation .client-access-warning { padding: 12px; border: 1px solid var(--studio-line, #343743); border-radius: 8px; }
+.client-access-confirmation menu { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; padding: 12px 0 0; }
+@media (max-width: 560px) { .client-access-identity { grid-template-columns: minmax(0, 1fr); gap: 4px; } .client-access-identity dd { margin-bottom: 8px; } }

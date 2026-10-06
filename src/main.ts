@@ -79,6 +79,7 @@ import type {
 import { FORMS, formLabel, formReason, kindLabel, KINDS, weightLabel, WEIGHTS } from "./types";
 import { createSetupController } from "./complete-setup-ui";
 import { mountHostLinkSettings } from "./host-link-ui";
+import { mountClientAccessSettings } from "./client-access-ui";
 import { ageText, paintClientSummary, watchClientLinks } from "./connection-summary";
 import type { ProjectWorkspace } from "./project-workspace";
 import { ensureGameLoopOnCanvas, ensureGameSkeletonOnCanvas } from "./project-game-canvas";
@@ -1040,6 +1041,7 @@ const displayTarget = mountDisplayTarget(settings.querySelector<HTMLElement>("#s
 const autostart = mountAutostart(settings.querySelector<HTMLElement>("#settings-panel-appearance")!);
 mountHostLinkSettings(document.querySelector<HTMLElement>("#agent-result")!);
 mountHostLinkSettings(settings.querySelector<HTMLElement>("#settings-panel-connection")!);
+mountClientAccessSettings(settings.querySelector<HTMLElement>("#settings-panel-connection")!);
 watchClientLinks(paintConnection);
 function selectSettingsTab(id: string, focus = false) {
   const selectedTab = settingsTabs.find(tab => tab.dataset.settingsTab === id);

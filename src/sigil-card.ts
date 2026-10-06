@@ -5,7 +5,7 @@ import "./sigil-card.css";
 import { st, type SigilKey } from "./i18n/sigil";
 import { isDesktopShell } from "./shell";
 import {
-  approveCommand, controlSigil, decideCheck, decideHandover, deleteSigil, dispatchSigil, fetchSigil, fetchSigilDiff, fetchSigilStep, freezeSigil, noteSigil, reopenStep,
+  approveCommand, controlSigil, decideCheck, decideHandover, deleteSigil, dispatchSigil, fetchSigil, fetchSigilDiff, fetchSigilStep, freezeSigil, noteSigil, reopenStep, reviewSigil,
   rerunChecks, revertAmendment, startSigil, unfreezeSigil, type AmendmentChange, type ChangedPath, type CheckResult, type PendingCommand, type SigilCheck,
   type SigilStep, type SigilView, type StepProgress,
 } from "./sigil-api";
@@ -14,6 +14,7 @@ export type SigilReference = { type: "sigil"; sigil_id: string };
 export type SigilCard = { refresh(): void; refreshLabels(): void; destroy(): void };
 
 const VISIBLE_STEPS = 8;
+const issueMessage = (issue: { code: string; message: string }) => issue.code === "native_review_required" ? st("nativeReviewRequired") : issue.message;
 const VISIBLE_FILES = 12;
 
 /** Cards to refresh when the app reports a change to their sigil, without repainting the board. */
@@ -645,14 +646,14 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
     if (errors.length) {
       review.append(el("p", "sigil-card-errors", st("errors", { n: errors.length })));
       const list = el("ul", "sigil-card-issues");
-      for (const issue of errors) list.append(el("li", "", issue.step_id ? `${issue.step_id} · ${issue.message}` : issue.message));
+      for (const issue of errors) list.append(el("li", "", issue.step_id ? `${issue.step_id} · ${issueMessage(issue)}` : issueMessage(issue)));
       review.append(list);
     } else review.append(el("p", "sigil-card-ready", st("ready")));
     if (warnings.length) {
       const details = el("details", "sigil-card-warnings");
       details.append(el("summary", "", st("warnings", { n: warnings.length })));
       const list = el("ul", "sigil-card-issues");
-      for (const issue of warnings) list.append(el("li", "", issue.step_id ? `${issue.step_id} · ${issue.message}` : issue.message));
+      for (const issue of warnings) list.append(el("li", "", issue.step_id ? `${issue.step_id} · ${issueMessage(issue)}` : issueMessage(issue)));
       details.append(list);
       review.append(details);
     }
@@ -663,11 +664,12 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
     const { sigil } = current;
     const id = reference.sigil_id;
     if (sigil.state === "draft") {
-      actions.append(button(st("freeze"), async () => {
-        const latest = await fetchSigil(id);
-        if (!latest.review.can_freeze) { view = latest; return; }
+      const pendingReview = current.review.issues.some(issue => issue.code === "native_review_required");
+      if (!pendingReview || isDesktopShell()) actions.append(button(st(pendingReview ? "nativeReviewFreeze" : "freeze"), async () => {
+        const latest = pendingReview ? await reviewSigil(id, sigil.revision) : await fetchSigil(id);
+        if (!latest.review.can_freeze) { view = latest; message = latest.review.issues.map(issueMessage).join(" "); return; }
         if (await confirmDialog(st("freezeTitle"), freezeSummary(latest), st("freezeConfirm"))) await freezeSigil(id, latest.sigil.revision);
-      }, !current.review.can_freeze));
+      }, !current.review.can_freeze && !pendingReview));
     }
     if (sigil.state === "frozen") {
       if (canHandOver(current)) {

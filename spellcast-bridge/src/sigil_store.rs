@@ -204,6 +204,14 @@ pub(crate) fn actor_json(actor: &SigilActor) -> Value {
 
 /// Draft and freeze rules. Run changes are written as closures by the workspace.
 fn apply_change(change: SigilChange<'_>, sigil_id: &str, current: Option<Sigil>, actor: &SigilActor, now: u64, events: &mut Events) -> Result<Applied, String> {
+    apply_change_with_draft_authority(change, sigil_id, current, actor, now, events, false)
+}
+
+fn apply_change_with_draft_authority(change: SigilChange<'_>, sigil_id: &str, current: Option<Sigil>, actor: &SigilActor, now: u64, events: &mut Events, delegated_draft: bool) -> Result<Applied, String> {
+    // This does not turn a client into a user or grant any lifecycle authority.
+    if delegated_draft && (actor.kind != "client" || !matches!(&change, SigilChange::PutPlan { .. })) {
+        return Err("invalid delegated draft operation".into());
+    }
     let lifecycle = |sigil: &mut Sigil| {
         sigil.revision += 1;
         sigil.updated_at_ms = now;
@@ -219,7 +227,7 @@ fn apply_change(change: SigilChange<'_>, sigil_id: &str, current: Option<Sigil>,
                         plan: plan.clone(),
                         state: SigilState::Draft,
                         revision: 1,
-                        owner_source: actor.source_id.clone().unwrap_or_default(),
+                        owner_source: if delegated_draft { String::new() } else { actor.source_id.clone().unwrap_or_default() },
                         created_at_ms: now,
                         updated_at_ms: now,
                         updated_by: actor.clone(),
@@ -235,7 +243,7 @@ fn apply_change(change: SigilChange<'_>, sigil_id: &str, current: Option<Sigil>,
                     if sigil.state != SigilState::Draft {
                         return Err("只有草稿可以修改方案；已冻结的法阵请先在窗口解除冻结。".into());
                     }
-                    if !actor.is_user() {
+                    if !actor.is_user() && !delegated_draft {
                         let source = actor.source_id.clone().unwrap_or_default();
                         if sigil.owner_source.is_empty() {
                             sigil.owner_source = source;
@@ -290,6 +298,19 @@ fn apply_change(change: SigilChange<'_>, sigil_id: &str, current: Option<Sigil>,
             Ok(Applied::Delete)
         }
     }
+}
+
+/// Pure draft persistence inside the client boundary's grant/receipt/audit transaction.
+/// No review, filesystem access, notifications to executors, or process launch.
+pub(crate) fn client_put_plan(transaction: &Transaction<'_>, id: &str, revision: u64, plan: &SigilPlan, actor: &SigilActor, now: u64) -> Result<SigilMutation, String> {
+    let mut events = Events::new();
+    let applied = apply_change_with_draft_authority(SigilChange::PutPlan { expected_revision: revision, plan }, id,
+        read(transaction, id)?, actor, now, &mut events, true)?;
+    let Applied::Write { sigil, history, created } = applied else { return Err("invalid client draft result".into()); };
+    for (kind, value) in &events { append_event(transaction, id, now, kind, value)?; }
+    write(transaction, &sigil, history)?;
+    Ok(SigilMutation { sigil_id: id.into(), sigil: Some(*sigil), created, deleted: false, replayed: false,
+        notices: vec![], cursor: last_seq(transaction, id)? })
 }
 
 impl Store {

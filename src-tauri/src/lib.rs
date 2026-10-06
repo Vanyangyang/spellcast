@@ -18,6 +18,9 @@ mod autostart;
 mod new_chat;
 mod state_path;
 mod project_api_key;
+mod client_authorization;
+#[cfg(windows)]
+pub mod client_identity;
 mod observer_runtime;
 
 /// Headless notification mode runs before Tauri, so completed tasks never launch the board.
@@ -532,7 +535,7 @@ pub fn run() {
                         app: handle.clone(),
                     },
                     port,
-                    data_path,
+                    &data_path,
                 )
                 .map_err(|err| std::io::Error::other(format!("Spellcast 状态恢复失败：{err}")))?;
             match local_project_key {
@@ -541,6 +544,9 @@ pub fn run() {
             }
             bridge.configure_host_bootstrap_secret(&host_link_key).map_err(std::io::Error::other)?;
             let bridge=Arc::new(bridge);
+            let client_authorization=client_authorization::ClientAuthorization::new(bridge.clone());
+            client_authorization.start(&data_path);
+            app.manage(client_authorization);
             observer_runtime::configure(&handle, &bridge);
             app.manage(AppState {
                 bridge: bridge.clone(),
@@ -583,6 +589,9 @@ pub fn run() {
             get_board,
             project_window_key,
             host_link_key,
+            client_authorization::client_access_list,
+            client_authorization::client_access_approve,
+            client_authorization::client_access_revoke,
             open_project_game_source,
             new_chat::codex_workspaces,
             new_chat::open_canvas_new_chat,
@@ -625,6 +634,7 @@ pub fn run() {
     match result {
         Ok(app) => app.run(|handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(state) = handle.try_state::<Arc<client_authorization::ClientAuthorization>>() { state.stop(); }
                 if let Some(state) = handle.try_state::<AppState>() {
                     state.bridge.shutdown_observers();
                 }

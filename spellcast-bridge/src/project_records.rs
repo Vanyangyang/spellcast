@@ -127,7 +127,7 @@ pub struct WorkRecord {
 /// Provenance supplied by the bridge, never accepted from a mutation body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RecordActor {
-    /// `user`, `agent`, or `import`.
+    /// `user`, `agent`, `import`, or a native-authorized application `client`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,

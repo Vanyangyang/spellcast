@@ -244,6 +244,11 @@ export async function fetchSigil(id: string): Promise<SigilView> {
   return body as SigilView;
 }
 
+/** Explicit native user action; automatic card refresh must not inspect repositories. */
+export function reviewSigil(id: string, expectedRevision: number): Promise<SigilView> {
+  return projectOwnerPost<SigilView>(path(id, "review"), { expected_revision: expectedRevision });
+}
+
 /** The observed patch of a step, or of edits made outside any step; read-only like the sigil. */
 export async function fetchSigilDiff(id: string, target: { step_id?: string; outside?: number; path?: string }): Promise<SigilDiff> {
   const query = new URLSearchParams();

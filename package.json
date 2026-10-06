@@ -12,6 +12,8 @@
     "check:complete-setup-ui": "node scripts/check-complete-setup-ui.mjs",
     "check:complete-setup-preview": "node scripts/check-complete-setup-preview.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
+    "check:client-access-ui": "node scripts/check-client-access-ui.mjs",
+    "check:client-draft-card": "node scripts/check-client-draft-card.mjs",
     "check:autostart-ui": "node scripts/check-autostart-ui.mjs",
     "check:autostart-installer": "node scripts/check-autostart-installer.mjs",
     "check:observer-provider-ui": "node scripts/check-observer-provider-ui.mjs",

@@ -34,6 +34,7 @@ pub mod project_goals;
 mod project_record_store;
 pub mod project_workspace;
 mod project_api;
+pub mod client_access;
 pub mod sigils;
 mod sigil_store;
 pub mod sigil_workspace;
@@ -326,6 +327,8 @@ pub struct Bridge {
     store: Option<Mutex<Store>>,
     project_window_key: String,
     project_local_key: Option<String>,
+    /// Public boot correlation value, never an authentication credential.
+    client_epoch: String,
     game_repositories: game_config::RepositoryCache,
     game_indexes: game_projection::ProjectionCache,
     status: Mutex<Status>,
@@ -386,6 +389,7 @@ impl Bridge {
             annotation_index: Mutex::new(None),
             project_window_key: format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple()),
             project_local_key: None,
+            client_epoch: uuid::Uuid::new_v4().to_string(),
             game_repositories: game_config::RepositoryCache::default(),
             game_indexes: game_projection::ProjectionCache::default(),
             store: store.map(Mutex::new),

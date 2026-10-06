@@ -130,7 +130,7 @@ pub struct SigilPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct SigilActor {
-    /// `user` or `agent`.
+    /// `user`, `agent`, or a native-authorized draft-only `client`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,

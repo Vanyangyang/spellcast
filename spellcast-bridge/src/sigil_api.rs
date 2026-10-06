@@ -26,6 +26,7 @@ pub(crate) fn router() -> Router<Arc<Bridge>> {
         .route("/api/sigils/:id/amendments/revert", post(revert))
         .route("/api/sigils/:id/steps/reopen", post(reopen))
         .route("/api/sigils/:id/plan", post(put_plan).layer(DefaultBodyLimit::max(PLAN_BODY_LIMIT)))
+        .route("/api/sigils/:id/review", post(review))
         .route("/api/sigils/:id/freeze", post(freeze))
         .route("/api/sigils/:id/unfreeze", post(unfreeze))
         .route("/api/sigils/:id/delete", post(delete))
@@ -233,6 +234,14 @@ async fn put_plan(State(b): State<Arc<Bridge>>, Path(id): Path<String>, headers:
 async fn freeze(State(b): State<Arc<Bridge>>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<Transition>) -> Result<Json<Value>, Fail> {
     application(&headers, &b)?;
     b.sigil_freeze(&id, &req.request_id, req.expected_revision).map(Json).map_err(bad)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewRequest { expected_revision:u64 }
+async fn review(State(b): State<Arc<Bridge>>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<ReviewRequest>) -> Result<Json<Value>, Fail> {
+    application(&headers,&b)?;
+    b.sigil_user_review(&id,req.expected_revision).map(Json).map_err(bad)
 }
 
 async fn unfreeze(State(b): State<Arc<Bridge>>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<Transition>) -> Result<Json<Value>, Fail> {

@@ -101,7 +101,7 @@ pub(crate) fn request_hash(value: &Value) -> String {
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
 }
 
-fn validate_request_id(request_id: &str) -> Result<(), SpellcastError> {
+pub(crate) fn validate_request_id(request_id: &str) -> Result<(), SpellcastError> {
     spellcast_core::reply::validate_id(request_id)?;
     if request_id.len() > 120 {
         return Err(fail("request_id 最多 120 个字符。"));
@@ -131,7 +131,16 @@ impl Bridge {
                 validate_sigil_id(&query.sigil_id).map_err(fail)?;
                 let sigil = store.sigil_get(&query.sigil_id).map_err(fail)?;
                 drop(store);
-                let review = review(&sigil.id, &sigil.plan);
+                // Board invalidation mounts/refreshes cards automatically. A
+                // delegated save must not indirectly read its repository here.
+                // Explicit native review/freezing still uses window-only routes.
+                let review = if sigil.state == crate::sigils::SigilState::Draft && sigil.updated_by.kind == "client" {
+                    crate::sigils::SigilReview { can_freeze:false,
+                        issues:vec![crate::sigils::SigilIssue {level:crate::sigils::IssueLevel::Error,step_id:None,
+                            code:"native_review_required".into(),message:"客户端草稿尚未原生复核；请在 Spellcast 窗口点击原生审阅，核对方案后再冻结。".into()}],
+                        commands:crate::sigils::commands(&sigil.plan),location:sigil.plan.location,
+                        execution_directory:crate::sigils::execution_directory(&sigil.id,&sigil.plan) }
+                } else { review(&sigil.id, &sigil.plan) };
                 let run = sigil.run.as_ref();
                 let lights: serde_json::Map<String, Value> = sigil.plan.steps.iter()
                     .map(|step| (step.id.clone(), json!(crate::sigils::step_light(&sigil.plan, run, step)))).collect();
@@ -269,6 +278,19 @@ impl Bridge {
         if let Some(error) = card_error {
             value["card_error"] = json!(error);
         }
+        Ok(value)
+    }
+
+    /// Explicit native-window review only. Automatic card reads stay pure for
+    /// client drafts. The HTTP caller MUST require the existing window credential.
+    pub fn sigil_user_review(&self, id: &str, expected_revision: u64) -> Result<Value, SpellcastError> {
+        let mut value=self.sigil_query(SigilQuery {view:"sigil".into(),sigil_id:id.into(),..Default::default()})?;
+        let sigil:crate::sigils::Sigil=serde_json::from_value(value["sigil"].clone()).map_err(fail)?;
+        if sigil.state!=crate::sigils::SigilState::Draft || sigil.revision!=expected_revision {return Err(fail("草稿版本已变化，请刷新后重新审阅。"));}
+        let reviewed=review(id,&sigil.plan);
+        let current=self.sigil_store()?.sigil_get(id).map_err(fail)?;
+        if current.revision!=expected_revision || current.state!=crate::sigils::SigilState::Draft {return Err(fail("草稿在审阅期间变化，请重新审阅。"));}
+        value["review"]=serde_json::to_value(reviewed).map_err(fail)?;
         Ok(value)
     }
 

@@ -1788,6 +1788,19 @@ fn validate_source_reference(reference: &SourceReference) -> Result<(), String> 
     validate_free_text("来源引用版本", &reference.version)
 }
 
+/// Only the native OS-authenticated application boundary calls this. Its outer
+/// transaction owns grant checks, receipts and audit; this cannot manage a project.
+pub(crate) fn client_put_record(
+    transaction: &Transaction<'_>, command: &RecordCommand, actor: &RecordActor,
+) -> Result<RecordMutationResult, String> {
+    validate_command_envelope(command, actor)?;
+    if actor.kind != "client" { return Err("invalid client actor".into()); }
+    let RecordChange::PutRecord { id, expected_revision, fields } = &command.change else {
+        return Err("client save only supports put_record".into());
+    };
+    put_record(transaction, command, actor, id, *expected_revision, fields, current_time_ms()?)
+}
+
 fn validate_record_object_membership(
     connection: &Connection,
     project: &str,
@@ -1822,8 +1835,8 @@ fn validate_history_shape(history: &RecordHistory) -> Result<(), String> {
 }
 
 fn validate_actor(actor: &RecordActor) -> Result<(), String> {
-    if !matches!(actor.kind.as_str(), "user" | "agent" | "import") {
-        return Err("记录执行者 kind 必须是 user、agent 或 import。".into());
+    if !matches!(actor.kind.as_str(), "user" | "agent" | "import" | "client") {
+        return Err("记录执行者 kind 必须是 user、agent、import 或 client。".into());
     }
     validate_name("记录执行者标签", &actor.label)?;
     for (label, value, maximum) in [

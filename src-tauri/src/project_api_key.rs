@@ -36,20 +36,20 @@ pub(crate) fn load_or_create_named(database: &Path, name: &str) -> Result<String
     Ok(value)
 }
 
-fn require_plain(path: &Path) -> Result<(),String> {
+pub(crate) fn require_plain(path: &Path) -> Result<(),String> {
     let metadata=fs::symlink_metadata(path).map_err(|e|e.to_string())?;
     if metadata.file_type().is_symlink() { return Err("项目凭据路径不能是符号链接。".into()); }
     Ok(())
 }
 
 #[cfg(unix)]
-fn protect(path:&Path,directory:bool)->Result<(),String> {
+pub(crate) fn protect(path:&Path,directory:bool)->Result<(),String> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path,fs::Permissions::from_mode(if directory {0o700}else{0o600})).map_err(|e|e.to_string())
 }
 
 #[cfg(windows)]
-fn protect(path:&Path,directory:bool)->Result<(),String> {
+pub(crate) fn protect(path:&Path,directory:bool)->Result<(),String> {
     use std::{os::windows::ffi::OsStrExt,ptr};
     use windows_sys::Win32::{Foundation::LocalFree,Security::{
         Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -72,7 +72,7 @@ fn protect(path:&Path,directory:bool)->Result<(),String> {
 }
 
 #[cfg(not(any(unix,windows)))]
-fn protect(_: &Path,_:bool)->Result<(),String> { Err("此系统暂不支持保护本机项目凭据。".into()) }
+pub(crate) fn protect(_: &Path,_:bool)->Result<(),String> { Err("此系统暂不支持保护本机项目凭据。".into()) }
 
 #[cfg(test)]
 mod tests {

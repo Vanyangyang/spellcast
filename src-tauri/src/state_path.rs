@@ -226,6 +226,10 @@ fn migrate(source: &Path, target: &Path) -> Result<(), String> {
             }
         }
         validate(&snapshot)?;
+        // Data migration must never replay a prior native application approval.
+        // This changes only application delegation; Agent/task access is separate.
+        spellcast_bridge::client_access::revoke_imported_grants(&mut snapshot)
+            .map_err(|_| "迁移应用委托失败；未发布数据库或恢复任何应用写权。".to_string())?;
         drop(snapshot);
         fs::OpenOptions::new()
             .write(true)
@@ -302,6 +306,23 @@ mod tests {
         assert_eq!(windows_default(f.0.clone()).unwrap(), f.target());
         assert!(windows_default(PathBuf::from("relative")).is_err());
         assert!(absolute(PathBuf::from("")).is_err());
+    }
+    #[test]
+    fn migration_revokes_client_delegation_without_changing_source_or_receipts() {
+        use spellcast_bridge::client_access::{ClientGrant,ClientIdentity,ClientScopes};
+        let f=Fixture::new(); let source=f.source("delegation-import.sqlite3");
+        let original=Connection::open(&source).unwrap();
+        original.execute_batch("CREATE TABLE spellcast_client_grants(client_key TEXT PRIMARY KEY,id TEXT UNIQUE,value TEXT NOT NULL);
+            CREATE TABLE spellcast_client_receipts(grant_id TEXT,request_id TEXT,body_hash TEXT,scope TEXT,result_json TEXT,generation INTEGER,PRIMARY KEY(grant_id,request_id));").unwrap();
+        let grant=ClientGrant {id:uuid::Uuid::new_v4().to_string(),identity:ClientIdentity{path:"C:\\Synthetic\\ccgui-next.exe".into(),sha256:"a".repeat(64),sid:"S-1-5-21-100-1001".into(),file_id:"00000001".into()},scopes:ClientScopes{records:true,sigil_drafts:true},state:"approved".into(),revision:1,generation:1,approved_at_ms:1,updated_at_ms:1};
+        original.execute("INSERT INTO spellcast_client_grants VALUES('synthetic',?1,?2)",rusqlite::params![grant.id,serde_json::to_string(&grant).unwrap()]).unwrap();
+        original.execute("INSERT INTO spellcast_client_receipts VALUES(?1,'committed','hash','records','{\"committed\":true}',1)",[&grant.id]).unwrap();
+        drop(original); fs::create_dir_all(f.target().parent().unwrap()).unwrap(); migrate(&source,&f.target()).unwrap();
+        let current=Connection::open(f.target()).unwrap(); let original=Connection::open(source).unwrap();
+        let raw:String=current.query_row("SELECT value FROM spellcast_client_grants",[],|r|r.get(0)).unwrap(); let imported:ClientGrant=serde_json::from_str(&raw).unwrap();
+        assert_eq!(imported.state,"revoked"); assert_eq!(imported.generation,2);
+        let raw:String=original.query_row("SELECT value FROM spellcast_client_grants",[],|r|r.get(0)).unwrap(); assert_eq!(serde_json::from_str::<ClientGrant>(&raw).unwrap().state,"approved");
+        let count:u64=current.query_row("SELECT count(*) FROM spellcast_client_receipts",[],|r|r.get(0)).unwrap(); assert_eq!(count,1);
     }
 
     #[test]
