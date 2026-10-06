@@ -54,6 +54,8 @@ mod delete_lock_tests;
 #[cfg(test)]
 mod canvas_cleanup_tests;
 #[cfg(test)]
+mod canvas_receipt_tests;
+#[cfg(test)]
 mod project_content_tests;
 mod store;
 

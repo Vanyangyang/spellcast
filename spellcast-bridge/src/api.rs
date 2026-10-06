@@ -375,8 +375,18 @@ async fn set_canvas_delete_lock(State(b): State<Shared>, Json(req): Json<CanvasD
     b.set_canvas_delete_lock(req.current, req.locked).map(Json).map_err(bad)
 }
 
-async fn canvas_batch(State(b): State<Shared>, Json(req): Json<spellcast_core::CanvasBatchRequest>) -> Result<Json<crate::canvas::CanvasOutcome>, Fail> {
-    b.canvas_batch(req, None).map(Json).map_err(bad)
+#[derive(Deserialize)]
+struct CanvasBatchQuery {
+    // Opt in to the raw CanvasBatchResult. All other values retain { result, board }.
+    response: Option<String>,
+}
+
+async fn canvas_batch(State(b): State<Shared>, Query(query): Query<CanvasBatchQuery>, Json(req): Json<spellcast_core::CanvasBatchRequest>) -> Result<Response, Fail> {
+    if query.response.as_deref() == Some("receipt") {
+        b.canvas_batch_receipt(req, None).map(|result| Json(result).into_response()).map_err(bad)
+    } else {
+        b.canvas_batch(req, None).map(|outcome| Json(outcome).into_response()).map_err(bad)
+    }
 }
 
 async fn organize_canvas(State(b): State<Shared>, Json(req): Json<crate::canvas::CanvasOrganizeRequest>) -> Result<Json<crate::canvas::CanvasOutcome>, Fail> {

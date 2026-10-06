@@ -215,6 +215,7 @@ fn organize_applied_receipt_and_source_content_survive_restart() {
 
 #[tokio::test]
 async fn organize_http_route_accepts_user_batch() {
+    use http_body_util::BodyExt;
     use tower::ServiceExt;
     let bridge = std::sync::Arc::new(fixture());
     let canvas_revision = bridge.board().canvas.revision;
@@ -228,5 +229,10 @@ async fn organize_http_route_accepts_user_batch() {
             ]}
         }).to_string())).unwrap()).await.unwrap();
     assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let outcome: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(outcome["result"]["request_id"], "http-organize");
+    assert_eq!(outcome["result"]["status"], "applied");
+    assert_eq!(outcome["board"], serde_json::to_value(bridge.board()).unwrap());
     assert!(bridge.board().canvas.placement("first").unwrap().removed);
 }

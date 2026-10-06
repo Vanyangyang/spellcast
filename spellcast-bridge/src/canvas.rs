@@ -189,11 +189,26 @@ pub struct CanvasOrganizeDelivery {
 
 impl Bridge {
     pub fn canvas_batch(&self, request: CanvasBatchRequest, source_id: Option<&str>) -> Result<CanvasOutcome, SpellcastError> {
+        self.commit_canvas_batch(request, source_id, |result, state| CanvasOutcome {
+            result, board: state.session.snapshot(),
+        })
+    }
+
+    /// Return only the transaction receipt, without constructing a board snapshot.
+    /// Like canvas_batch, this returns only after update has committed and saved the state.
+    pub fn canvas_batch_receipt(&self, request: CanvasBatchRequest, source_id: Option<&str>) -> Result<CanvasBatchResult, SpellcastError> {
+        self.commit_canvas_batch(request, source_id, |result, _| result)
+    }
+
+    fn commit_canvas_batch<R>(&self, request: CanvasBatchRequest, source_id: Option<&str>, response: impl FnOnce(CanvasBatchResult, &PersistedState) -> R) -> Result<R, SpellcastError> {
         if let Some(source) = source_id { spellcast_core::reply::validate_id(source)?; }
         if source_id.is_none() && !request.feedback_sequences.is_empty() {
             return Err(SpellcastError::user("只有接收反馈的任务可以关联处理结果。"));
         }
-        let outcome = self.update(|state| self.apply_canvas_batch_in_state(state, request, source_id))?;
+        let outcome = self.update(|state| {
+            let result = self.apply_canvas_batch_in_state(state, request, source_id)?;
+            Ok(response(result, state))
+        })?;
         self.notify.notify_waiters();
         self.surface.board_changed();
         Ok(outcome)
@@ -204,7 +219,8 @@ impl Bridge {
         let outcome = self.update(|state| {
             // Stored retries still go through the core's full request/source fingerprint check.
             if state.session.board.canvas.proposal(&request.batch.request_id).is_some() {
-                return self.apply_canvas_batch_in_state(state, request.batch, None);
+                let result = self.apply_canvas_batch_in_state(state, request.batch, None)?;
+                return Ok(CanvasOutcome { result, board: state.session.snapshot() });
             }
             let expected_feedback = normalize_organize_feedback(request.expected_feedback)?;
             let current_feedback = CanvasOrganizeFeedback {
@@ -216,17 +232,17 @@ impl Bridge {
                 || normalize_organize_feedback(current_feedback)? != expected_feedback {
                 return Err(SpellcastError::user("画布内容、注释或反馈状态已改变，请重新预览整理。"));
             }
-            self.apply_canvas_batch_in_state(state, request.batch, None)
+            let result = self.apply_canvas_batch_in_state(state, request.batch, None)?;
+            Ok(CanvasOutcome { result, board: state.session.snapshot() })
         })?;
         self.notify.notify_waiters();
         self.surface.board_changed();
         Ok(outcome)
     }
 
-    fn apply_canvas_batch_in_state(&self, state: &mut PersistedState, request: CanvasBatchRequest, source_id: Option<&str>) -> Result<CanvasOutcome, SpellcastError> {
+    fn apply_canvas_batch_in_state(&self, state: &mut PersistedState, request: CanvasBatchRequest, source_id: Option<&str>) -> Result<CanvasBatchResult, SpellcastError> {
         if state.session.board.canvas.proposal(&request.request_id).is_some() {
-            let result = state.session.apply_canvas_batch(request, source_id)?;
-            return Ok(CanvasOutcome { result, board: state.session.snapshot() });
+            return state.session.apply_canvas_batch(request, source_id);
         }
         if let Some(source) = source_id {
             validate_feedback(state, source, &request)?;
@@ -245,7 +261,7 @@ impl Bridge {
             if let Some(source) = source_id { mark_response(state, source, &request); }
         }
         state.session.sync_canvas();
-        Ok(CanvasOutcome { result, board: state.session.snapshot() })
+        Ok(result)
     }
 
     pub fn canvas_proposal(&self, request_id: &str, action: CanvasProposalAction) -> Result<CanvasOutcome, SpellcastError> {
