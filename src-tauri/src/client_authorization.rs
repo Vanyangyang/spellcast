@@ -73,22 +73,28 @@ impl ClientAuthorization {
     pub fn start(self: &Arc<Self>, database: &Path) {
         #[cfg(windows)]
         {
-            let result = crate::client_identity::secure_storage(database)
+            // secure_storage/sid are sync; the first named-pipe create must run
+            // inside Tokio (NamedPipeServer::create requires a reactor).
+            let sid = match crate::client_identity::secure_storage(database)
                 .and_then(|_| crate::client_identity::current_sid())
-                .and_then(|sid| {
-                    let name = pipe_name(&sid);
-                    create_pipe(&name, &sid, true).map(|pipe| (name, sid, pipe))
-                });
-            let (name, sid, mut listener) = match result {
-                Ok(v) => v,
+            {
+                Ok(sid) => sid,
                 Err(e) => {
                     self.unavailable(e.code());
                     return;
                 }
             };
+            let name = pipe_name(&sid);
             self.available.store(true, Ordering::SeqCst);
             let owner = self.clone();
             let task = tauri::async_runtime::spawn(async move {
+                let mut listener = match create_pipe(&name, &sid, true) {
+                    Ok(pipe) => pipe,
+                    Err(e) => {
+                        owner.unavailable(e.code());
+                        return;
+                    }
+                };
                 let slots = Arc::new(tokio::sync::Semaphore::new(8));
                 loop {
                     if owner.stopped.load(Ordering::SeqCst) {
