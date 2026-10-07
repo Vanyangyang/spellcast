@@ -233,8 +233,22 @@ fn require_main(label: &str) -> Result<(), String> {
         Err("main_window_required".into())
     }
 }
+fn machine_client_approve_enabled() -> bool {
+    matches!(
+        std::env::var("SPELLCAST_MACHINE_CLIENT_APPROVE")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn require_confirmation(window: &tauri::WebviewWindow) -> Result<(), String> {
     require_main(window.label())?;
+    // Server / machine-AI hosts can skip the focused-window human gate.
+    if machine_client_approve_enabled() {
+        return Ok(());
+    }
     if !window.is_visible().unwrap_or(false) || !window.is_focused().unwrap_or(false) {
         return Err("visible_main_window_required".into());
     }
@@ -346,6 +360,110 @@ async fn handle_pipe(
     Ok(())
 }
 
+
+/// Headless grant of all ClientWrite scopes for a live CCGUI process.
+/// Requires `SPELLCAST_MACHINE_CLIENT_APPROVE=1`. Optional filter is an exe
+/// basename (e.g. `ccgui-next.exe`) or absolute path; default discovers
+/// `ccgui-next.exe` or `SPELLCAST_CCGUI_EXE`.
+#[cfg(windows)]
+pub fn machine_approve_running_client(filter: Option<&str>) -> Result<ClientGrant, String> {
+    if !machine_client_approve_enabled() {
+        return Err(
+            "SPELLCAST_MACHINE_CLIENT_APPROVE must be 1/true to use --machine-client-approve"
+                .into(),
+        );
+    }
+    let wanted = filter
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string())
+        .or_else(|| std::env::var("SPELLCAST_CCGUI_EXE").ok())
+        .unwrap_or_else(|| "ccgui-next.exe".into());
+    let peer = find_live_client(&wanted)?;
+    let database = crate::state_path::resolve(|| {
+        Err("machine approve uses the Windows default store only".into())
+    })?;
+    crate::client_identity::secure_storage(&database).map_err(|e| e.code().to_string())?;
+    let bridge = Bridge::open(spellcast_bridge::Headless, 0, &database)
+        .map_err(|e| format!("open store: {e}"))?;
+    let expected = bridge
+        .client_grants()
+        .map_err(|e| e.code().to_string())?
+        .into_iter()
+        .find(|g| g.identity == *peer.identity())
+        .map(|g| g.revision)
+        .unwrap_or(0);
+    let scopes = ClientScopes {
+        records: true,
+        sigil_drafts: true,
+        sigil_claims: true,
+        sigil_run: true,
+    };
+    bridge
+        .client_approve(&peer, expected, scopes)
+        .map_err(|e| e.code().to_string())
+}
+
+#[cfg(windows)]
+fn find_live_client(wanted: &str) -> Result<OsClient, String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let want_path = Path::new(wanted).is_absolute();
+    let want_lower = wanted.to_ascii_lowercase();
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err("identity_unknown".into());
+    }
+    struct Guard(HANDLE);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+    let _guard = Guard(snapshot);
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let mut ok = unsafe { Process32FirstW(snapshot, &mut entry) };
+    while ok != 0 {
+        let pid = entry.th32ProcessID;
+        if pid != 0 {
+            if let Ok(proof) = crate::client_identity::query_process(pid) {
+                if let Ok(client) = proof.client() {
+                    let path = client.identity().path.as_str();
+                    let matched = if want_path {
+                        path.eq_ignore_ascii_case(wanted)
+                    } else {
+                        Path::new(path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.eq_ignore_ascii_case(&want_lower))
+                            .unwrap_or(false)
+                    };
+                    if matched {
+                        return Ok(client);
+                    }
+                }
+            }
+        }
+        ok = unsafe { Process32NextW(snapshot, &mut entry) };
+    }
+    Err(format!(
+        "no live process matching {wanted}; start CCGUI first, then retry"
+    ))
+}
+
+#[cfg(not(windows))]
+pub fn machine_approve_running_client(_filter: Option<&str>) -> Result<ClientGrant, String> {
+    Err("unsupported_platform".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +473,10 @@ mod tests {
         for label in ["", "bubble-1", "preview", "ccgui", "main-other"] {
             assert!(require_main(label).is_err());
         }
+    }
+    #[test]
+    fn machine_approve_env_is_off_by_default() {
+        assert!(!machine_client_approve_enabled());
     }
     #[test]
     fn native_manager_starts_without_authority_or_candidates() {

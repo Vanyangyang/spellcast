@@ -89,6 +89,22 @@ pub fn handle_completion_command() -> bool {
             match result { Ok(note) => println!("{note}"), Err(err) => { eprintln!("{err}"); std::process::exit(1); } }
             true
         }
+        Some("--machine-client-approve") => {
+            let filter = args.get(2).map(String::as_str);
+            match client_authorization::machine_approve_running_client(filter) {
+                Ok(grant) => {
+                    println!(
+                        "approved grant {} rev={} gen={} scopes=records,drafts,claims,run path={}",
+                        grant.id, grant.revision, grant.generation, grant.identity.path
+                    );
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            }
+            true
+        }
         _ => false,
     }
 }

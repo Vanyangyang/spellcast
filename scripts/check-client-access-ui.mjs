@@ -111,14 +111,18 @@ const mutations = async page => (await calls(page)).filter(call => call.command 
 const candidateCard = page => page.locator("#client-access-candidates .client-access-card").first();
 const records = page => candidateCard(page).locator('[data-scope="records"]');
 const drafts = page => candidateCard(page).locator('[data-scope="sigil_drafts"]');
+const claims = page => candidateCard(page).locator('[data-scope="sigil_claims"]');
+const runScope = page => candidateCard(page).locator('[data-scope="sigil_run"]');
 const review = page => candidateCard(page).getByRole("button", { name: "Review approval" });
 const confirmation = page => page.locator("#client-access-confirmation");
 async function phase(page, value) {
   await page.waitForFunction(expected => document.querySelector("#client-access-settings").dataset.state === expected, value);
 }
-async function openConfirmation(page, { record = true, draft = false } = {}) {
+async function openConfirmation(page, { record = true, draft = false, claim = false, run = false } = {}) {
   if (record) await records(page).check();
   if (draft) await drafts(page).check();
+  if (claim) await claims(page).check();
+  if (run) await runScope(page).check();
   await review(page).click();
   assert.equal(await confirmation(page).isVisible(), true);
 }
@@ -166,6 +170,8 @@ try {
     await phase(page, "ready");
     assert.equal(await records(page).isChecked(), false);
     assert.equal(await drafts(page).isChecked(), false);
+    assert.equal(await claims(page).isChecked(), false);
+    assert.equal(await runScope(page).isChecked(), false);
     assert.equal(await review(page).isDisabled(), true);
     await page.locator("#client-access-refresh").click();
     await phase(page, "ready");
@@ -197,10 +203,14 @@ try {
     assert.equal(await confirmation(page).isVisible(), false);
     assert.deepEqual(await mutations(page), []);
   });
-  for (const scopes of [{ records: true, sigil_drafts: false }, { records: false, sigil_drafts: true }, { records: true, sigil_drafts: true }]) {
+  for (const scopes of [
+    { records: true, sigil_drafts: false, sigil_claims: false, sigil_run: false },
+    { records: false, sigil_drafts: true, sigil_claims: false, sigil_run: false },
+    { records: true, sigil_drafts: true, sigil_claims: true, sigil_run: true },
+  ]) {
     await run(`explicit approval sends only chosen scopes ${JSON.stringify(scopes)}`, {}, async page => {
       await phase(page, "ready");
-      await openConfirmation(page, { record: scopes.records, draft: scopes.sigil_drafts });
+      await openConfirmation(page, { record: scopes.records, draft: scopes.sigil_drafts, claim: scopes.sigil_claims, run: scopes.sigil_run });
       await confirmation(page).getByRole("button", { name: "Approve selected permissions", exact: true }).click();
       await phase(page, "saved");
       assert.deepEqual(await mutations(page), [{ command: "client_access_approve", args: { candidateId: "candidate-1", expectedRevision: 0, scopes } }]);

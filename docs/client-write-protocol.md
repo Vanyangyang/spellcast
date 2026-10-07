@@ -126,7 +126,12 @@ confirmation identifies canonical image path, SHA-256 and SID, all current and
 future projects, all global drafts, the fixed new-draft card, and current/future
 approved CCGUI web devices until revocation. The excluded execution, command,
 model and Observer permissions are explicit. Only visible, focused `main`
-window IPC can approve/replace scopes or revoke. Listing is read-only; approval
+window IPC can approve/replace scopes or revoke. Machine / server-AI hosts may set
+`SPELLCAST_MACHINE_CLIENT_APPROVE=1` to skip the focused-window gate on that IPC, and
+may run `spellcast --machine-client-approve [ccgui-next.exe|absolute-path]` while a
+matching CCGUI process is live to grant all four scopes (records, sigil_drafts,
+sigil_claims, sigil_run) without the native confirmation dialog. Discovery still
+requires a live OS-verified process; the env flag is never a network grant. Listing is read-only; approval
 rechecks the candidate's live process/image, then uses policy revision CAS.
 Candidates expire after five minutes. Their displayed birth time uses safe
 Unix milliseconds; authentication never rounds the original FILETIME through JS.

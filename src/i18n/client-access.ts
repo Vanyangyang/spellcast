@@ -13,7 +13,7 @@ const words = {
     candidates: "Discovered applications", grants: "Application grants", noCandidates: "No applications discovered.", noGrants: "No application grants.",
     path: "Canonical executable path", sha256: "SHA256", sid: "Windows SID", process: "Process ID", revision: "Revision", generation: "Generation",
     records: "Save records", sigilDrafts: "Save global Sigil drafts", sigilClaims: "Claim running Sigils", sigilRun: "Advance Sigil steps", review: "Review approval", revoke: "Revoke access",
-    approved: "Approved", revoked: "Revoked", pending: "Not approved", scopeNone: "No save rights selected",
+    approved: "Approved", revoked: "Revoked", pending: "Not approved", scopeNone: "No rights selected",
     identityChanged: "The application image changed. Native approval is required again.",
     confirmTitle: "Confirm application delegation", selected: "Selected permissions", cancel: "Cancel", confirm: "Approve selected permissions",
     recordsWarning: "Record permission applies to all present and future projects.",
@@ -22,7 +22,7 @@ const words = {
     runWarning: "Run permission lets the application start and report steps on claimed Sigils. It does not freeze or create worktrees.",
     devicesWarning: "This delegation also applies to all current and future approved CCGUI web devices until you revoke it.",
     exclusions: "This still does not permit freezing a draft, creating worktrees, selecting models, or using Observer. Claim/run only steer an already started Sigil.",
-    confirmHint: "Verify the executable identity and the selected permissions before approving. Neither permission is selected by default.",
+    confirmHint: "Verify the executable identity and the selected permissions before approving. No permission is selected by default. Server hosts may set SPELLCAST_MACHINE_CLIENT_APPROVE=1 and run spellcast --machine-client-approve.",
   },
   "zh-CN": {
     title: "应用委托", description: "允许经过验证的本地应用保存记录或全局 Sigil 草稿。发现应用不会授予权限。",
@@ -36,7 +36,7 @@ const words = {
     candidates: "发现的应用", grants: "应用授权", noCandidates: "尚未发现应用。", noGrants: "尚无应用授权。",
     path: "可执行文件规范路径", sha256: "SHA256", sid: "Windows SID", process: "进程 ID", revision: "修订号", generation: "授权代次",
     records: "保存记录", sigilDrafts: "保存全局 Sigil 草稿", sigilClaims: "认领运行中的法阵", sigilRun: "推进法阵步骤", review: "查看授权确认", revoke: "撤销权限",
-    approved: "已授权", revoked: "已撤销", pending: "未授权", scopeNone: "未选择保存权限",
+    approved: "已授权", revoked: "已撤销", pending: "未授权", scopeNone: "未选择权限",
     identityChanged: "应用映像已改变，需要重新原生确认。",
     confirmTitle: "确认应用委托", selected: "选择的权限", cancel: "取消", confirm: "授予所选权限",
     recordsWarning: "记录权限适用于所有现有及未来项目。",
@@ -45,7 +45,7 @@ const words = {
     runWarning: "推进权限允许应用在已认领的法阵上开始并汇报步骤；不会冻结草稿或创建 worktree。",
     devicesWarning: "此委托还适用于所有当前及未来获准的 CCGUI 网页设备，直至你撤销权限。",
     exclusions: "仍不允许冻结草稿、创建 worktree、选择模型或使用 Observer。认领/推进只对已启动的法阵生效。",
-    confirmHint: "授权前请核对可执行文件身份及所选权限。两项权限默认均不勾选。",
+    confirmHint: "授权前请核对可执行文件身份及所选权限。默认均不勾选。服务器主机可设 SPELLCAST_MACHINE_CLIENT_APPROVE=1 后运行 spellcast --machine-client-approve。",
   },
 };
 

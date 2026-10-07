@@ -84,7 +84,7 @@ export function mountClientAccessSettings(parent: HTMLElement) {
   let pending: { candidate: Candidate; scopes: Scopes; expectedRevision: number } | null = null;
   const actionButtons = new Set<HTMLButtonElement>();
   const scopeInputs = new Set<HTMLInputElement>();
-  const reviewButtons = new Map<HTMLButtonElement, [HTMLInputElement, HTMLInputElement]>();
+  const reviewButtons = new Map<HTMLButtonElement, HTMLInputElement[]>();
   const dynamicLabels = new Set<HTMLElement>();
   const addLabel = <K extends keyof HTMLElementTagNameMap>(tag: K, key: ClientAccessTextKey, container: HTMLElement) => {
     const node = localized(tag, key, container);
@@ -178,12 +178,18 @@ export function mountClientAccessSettings(parent: HTMLElement) {
       process.append(document.createTextNode(`: ${candidate.process_id}`));
       card.append(process);
       addLabel("p", candidate.grant && !sameIdentity(candidate.identity, candidate.grant.identity) ? "identityChanged" : candidate.grant?.state ?? "pending", card);
-      const inputs = (["records", "sigilDrafts"] as const).map((key, index) => {
+      const scopeDefs = [
+        { key: "records" as const, scope: "records" },
+        { key: "sigilDrafts" as const, scope: "sigil_drafts" },
+        { key: "sigilClaims" as const, scope: "sigil_claims" },
+        { key: "sigilRun" as const, scope: "sigil_run" },
+      ];
+      const inputs = scopeDefs.map(({ key, scope }) => {
         const label = document.createElement("label");
         label.className = "client-access-scope";
         const input = document.createElement("input");
         input.type = "checkbox";
-        input.dataset.scope = index === 0 ? "records" : "sigil_drafts";
+        input.dataset.scope = scope;
         input.checked = false;
         label.append(input);
         addLabel("span", key, label);
@@ -191,11 +197,16 @@ export function mountClientAccessSettings(parent: HTMLElement) {
         scopeInputs.add(input);
         input.addEventListener("change", paint);
         return input;
-      }) as [HTMLInputElement, HTMLInputElement];
+      });
       const button = addLabel("button", "review", card);
       button.type = "button";
       reviewButtons.set(button, inputs);
-      button.addEventListener("click", () => review(candidate, { records: inputs[0].checked, sigil_drafts: inputs[1].checked }));
+      button.addEventListener("click", () => review(candidate, {
+        records: inputs[0].checked,
+        sigil_drafts: inputs[1].checked,
+        sigil_claims: inputs[2].checked,
+        sigil_run: inputs[3].checked,
+      }));
     }
     for (const grant of data.grants) {
       const card = document.createElement("article");
@@ -260,7 +271,11 @@ export function mountClientAccessSettings(parent: HTMLElement) {
   async function approve(request: NonNullable<typeof pending>) {
     await mutate("client_access_approve", { candidateId: request.candidate.id, expectedRevision: request.expectedRevision, scopes: request.scopes },
       grant => grant.state === "approved" && sameIdentity(grant.identity, request.candidate.identity)
-        && grant.revision > request.expectedRevision && grant.scopes.records === request.scopes.records && grant.scopes.sigil_drafts === request.scopes.sigil_drafts);
+        && grant.revision > request.expectedRevision
+        && grant.scopes.records === request.scopes.records
+        && grant.scopes.sigil_drafts === request.scopes.sigil_drafts
+        && Boolean(grant.scopes.sigil_claims) === Boolean(request.scopes.sigil_claims)
+        && Boolean(grant.scopes.sigil_run) === Boolean(request.scopes.sigil_run));
   }
   async function revoke(grant: Grant) {
     await mutate("client_access_revoke", { grantId: grant.id, expectedRevision: grant.revision },
