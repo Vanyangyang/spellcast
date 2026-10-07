@@ -65,7 +65,7 @@ file ID. `process_stamp` also binds PID and exact creation FILETIME.
 }
 ```
 
-Exactly three changes exist:
+Save changes:
 
 | Change | Permission and boundary |
 | --- | --- |
@@ -75,6 +75,7 @@ Exactly three changes exist:
 | `sigil_claim` with `id`, optional `label` | `scopes.sigil_claims`; claim or request handover on an already started Sigil. Source id is `ccgui:<grant_id>`. |
 | `sigil_start_step` with `id`, `step_id` | `scopes.sigil_run`; begin a step after a successful claim. |
 | `sigil_report_step` with `id`, `step_id`, optional `summary`/`evidence` | Same scope; report the active step. Observation snapshots may follow on the next observe loop. |
+| `sigil_execute` with `id`, `expected_revision` | `scopes.sigil_run`; freeze and autonomously start a draft this grant saved (`updated_by.kind` is `client`, author source `client:<grant_id>`). Does not claim. Does not accept argv, shell, amend, or command approval. The window `POST /api/sigils/:id/execute` path is unchanged. |
 
 CCGUI remote browsers never open the named pipe. A paired, approved web device calls workbench mutate on the desktop process; the desktop ClientWrite client performs the pipe exchange. Pin confirmation remains desktop-only.
 
@@ -92,7 +93,7 @@ the UI freeze control. The native user can explicitly click “Review in Spellca
 guard and current draft revision. It performs review only on that explicit action
 and opens the existing freeze confirmation if review passes. This operation is
 absent from the delegated pipe. The original native window freeze authority/checks
-are unchanged; the delegated application has no freeze operation.
+are unchanged. `sigil_execute` is the pipe's freeze-and-start for a draft this grant authored. It still does not run arbitrary commands, select models, or use Observer. Agent MCP execute continues to refuse client-authored drafts. Missing `sigil_run` returns `scope_denied` and leaves the draft unstarted.
 
 ```json
 {
@@ -130,7 +131,9 @@ window IPC can approve/replace scopes or revoke. Machine / server-AI hosts may s
 `SPELLCAST_MACHINE_CLIENT_APPROVE=1` to skip the focused-window gate on that IPC, and
 may run `spellcast --machine-client-approve [ccgui-next.exe|absolute-path]` while a
 matching CCGUI process is live to grant all four scopes (records, sigil_drafts,
-sigil_claims, sigil_run) without the native confirmation dialog. Discovery still
+sigil_claims, sigil_run) without the native confirmation dialog. `sigil_run` is
+what authorizes `sigil_execute` as well as step start/report, so that machine
+grant can freeze and start a draft without the Spellcast window. Discovery still
 requires a live OS-verified process; the env flag is never a network grant. Listing is read-only; approval
 rechecks the candidate's live process/image, then uses policy revision CAS.
 Candidates expire after five minutes. Their displayed birth time uses safe

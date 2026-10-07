@@ -19,9 +19,9 @@ const words = {
     recordsWarning: "Record permission applies to all present and future projects.",
     draftsWarning: "Sigil draft permission applies to all global drafts. New drafts also create their fixed new-draft Canvas card.",
     claimsWarning: "Claim permission lets the application take or request executor ownership on running Sigils.",
-    runWarning: "Run permission lets the application start and report steps on claimed Sigils. It does not freeze or create worktrees.",
+    runWarning: "Run permission lets the application start and report steps, and freeze plus start a draft it saved. It does not run arbitrary commands.",
     devicesWarning: "This delegation also applies to all current and future approved CCGUI web devices until you revoke it.",
-    exclusions: "This still does not permit freezing a draft, creating worktrees, selecting models, or using Observer. Claim/run only steer an already started Sigil.",
+    exclusions: "Run permission is what allows freezing, starting and executing a draft this grant saved. This does not permit arbitrary commands, selecting or changing models, or using Observer.",
     confirmHint: "Verify the executable identity and the selected permissions before approving. No permission is selected by default. Server hosts may set SPELLCAST_MACHINE_CLIENT_APPROVE=1 and run spellcast --machine-client-approve.",
   },
   "zh-CN": {
@@ -42,9 +42,9 @@ const words = {
     recordsWarning: "记录权限适用于所有现有及未来项目。",
     draftsWarning: "法阵草稿权限适用于所有全局草稿。每个新草稿会同时创建固定的新草稿 Canvas 引用卡片。",
     claimsWarning: "认领权限允许应用在运行中的法阵上取得或请求执行者身份。",
-    runWarning: "推进权限允许应用在已认领的法阵上开始并汇报步骤；不会冻结草稿或创建 worktree。",
+    runWarning: "推进权限允许应用开始并汇报步骤，也可冻结并启动它自己保存的草稿。不会运行任意命令。",
     devicesWarning: "此委托还适用于所有当前及未来获准的 CCGUI 网页设备，直至你撤销权限。",
-    exclusions: "仍不允许冻结草稿、创建 worktree、选择模型或使用 Observer。认领/推进只对已启动的法阵生效。",
+    exclusions: "推进权限才会冻结、启动并执行本委托保存的草稿。仍不允许任意命令、选择或更换模型，或使用 Observer。",
     confirmHint: "授权前请核对可执行文件身份及所选权限。默认均不勾选。服务器主机可设 SPELLCAST_MACHINE_CLIENT_APPROVE=1 后运行 spellcast --machine-client-approve。",
   },
 };
