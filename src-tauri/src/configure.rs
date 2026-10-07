@@ -15,6 +15,7 @@ const SPELLCAST_REF_ASIDES: &str = include_str!("../../skills/spellcast/referenc
 const SPELLCAST_REF_CANVAS: &str = include_str!("../../skills/spellcast/references/canvas.md");
 const SPELLCAST_REF_WORKS: &str = include_str!("../../skills/spellcast/references/works.md");
 const SPELLCAST_REF_FEEDBACK: &str = include_str!("../../skills/spellcast/references/feedback.md");
+const SPELLCAST_REF_SIGIL: &str = include_str!("../../skills/spellcast/references/sigil.md");
 
 fn skill_reference_files() -> &'static [(&'static str, &'static str)] {
     &[
@@ -22,6 +23,7 @@ fn skill_reference_files() -> &'static [(&'static str, &'static str)] {
         ("references/canvas.md", SPELLCAST_REF_CANVAS),
         ("references/works.md", SPELLCAST_REF_WORKS),
         ("references/feedback.md", SPELLCAST_REF_FEEDBACK),
+        ("references/sigil.md", SPELLCAST_REF_SIGIL),
     ]
 }
 

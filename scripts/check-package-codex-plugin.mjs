@@ -124,6 +124,7 @@ function assertPackage(dest, port) {
     "skills/spellcast/references/canvas.md",
     "skills/spellcast/references/works.md",
     "skills/spellcast/references/feedback.md",
+    "skills/spellcast/references/sigil.md",
     "package-meta.json",
     process.platform === "win32" ? "bin/spellcast-hook.exe" : "bin/spellcast-hook",
   ];

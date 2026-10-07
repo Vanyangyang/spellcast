@@ -6,6 +6,7 @@ import type { BoardSnapshot, DeliveryPhase, DeliveryReceipt } from "./types";
 
 export type SigilState = "draft" | "frozen" | "running" | "paused" | "completed" | "aborted" | "archived";
 export type SigilLocation = "worktree" | "in_place";
+export type SigilAutomation = "supervised" | "autonomous";
 
 /** The list endpoint returns a step count, not the full step definitions. */
 export type SigilSummary = {
@@ -20,7 +21,7 @@ export type SigilSummary = {
 
 export type SigilCheck =
   | { kind: "command"; label: string; argv: string[]; timeout_s: number }
-  | { kind: "manual"; label: string; description: string };
+  | { kind: "manual"; label: string; description: string; blocking?: boolean };
 
 export type SigilStep = {
   id: string;
@@ -35,7 +36,7 @@ export type SigilStep = {
 
 export type SigilCommand = { step_id: string; label: string; argv: string[]; timeout_s: number };
 
-export type StepLight = "pending" | "ready" | "running" | "verifying" | "passed" | "done_unverified" | "failed" | "needs_you" | "skipped";
+export type StepLight = "pending" | "ready" | "running" | "verifying" | "passed" | "review_pending" | "done_unverified" | "failed" | "needs_you" | "skipped";
 
 /** One file in a change list. `size` marks a large new file that was listed but not stored. */
 export type ChangedPath = {
@@ -50,7 +51,7 @@ export type ChangedPath = {
 
 export type StepMarker = { kind: string; at_ms: number; detail?: string };
 
-export type CheckStatus = "queued" | "running" | "passed" | "failed" | "waiting" | "needs_approval" | "stopped";
+export type CheckStatus = "queued" | "running" | "passed" | "failed" | "waiting" | "deferred" | "needs_approval" | "stopped";
 
 /** One check of a step's latest report. Command output beyond `tail` comes from the step view. */
 export type CheckResult = {
@@ -105,6 +106,7 @@ export type ObservationLive = { last_at_ms: number; duration_ms: number; interva
 export type CheckLive = { step_id: string; index: number; run: number; label: string; started_at_ms: number; output_tail: string; output_bytes: number } | null;
 
 export type SigilRun = {
+  automation?: SigilAutomation;
   started_at_ms: number;
   execution_directory: string;
   location: SigilLocation;
@@ -282,7 +284,17 @@ export function pinSigil(id: string): Promise<BoardSnapshot> {
 }
 
 export function startSigil(id: string, expectedRevision: number): Promise<SigilResult> {
-  return projectOwnerPost<SigilResult>(path(id, "start"), { request_id: newProjectRequestId(), expected_revision: expectedRevision });
+  return projectOwnerPost<SigilResult>(path(id, "start"), { request_id: newProjectRequestId(), expected_revision: expectedRevision, automation: "autonomous" });
+}
+
+/** Freeze a draft or start a frozen plan, preparing an autonomous run without claiming it. */
+export function executeSigil(id: string, expectedRevision: number): Promise<SigilResult> {
+  return projectOwnerPost<SigilResult>(path(id, "execute"), { request_id: newProjectRequestId(), expected_revision: expectedRevision, automation: "autonomous" });
+}
+
+/** Upgrade a live legacy run in place, keeping its progress and executor. */
+export function automateSigil(id: string, expectedRevision: number): Promise<SigilResult> {
+  return projectOwnerPost<SigilResult>(path(id, "automation"), { request_id: newProjectRequestId(), expected_revision: expectedRevision, automation: "autonomous" });
 }
 
 /** Native code binds this run to its original verified session and reuses its receipt. */

@@ -1,7 +1,7 @@
 /**
  * Native sigil (法阵) check against a fresh isolated debug app (run through
  * scripts/run-native-check.mjs). An agent drafts and executes a plan over the app's own MCP
- * endpoint on a temporary repository. The window freezes and starts it, decides a manual check
+ * endpoint on a temporary repository. The window starts it with one confirmation, reviews a manual check
  * and watches the card change through the real `spellcast-sigil` event, so every user action
  * uses the real window credential. The repository and the app's data are temporary; nothing
  * reaches the user's Spellcast, repositories or tasks.
@@ -114,22 +114,20 @@ try {
   assert.equal(await card.locator(".sigil-card-state").innerText(), "草稿");
   ok("an agent's MCP draft pins a live card on the native Canvas");
 
-  // Freeze and start through the card: the real window credential.
+  // One combined start through the card: the real window credential.
   await workInside();
-  let dialog = await confirmIn("冻结…");
+  let dialog = await confirmIn("开始执行…");
   assert.match(await dialog.innerText(), /git --version/);
-  await dialog.getByRole("button", { name: "冻结", exact: true }).click();
-  await until(async () => (await card.locator(".sigil-card-state").innerText()) === "已冻结", "freezing did not reach the card");
-  dialog = await confirmIn("开始执行…");
   await dialog.getByRole("button", { name: "开始执行", exact: true }).click();
   await until(async () => (await card.locator(".sigil-card-state").innerText()) === "执行中", "starting did not reach the card");
   const view = await query("sigil");
+  assert.equal(view.sigil.run.automation, "autonomous");
   const worktree = view.sigil.run.execution_directory;
   assert.equal(view.sigil.run.branch, `sigil/${sigilId}`);
   assert.match(git("worktree", "list", "--porcelain"), new RegExp(`locked sigil:${sigilId}`));
   assert.equal(await readFile(path.join(worktree, "src", "app.txt"), "utf8"), "hello\n");
   await shot("started");
-  ok("freeze and start from the card create a locked worktree on its own branch");
+  ok("one start confirmation creates an autonomous locked worktree on its own branch");
 
   // The agent executes; the card follows through the desktop event.
   const claimed = await update("claim");
@@ -152,25 +150,17 @@ try {
   await shot("command-passed");
   ok("Spellcast runs the reported step's command in the native app and the light turns green");
 
-  // The agent amends the plan: a new command waits until the user approves it on the card.
+  // The agent amends the plan: autonomous verification does not ask for another approval.
   const amended = await update("amend", { reason: "加一步确认仓库根目录", changes: [{ kind: "add_step", after: "edit",
     step: { id: "root", title: "确认仓库根目录", instructions: "Check the work tree root.", scope: ["src/**"], depends_on: ["edit"],
       checks: [{ kind: "command", label: "toplevel", argv: ["git", "rev-parse", "--show-toplevel"], timeout_s: 60 }] } }] });
-  assert.equal(amended.commands_waiting_approval[0].label, "toplevel");
-  const approvals = card.locator(".sigil-card-approvals");
-  await approvals.waitFor({ state: "visible" });
-  await approvals.getByRole("button", { name: "批准…", exact: true }).click();
-  dialog = page.locator("dialog.sigil-dialog[open]");
-  await dialog.waitFor({ state: "visible" });
-  assert.match(await dialog.innerText(), /git rev-parse --show-toplevel/);
-  await dialog.getByRole("button", { name: "批准", exact: true }).click();
-  await approvals.waitFor({ state: "hidden" });
+  assert.equal(amended.commands_waiting_approval, undefined);
   assert.deepEqual((await query("sigil")).pending_commands, []);
-  ok("an amendment's new command waits until the user approves it on the card");
+  ok("an amendment's new verification command is authorized without another approval");
 
   // A second amendment is reverted from the card; the plan returns to its earlier fields.
   const second = await update("amend", { reason: "改一下人工确认的说明", changes: [{ kind: "update_step", step_id: "look", instructions: "Look twice." }] });
-  assert.equal(second.notices.filter(event => event.kind === "command_approved").length, 1, "the agent hears the approval");
+  assert.equal(second.notices.filter(event => event.kind === "command_approved").length, 0, "no manual command approval was needed");
   const revision = (await query("sigil")).sigil.revision;
   const amendmentList = card.locator(".sigil-card-amendments");
   await amendmentList.locator(".sigil-card-toggle").click();
@@ -188,28 +178,27 @@ try {
   await until(async () => (await stepRow(1).locator(".sigil-light").getAttribute("data-light")) === "passed", "the approved command did not pass", 60000);
   ok("the approved command runs after the step's report");
 
-  // A manual check waits for the user, who passes it on the card.
+  // Ordinary manual review remains explicitly unperformed and does not hold completion.
   const nextUp = await update("start_step", { step_id: "look" });
   assert(nextUp.notices.some(event => event.kind === "check_finished" && event.value.step_id === "root" && event.value.status === "passed"),
     `the agent hears the command result: ${JSON.stringify(nextUp.notices)}`);
   const looked = await update("report_step", { step_id: "look", summary: "Ready to look", evidence: [] });
-  assert.equal(looked.step.light, "needs_you");
-  await until(async () => (await stepRow(2).locator(".sigil-light").getAttribute("data-light")) === "needs_you", "the manual check did not ask the user");
+  assert.equal(looked.step.light, "review_pending");
+  assert.equal(looked.step.check_results[0].status, "deferred");
+  await until(async () => (await card.locator(".sigil-card-state").innerText()) === "已完成", "manual review held execution completion");
+  await until(async () => (await stepRow(2).locator(".sigil-light").getAttribute("data-light")) === "review_pending", "unperformed manual review was not shown");
   await stepRow(2).locator(".sigil-card-toggle").click();
-  await stepRow(2).getByRole("button", { name: "通过…", exact: true }).click();
-  dialog = page.locator("dialog.sigil-dialog[open]");
-  await dialog.waitFor({ state: "visible" });
-  assert.match(await dialog.innerText(), /确认 src\/app\.txt 已经改成新内容。/);
-  await dialog.locator("textarea").fill("看过了，没问题");
+  assert.match(await stepRow(2).innerText(), /确认 src\/app\.txt 已经改成新内容。/);
   await shot("manual-decision");
-  await dialog.getByRole("button", { name: "记为通过", exact: true }).click();
-  await until(async () => (await card.locator(".sigil-card-state").innerText()) === "已完成", "the run did not complete", 30000);
+  await stepRow(2).getByRole("button", { name: /^通过(?:…)?$/ }).click();
+  assert.equal(await page.locator("dialog.sigil-dialog[open]").count(), 0, "manual decision must not add another confirmation");
+  await until(async () => (await stepRow(2).locator(".sigil-light").getAttribute("data-light")) === "passed", "post-completion review was not recorded");
   const ended = await query("wait", { source_id: source, since: looked.cursor, wait: 5 });
   const kinds = ended.events.map(event => event.kind);
-  assert(kinds.includes("check_decided") && kinds.includes("step_verified") && kinds.includes("completed"), JSON.stringify(kinds));
+  assert(kinds.includes("check_decided") && kinds.includes("step_verified"), JSON.stringify(kinds));
   assert.equal(ended.state, "completed");
   await shot("completed");
-  ok("the user's decision on the card completes the run and the agent's wait reports it");
+  ok("execution finishes with deferred review; a single post-completion decision records a genuine pass");
   report.ok = true;
 } catch (error) {
   report.ok = false;

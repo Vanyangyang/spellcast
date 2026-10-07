@@ -1,9 +1,10 @@
 # Sigil (法阵) phase 1 contract
 
-Date: 2026-10-02. Status: direction agreed with the user on 2026-10-02 and revised the same day
-after web research (see Evidence). Slices 1–5 are done; see Progress.
+Date: 2026-10-02. Updated 2026-10-07: the user requested highly automated execution.
+The autonomous rules below supersede the earlier per-command and per-check approval defaults.
+Historical implementation and acceptance records in Progress remain dated evidence.
 
-A sigil is a build plan kept beside the Canvas. The user freezes it, one MCP-connected agent
+A sigil is an optional build plan kept beside the Canvas. After the user authorizes execution, one MCP-connected agent
 executes it step by step, and Spellcast shows each step's state and file changes live. When the
 run ends, Spellcast writes an archive and removes everything else the sigil created. Phase 1
 builds this execution track for a plan written by the user or an agent. Exhaustive document and
@@ -19,7 +20,15 @@ User decisions (2026-10-02):
   explains the name in one sentence where it first appears. Do not coin further themed terms.
 - Keep it light: record everything and mark deviations, but stop the run only in the cases
   listed under "When the run stops".
-- Spellcast runs the plan's verification commands; freezing is the user's consent to them.
+- Spellcast runs real verification commands. New runs started from the window or native
+  `execute` are autonomous: this authorizes the plan's verification commands and commands added
+  by recorded amendments. Existing runs without an automation field remain supervised until
+  the user selects **Switch to autonomous execution** in the window. This single action authorizes
+  the pending and future verification commands for that run, preserves its executor and progress,
+  queues current reported checks awaiting command approval, and defers unperformed non-blocking
+  manual checks. Failed results and explicitly blocking checks stay unchanged; a paused run stays
+  paused. The authenticated `/automation` transition requires the displayed plan revision and
+  cannot be requested by an agent. Viewing or updating the app alone never changes an old run's mode.
 - Execution defaults to a worktree; projects bound to one path (such as Unity) run in place.
 - Snapshots never write the user's index, refs or object contents.
 - A branch is deleted only when merged or explicitly discarded by the user.
@@ -53,9 +62,11 @@ Explanation shown at the entry, in the empty state and on first use:
 The run never stops for a deviation. It stops only when:
 
 1. A different session wants to take over execution: the user approves the handover.
-2. A command the user has not seen would run, because an amendment added or changed it: that
-   command waits for the user's approval while the agent continues other work.
-3. The plan asks for the user: a manual check, or the agent blocks a step to ask a question.
+2. In a supervised run, an amendment added or changed a command: that command waits for
+   approval while the agent continues other work. Autonomous runs run these checks directly.
+3. The plan explicitly requires the user: an essential manual check with `blocking:true`,
+   or the agent blocks a step for a necessary user decision. In autonomous runs ordinary
+   manual checks remain `deferred`, unperformed and non-blocking, including after completion.
 4. The user pauses or aborts.
 
 Everything else is recorded and marked for later review, never blocking. The user can review the
@@ -65,10 +76,11 @@ markers at any time and revert an amendment or reopen a step.
 
 `draft → frozen → running ⇄ paused → completed | aborted → archived`
 
-- draft: the creating source and the user edit the plan. Only the user freezes or deletes a
-  draft; a deleted draft leaves nothing behind.
+- draft: the creating source and the user edit the plan. Native `execute` freezes, starts and
+  claims it after an explicit user execution instruction. The window offers one combined
+  confirmation and a secondary freeze-only action. Only the user deletes a draft.
 - frozen: that plan revision is immutable. The user may unfreeze while no run has started.
-- running: begins when the user starts execution (location prepared, baseline snapshot taken).
+- running: begins on an authorized window start or native `execute` (location prepared, baseline snapshot taken).
   Steps start after a claim. Paused refuses `start_step` and `report_step`.
 - completed: every step passed, finished without checks, or was skipped.
 - aborted: the user stopped the run; unfinished steps keep their last state.
@@ -93,9 +105,9 @@ reused because it has no state and lives under Canvas protection rules.
   optional `checks` (without them the step ends as done, unverified), `depends_on`, `stop_when`
   (conditions under which the agent should block and ask).
 - Check: `{kind:"command", label, argv, timeout_s}` (default 600, maximum 3600) or
-  `{kind:"manual", label, description}`. See Verification for how commands run.
-- A step is one deliverable; plans of 3–10 steps work best. This guidance lives in the skill
-  reference; a single-step plan only gets a warning.
+  `{kind:"manual", label, description, blocking:false}`. Use `blocking:true` only for an
+  essential human decision. Supervised runs retain blocking manual checks for compatibility.
+- A step is one deliverable. Keep the plan short; small ordinary edits do not need a sigil.
 
 Draft writes use `expected_revision` and keep immutable history with the author (user or agent
 source). Only the creating source and the user write a draft; other sources may read it, as with
@@ -111,8 +123,8 @@ Freeze is blocked only by what Spellcast cannot run safely or correctly:
 Other gaps are warnings that do not block freezing: no goal, open questions, a single step,
 steps without checks or scope, missing inputs, and a Git LFS repository with the worktree
 location (every LFS file would be written out again). The freeze dialog lists the warnings, the
-execution location and every command Spellcast will run. Freezing is the user's consent to run
-exactly these commands there.
+execution location and the current verification commands. Freeze-only consents to those exact
+commands; autonomous start also authorizes verification commands from subsequent amendments.
 
 ## Storage
 
@@ -143,6 +155,10 @@ Tools:
   check results with output tails), `diff` (`step_id`, optional `path`; at most 256 KiB).
 - `spellcast_sigil_update` ops:
   - `put_plan` `{expected_revision (0 creates), …plan fields}`; drafts only.
+  - `execute` `{expected_revision}`: after the user explicitly authorizes execution, freeze,
+    start autonomously and claim your draft or frozen plan. Receipt-backed preparation resumes
+    safely on an identical retry. Draft creation or delivery alone never authorizes execution.
+    A current client-authored draft must be started from the authenticated native window.
   - `claim` `{label}`; see Executor. The response also tells the agent that its own plan or todo
     list is only for sub-steps inside the active step, so there is one plan, not two.
   - `wait` (query view) `{sigil_id, source_id, since, wait}` blocks up to `wait` seconds
@@ -182,12 +198,13 @@ uses neither verification nor tokens:
 - A claim from a different source, or from a revoked one, waits for the user's handover
   approval. Approval ends the previous executor; its next call returns `replaced`.
 - Run-state changes are accepted only from the current executor.
-- Only the user, in the window, freezes, unfreezes, starts, approves handovers, revokes
+- Native `execute` performs authorized freeze/start/claim for the creating source; it cannot
+  take over another source's plan or run. The delegated client protocol remains draft-only.
+- Only the user, in the window, unfreezes, deletes, approves handovers, revokes
   executors, approves commands, decides manual checks, reruns checks, reverts amendments,
   reopens steps, pauses, resumes, aborts, archives and cleans up, and deletes drafts and archives.
-  These HTTP endpoints require the window credential (`x-spellcast-window`, obtained through the
-  `project_window_key` IPC command as in `src/project-record-api.ts:241`); no MCP tool and no
-  agent-reachable request performs them.
+  Window HTTP writes, including `/execute`, require the window credential and trusted origin.
+  Native MCP does not add client pipe operations or authorize model dispatch by client saves.
 
 ## Start and execution location
 
@@ -290,10 +307,13 @@ Results:
   time; exit code 0 passes; a timeout fails.
 - The agent may keep working while checks run. If files change during a check, its result is
   marked, and the agent or the user can rerun it.
-- Manual checks wait for the user's pass or fail, with an optional note.
+- Autonomous manual checks default to `deferred`: shown as pending review without holding
+  dependents or completion. They are never called passed. `blocking:true` checks and all
+  supervised manual checks wait for the user's pass or fail, with an optional note.
 - The agent's summary and evidence are shown but never make a step pass.
 - After a failure the agent may start the step again as a new attempt; earlier attempts stay in
-  the timeline. A step passes when every check of its latest attempt passes.
+  the timeline. A step passes when every check passes; when every result is passed or deferred,
+  it instead finishes as `review_pending`. Both finished states satisfy dependents.
 
 As implemented in slice 4:
 
@@ -309,8 +329,8 @@ As implemented in slice 4:
   A failed command keeps its last 20 lines (at most 2 KiB) in the step; the full kept output is
   in `spellcast_sigil_check_outputs` and returned by the `step` view.
 - A report, including an automatic one, replaces the step's check results with the new
-  attempt's: commands in the frozen list are queued, other commands wait for approval, manual
-  checks wait for the user. One task per sigil runs queued commands one at a time, earliest
+  attempt's: autonomous commands are queued; supervised commands not previously approved wait
+  for approval. Manual checks follow the automation and blocking rules above. One task per sigil runs queued commands one at a time, earliest
   reported step first. A snapshot right before and after each command records the tree it
   verified and whether files changed meanwhile (the result lists them and the step gets a
   `check_disturbed` marker; the command's own writes count too, and the card says so).
@@ -320,7 +340,9 @@ As implemented in slice 4:
   again (`check_interrupted`).
 - A failure outranks a check waiting for the user, which outranks one still verifying. A step
   whose check failed comes back as `next`, with `check_results`, before any ready step. The
-  user can change a manual decision until the run ends. The executor receives `check_finished`
+  user can change a manual decision until the run ends. Autonomous non-blocking reviews remain
+  decidable after execution completes; a failed review is displayed without claiming that the
+  completed execution passed all verification. The executor receives `check_finished`
   (with the output tail for failures), `check_decided` and `step_verified` as notices.
   Completion is checked after every result and when the user resumes.
 - Interfaces: the agent's `rerun_checks`; window routes `POST /api/sigils/:id/checks/decide` and
@@ -333,8 +355,8 @@ As implemented in slice 4:
 - An amendment applies immediately as a new plan revision with the agent's reason, and the
   affected steps get a marker. History is append-only.
 - Steps that already passed are not edited; the agent adds a new step instead.
-- New or changed commands do not run until the user approves them. Until then the step's
-  verification needs the user; other steps continue.
+- Autonomous new or changed verification commands run automatically; supervised runs require
+  the user's approval. Until then the supervised step needs the user; other steps continue.
 - A skipped step counts as satisfied for its dependents.
 - The user can revert an amendment from the timeline, restoring the earlier plan fields without
   touching files, or reopen a skipped step.
@@ -387,7 +409,8 @@ icon and its label, and color is never the only signal.
 | 已通过 | Passed | green | Every check of the latest attempt passed |
 | 已完成（未验证） | Done, unverified | green outline | Reported; the step has no checks |
 | 未通过 | Failed | red | A check failed or timed out |
-| 待你处理 | Needs you | orange | Manual check, blocked step or command awaiting approval |
+| 待你处理 | Needs you | orange | Blocking manual check, blocked step or supervised command awaiting approval |
+| 已完成 · 待复核 | Done, review pending | outline | Commands passed or no commands; unperformed non-blocking manual review remains |
 | 已跳过 | Skipped | grey, struck through | Skipped by the agent or the user |
 
 Markers are purple badges on a step, never a state and never a stop: out-of-scope edits, plan
@@ -739,7 +762,8 @@ reads the existing `GET /api/sigils` summaries; the selected detail mounts the s
 
 The window can start a frozen sigil and hand its execution instruction to the session that wrote
 the plan, instead of only offering a copyable instruction. The user keeps every decision: there is
-no MCP freeze or start, and a handover never claims, executes or verifies anything by itself.
+dispatch itself never freezes, claims, executes or verifies anything. Native `execute` is the
+separate explicitly authorized freeze/start/claim path added on 2026-10-07.
 
 - `POST /api/sigils/:id/dispatch` with `{request_id, started_at_ms, retry?}` requires the window
   credential and a trusted origin, like the other window actions. The window first starts the

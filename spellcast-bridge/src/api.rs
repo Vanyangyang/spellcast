@@ -930,6 +930,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_mcp_tool_input_schema_is_a_plain_object_for_claude_hosts() {
+        // Claude rejects tool input schemas with oneOf/anyOf/allOf at the top level and
+        // Claude Code silently drops such tools, while Codex accepts them.
+        let bridge = Arc::new(Bridge::new(crate::Headless, 0));
+        let app = router(bridge.clone());
+        let listed = rpc(&app, 1, "tools/list", json!({})).await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        for tool in tools {
+            let schema = &tool["inputSchema"];
+            assert_eq!(schema["type"], "object", "{}", tool["name"]);
+            for key in ["oneOf", "anyOf", "allOf"] {
+                assert!(schema.get(key).is_none(), "{} has top-level {key}", tool["name"]);
+            }
+        }
+        let sigil = tools.iter().find(|tool| tool["name"] == "spellcast_sigil_update").unwrap();
+        let ops: Vec<&str> = sigil["inputSchema"]["properties"]["op"]["enum"].as_array().unwrap()
+            .iter().filter_map(Value::as_str).collect();
+        assert_eq!(ops, ["put_plan", "execute", "claim", "start_step", "report_step", "block_step", "rerun_checks", "amend", "note"]);
+        for name in ["request_id", "sigil_id", "source_id", "label", "expected_revision", "plan", "step_id", "summary", "evidence", "reason", "changes", "text"] {
+            assert!(sigil["inputSchema"]["properties"][name].is_object(), "{name}: {sigil}");
+        }
+    }
+
+    #[tokio::test]
     async fn mcp_canvas_batch_has_flat_schema_and_keeps_proposals_atomic() {
         let bridge = Arc::new(Bridge::new(crate::Headless, 0));
         let app = router(bridge.clone());

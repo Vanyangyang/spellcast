@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -20,6 +20,18 @@ await mkdir(out, { recursive: true });
 const port = Number(process.env.SPELLCAST_PREVIEW_PORT ?? 47298);
 assert.notEqual(port, 47194);
 const origin = `http://127.0.0.1:${port}`;
+// Route local production assets from memory when the host disallows loopback connections.
+const offline = process.env.SPELLCAST_PREVIEW_OFFLINE === "1";
+const distRoot = path.join(root, "dist");
+async function fulfillProductionAsset(route, url) {
+  const relative = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname).replace(/^\/+/, "");
+  const filePath = path.resolve(distRoot, relative);
+  assert.ok(filePath.startsWith(distRoot + path.sep), "production asset stays in dist");
+  const extension = path.extname(filePath);
+  const contentType = ({ ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2" })[extension] ?? "application/octet-stream";
+  try { return await route.fulfill({ status: 200, contentType, body: await readFile(filePath) }); }
+  catch (error) { if (error.code === "ENOENT") return route.fulfill({ status: 404, body: "Missing local fixture asset" }); throw error; }
+}
 const workspace = "G:/isolated/sigil";
 const sourceOrigin = { cwd: workspace, source_id: "claude:fixture-author", label: "法阵" };
 
@@ -49,7 +61,7 @@ const views = {
         { kind: "manual", label: "看一下页面", description: "打开预览，确认按钮可以点。" }] }),
       step("g", "跑测试", { checks: [{ kind: "command", label: "test", argv: ["npm", "test"], timeout_s: 600 }, { kind: "manual", label: "确认文案", description: "" }] }),
       step("h", "发布前打包", { checks: [{ kind: "command", label: "package", argv: ["npm", "run", "package"], timeout_s: 900 }] })];
-    const sigil = base("running", "执行中的法阵", "running", steps, { revision: 4, run: { started_at_ms: 4, execution_directory: "G:/isolated/sigil/repo.sigils/running",
+    const sigil = base("running", "执行中的法阵", "running", steps, { revision: 4, run: { automation: "supervised", started_at_ms: 4, execution_directory: "G:/isolated/sigil/repo.sigils/running",
       location: "worktree", branch: "sigil/running", base_ref: "main", base_commit: "0".repeat(40),
       executor: { source_id: "claude:fixture-executor", label: "Claude Code · 法阵执行", since_ms: 5 },
       pending_claims: [{ source_id: "codex:other-task", label: "Codex 另一个任务", at_ms: 6 }], revoked: [], replaced: [],
@@ -116,6 +128,7 @@ const health = { surface: "focus", port, last_call_ms: 0, calls: 0, paused: fals
 const report = { fixtureBoundary: "Every /api/ and port-47194 request is answered by an in-memory fixture; only built Vite assets pass through.", checks: [], errors: [], mutations: [], isolatedFixtureMutations: [], diffs: [], outputs: [], layout: [], screenshots: [] };
 const fixtureStartedAt = 91_000;
 let fixtureDispatchPhase = "failed", fixtureStartGate = null, fixtureDispatchHttpError = null;
+let fixtureUpgradeError = false;
 
 async function attachIsolation(context, { sigilMutations = false, assets = null } = {}) {
   await context.route("**/*", async (route, request) => {
@@ -158,7 +171,48 @@ async function attachIsolation(context, { sigilMutations = false, assets = null 
           return fulfill(values[url.pathname]);
         }
         const body = request.postDataJSON();
-        const isolatedAction = url.pathname.match(/^\/api\/sigils\/(dispatch-fixture|fallback-fixture)\/(start|dispatch)$/);
+        if (sigilMutations && method === "POST" && url.pathname === "/api/sigils/mode-fixture/automation") {
+          assert.equal(request.headers()["x-spellcast-window"], "isolatedfixture-window-key");
+          const current = views["mode-fixture"];
+          assert.deepEqual(Object.keys(body).sort(), ["automation", "expected_revision", "request_id"]);
+          assert.equal(body.expected_revision, current.sigil.revision);
+          assert.equal(body.automation, "autonomous");
+          assert.ok(body.request_id.length > 0);
+          report.isolatedFixtureMutations.push({ isolatedfixture: true, path: url.pathname, body });
+          if (fixtureUpgradeError) return route.fulfill({ status: 409, headers, contentType: "application/json", body: JSON.stringify({ error: "法阵已更新，请刷新后再切换。" }) });
+          current.sigil.run.automation = "autonomous";
+          current.sigil.revision++;
+          for (const [id, progress] of Object.entries(current.sigil.run.steps)) {
+            if (progress.status !== "reported") continue;
+            const plan = current.sigil.steps.find(item => item.id === id);
+            for (const check of progress.checks ?? []) {
+              if (check.attempt !== progress.attempt) continue;
+              if (check.kind === "command" && check.status === "needs_approval") check.status = "queued";
+              if (check.kind === "manual" && check.status === "waiting" && !plan.checks[check.index].blocking) check.status = "deferred";
+            }
+          }
+          current.pending_commands = [];
+          current.lights.verify = "verifying";
+          return fulfill({ sigil_id: "mode-fixture", sigil: current.sigil, replayed: false });
+        }
+        const reviewAction = url.pathname.match(/^\/api\/sigils\/review-fixture\/checks\/decide$/);
+        if (sigilMutations && method === "POST" && reviewAction) {
+          assert.equal(request.headers()["x-spellcast-window"], "isolatedfixture-window-key");
+          const current = views["review-fixture"];
+          assert.deepEqual(Object.keys(body).sort(), ["index", "note", "passed", "request_id", "step_id"]);
+          assert.equal(typeof body.request_id, "string");
+          assert.ok(body.request_id.length > 0);
+          assert.equal(body.step_id, "review");
+          assert.equal(body.index, 1);
+          assert.equal(current.sigil.run.automation, "autonomous");
+          report.isolatedFixtureMutations.push({ isolatedfixture: true, path: url.pathname, body });
+          const result = current.sigil.run.steps.review.checks[1];
+          result.status = body.passed ? "passed" : "failed";
+          result.note = body.note;
+          current.lights.review = body.passed ? "passed" : "failed";
+          return fulfill({ sigil_id: "review-fixture", sigil: current.sigil, review: current.review, replayed: false, created: false, deleted: false, card_id: current.card_id });
+        }
+        const isolatedAction = url.pathname.match(/^\/api\/sigils\/(dispatch-fixture|fallback-fixture|draft-fixture)\/(start|execute|dispatch)$/);
         if (sigilMutations && method === "POST" && isolatedAction) {
           assert.equal(request.headers()["x-spellcast-window"], "isolatedfixture-window-key");
           const [, id, action] = isolatedAction;
@@ -168,12 +222,18 @@ async function attachIsolation(context, { sigilMutations = false, assets = null 
           } });
           assert.equal(typeof body.request_id, "string");
           assert.ok(body.request_id.length > 0);
-          if (action === "start") {
-            assert.deepEqual(Object.keys(body).sort(), ["expected_revision", "request_id"]);
+          if (action === "start" || action === "execute") {
+            assert.deepEqual(Object.keys(body).sort(), ["automation", "expected_revision", "request_id"]);
+            assert.equal(body.automation, "autonomous");
             assert.equal(body.expected_revision, current.sigil.revision);
             if (fixtureStartGate) await fixtureStartGate;
+            if (action === "execute") {
+              assert.equal(current.sigil.state, "draft");
+              current.sigil.freeze = { at_ms: 3, revision: 3, commands: current.review.commands, execution_directory: current.review.execution_directory };
+              current.sigil.revision = 3;
+            }
             current.sigil.state = "running";
-            current.sigil.run = { started_at_ms: fixtureStartedAt, execution_directory: current.sigil.freeze.execution_directory,
+            current.sigil.run = { automation: "autonomous", started_at_ms: fixtureStartedAt, execution_directory: current.sigil.freeze.execution_directory,
               location: "worktree", branch: "fixture", base_ref: "main", base_commit: "0".repeat(40),
               pending_claims: [], revoked: [], replaced: [], steps: {} };
             current.delivery.can_dispatch = Boolean(current.delivery.thread_id);
@@ -203,7 +263,7 @@ async function attachIsolation(context, { sigilMutations = false, assets = null 
         return route.fulfill({ status: 500, headers, contentType: "application/json", body: JSON.stringify({ error: String(error) }) });
       }
     }
-    if (url.origin === origin) return route.continue();
+    if (url.origin === origin) return offline ? fulfillProductionAsset(route, url) : route.continue();
     report.errors.push(`unexpected network ${method} ${request.url()}`);
     return route.abort("blockedbyclient");
   });
@@ -258,11 +318,12 @@ async function launch() {
   return playwright.chromium.launch({ headless: true });
 }
 
-const preview = spawn(process.execPath, [path.join(root, "node_modules/vite/bin/vite.js"), "preview", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], { cwd: root, stdio: "pipe", windowsHide: true });
+const preview = offline ? null : spawn(process.execPath, [path.join(root, "node_modules/vite/bin/vite.js"), "preview", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], { cwd: root, stdio: "pipe", windowsHide: true });
 let previewLog = "", browser;
-preview.stdout.on("data", data => { previewLog += data; }); preview.stderr.on("data", data => { previewLog += data; });
+preview?.stdout.on("data", data => { previewLog += data; }); preview?.stderr.on("data", data => { previewLog += data; });
 try {
-  await waitHttp(); browser = await launch();
+  if (!offline) await waitHttp();
+  browser = await launch();
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, reducedMotion: "reduce" });
   await context.addInitScript(scope => {
     localStorage.setItem("spellcast.locale", "zh-CN"); localStorage.setItem("spellcast.mode", "focus"); localStorage.setItem("spellcast.theme", "dark");
@@ -366,7 +427,7 @@ try {
   assert.match(await failedChecks.locator(".sigil-card-check-tail").innerText(), /expected <b>2<\/b>, received 3/);
   assert.equal(await failedChecks.locator(".sigil-card-check-tail b").count(), 0, "a failure tail stays text");
   assert.equal(await failedChecks.locator(".sigil-card-check").nth(1).locator(".sigil-card-check-text").innerText(), "备注：文案没问题");
-  assert.deepEqual(await failedChecks.locator(".sigil-card-check").nth(1).locator("button").allInnerTexts(), ["不通过…"], "a decided check offers the other decision");
+  assert.deepEqual(await failedChecks.locator(".sigil-card-check").nth(1).locator("button").allInnerTexts(), ["不通过"], "a decided check offers the other decision");
   assert.equal(await failedChecks.getByRole("button", { name: "重跑验证", exact: true }).count(), 1);
   await failedChecks.getByRole("button", { name: "查看输出", exact: true }).click();
   const output = page.locator("dialog.sigil-diff-dialog[open]");
@@ -387,15 +448,9 @@ try {
   assert.equal(await waiting.locator(".sigil-card-check-disturbed").innerText(), "运行期间有文件变化，结果可能对不上最新内容；命令自己写的文件也算在内。");
   assert.equal(await waiting.locator(".sigil-card-check-disturbed").getAttribute("title"), "src/api.ts");
   assert.equal(await waiting.locator(".sigil-card-check").nth(1).locator(".sigil-card-check-text").innerText(), "打开预览，确认按钮可以点。");
-  await waiting.getByRole("button", { name: "通过…", exact: true }).click();
-  const decideDialog = page.locator("dialog.sigil-dialog[open]");
-  await decideDialog.waitFor({ state: "visible" });
-  assert.equal(await decideDialog.locator(".sigil-dialog-title").innerText(), "人工检查 · 看一下页面");
-  assert.match(await decideDialog.innerText(), /打开预览，确认按钮可以点。/);
-  assert.equal(await decideDialog.getByRole("button", { name: "记为通过", exact: true }).count(), 1);
-  await decideDialog.locator("textarea").fill("按钮能点");
-  await decideDialog.getByRole("button", { name: "取消", exact: true }).click();
-  await decideDialog.waitFor({ state: "detached" });
+  assert.equal(await waiting.getByRole("button", { name: "通过", exact: true }).count(), 1);
+  await waiting.locator("textarea").fill("按钮能点");
+  assert.equal(await page.locator("dialog.sigil-dialog[open]").count(), 0, "manual review is recorded beside the check without a second confirmation");
   // A paused run says what happens to its checks; refreshes keep the open lists.
   const refreshRunning = () => page.evaluate(() => window.dispatchEvent(new CustomEvent("spellcast-sigil", { detail: { sigil_id: "running" } })));
   const pausedNote = () => [...document.querySelectorAll('.canvas-frame[data-item-id="sigil-running"] .sigil-card-observe')].some(node => node.textContent.startsWith("已暂停"));
@@ -408,7 +463,8 @@ try {
   await page.waitForFunction(() => document.querySelector('.canvas-frame[data-item-id="sigil-running"] .sigil-card-state')?.textContent === "执行中");
   assert.equal(await page.evaluate(pausedNote), false);
   assert.equal(await waiting.isVisible(), true, "a live refresh keeps the open check list");
-  report.checks.push("checks: counts per step, running output and elapsed time, failure tail with exit code, literal output dialog, disturbed result, manual decision dialog that cancels without sending, paused note");
+  assert.equal(await waiting.locator("textarea").inputValue(), "按钮能点", "a live refresh preserves the inline manual note");
+  report.checks.push("supervised checks: counts per step, running output and elapsed time, failure tail with exit code, literal output dialog, disturbed result, inline manual note survives refresh, paused note");
 
   // Amendments: commands waiting for approval, the amendment list with revert, and reopening a skipped step.
   const approvals = card("running").locator(".sigil-card-approvals");
@@ -956,6 +1012,168 @@ try {
     } finally { await isolated.close(); }
   }
 
+  // A draft can freeze, start and hand over through one authorized confirmation.
+  resetDispatchFixtures();
+  {
+    const draft = structuredClone(views["dispatch-fixture"]);
+    draft.sigil.id = "draft-fixture"; draft.sigil.state = "draft"; draft.sigil.revision = 2;
+    delete draft.sigil.freeze;
+    draft.card_id = "sigil-draft-fixture";
+    draft.review.execution_directory = "G:/isolated/sigil/repo.sigils/draft-fixture";
+    views["draft-fixture"] = draft;
+    fixtureDispatchPhase = "submitted";
+    const { context: isolated, page: isolatedPage } = await openIsolated();
+    try {
+      const mounted = await mountIsolated(isolatedPage, "draft-fixture");
+      const confirm = isolatedPage.locator("dialog.sigil-dialog[open]");
+      const start = mounted.getByRole("button", { name: "开始并交给原会话…", exact: true });
+      const mark = report.isolatedFixtureMutations.length;
+      await start.click(); await confirm.waitFor({ state: "visible" });
+      assert.match(await confirm.innerText(), /npm run build/);
+      assert.match(await confirm.innerText(), /自动运行验证/);
+      await confirm.getByRole("button", { name: "取消", exact: true }).click();
+      await confirm.waitFor({ state: "detached" });
+      assert.deepEqual(since(mark), [], "cancelled combined start performs no lifecycle change");
+      assert.equal(views["draft-fixture"].sigil.state, "draft");
+      await start.click(); await confirm.waitFor({ state: "visible" });
+      await confirm.getByRole("button", { name: "开始并交接", exact: true }).click();
+      await statusIs(isolatedPage, "已提交，等待原会话");
+      assert.deepEqual(since(mark).map(item => item.path), ["/api/sigils/draft-fixture/execute", "/api/sigils/draft-fixture/dispatch"]);
+      assert.equal(views["draft-fixture"].sigil.run.automation, "autonomous");
+      assert.equal(since(mark)[1].body.started_at_ms, fixtureStartedAt);
+      assert.equal(await confirm.count(), 0, "freeze, start and dispatch require only one confirmation");
+      report.checks.push("autonomous draft: one confirmation freezes, starts and dispatches the same run; cancellation performs no mutation");
+    } finally { await isolated.close(); }
+  }
+
+  // Legacy runs can authorize the whole remaining verification queue in one explicit click.
+  const resetModeFixture = (state = "running") => {
+    const steps = [step("done", "已通过的步骤"), step("verify", "待验证的步骤", { checks: [
+      { kind: "command", label: "contract", argv: ["dotnet", "build", "contract/Vesperix.Contract.csproj"], timeout_s: 600 },
+      { kind: "manual", label: "查看页面", description: "核对效果" },
+    ] }), step("decision", "需要决定的步骤", { checks: [{ kind: "manual", label: "确认方案", description: "选择最终方案", blocking: true }] }),
+      step("failed", "验证失败的步骤")];
+    const sigil = base("mode-fixture", "旧法阵继续执行", state, steps, { revision: 12, run: {
+      // The old serialized run has no automation field.
+      started_at_ms: 123, execution_directory: "G:/isolated/sigil/legacy", location: "worktree", branch: "sigil/legacy", base_ref: "main", base_commit: "0".repeat(40),
+      executor: { source_id: "claude:legacy", label: "Claude Code · 原执行者", since_ms: 123 }, pending_claims: [], revoked: [], replaced: [],
+      steps: {
+        done: { status: "reported", attempt: 1, checks: [{ index: 0, kind: "command", label: "build", attempt: 1, status: "passed" }] },
+        verify: { status: "reported", attempt: 2, changed_files: 3, markers: [], checks: [
+          { index: 0, kind: "command", label: "contract", attempt: 1, status: "failed" },
+          { index: 0, kind: "command", label: "contract", attempt: 2, status: "needs_approval" },
+          { index: 1, kind: "manual", label: "查看页面", attempt: 2, status: "waiting" },
+        ] },
+        decision: { status: "reported", attempt: 1, checks: [{ index: 0, kind: "manual", label: "确认方案", attempt: 1, status: "waiting" }] },
+        failed: { status: "reported", attempt: 1, checks: [{ index: 0, kind: "command", label: "build", attempt: 1, status: "failed" }] },
+      },
+    } });
+    views["mode-fixture"] = { sigil, review: review(true), lights: { done: "passed", verify: "needs_you", decision: "needs_you", failed: "failed" }, next: null,
+      pending_commands: [{ step_id: "verify", index: 0, label: "contract", argv: steps[1].checks[0].argv, timeout_s: 600 }], card_id: "sigil-mode-fixture" };
+    fixtureUpgradeError = false;
+  };
+  for (const state of ["running", "paused"]) {
+    resetModeFixture(state);
+    const { context: isolated, page: isolatedPage } = await openIsolated();
+    try {
+      const mounted = await mountIsolated(isolatedPage, "mode-fixture");
+      const mark = report.isolatedFixtureMutations.length;
+      assert.equal(await mounted.locator(".sigil-card-automation").innerText(), "执行模式：监督执行");
+      assert.match(await mounted.locator(".sigil-card-automation-upgrade").innerText(), /待批准及后续修订的验证命令都自动运行/);
+      if (state === "paused") assert.match(await mounted.locator(".sigil-card-automation-upgrade").innerText(), /仍保持暂停/);
+      assert.deepEqual(since(mark), [], "opening a legacy run never grants command consent");
+      const original = structuredClone(views["mode-fixture"].sigil.run);
+      await mounted.getByRole("button", { name: "改为自主执行", exact: true }).click();
+      await isolatedPage.waitForFunction(() => document.querySelector("#host .sigil-card-automation")?.textContent === "执行模式：自主执行");
+      assert.equal(await isolatedPage.locator("dialog.sigil-dialog[open]").count(), 0, "the explicit switch needs no second confirmation");
+      assert.deepEqual(since(mark).map(item => item.path), ["/api/sigils/mode-fixture/automation"], "one switch, no start, dispatch or per-command approval calls");
+      assert.equal(since(mark)[0].body.expected_revision, 12);
+      assert.equal(await mounted.locator(".sigil-card-approval").count(), 0);
+      assert.equal(await mounted.getByRole("button", { name: "改为自主执行", exact: true }).count(), 0);
+      const updated = views["mode-fixture"].sigil;
+      assert.equal(updated.state, state);
+      assert.equal(updated.run.started_at_ms, original.started_at_ms);
+      assert.deepEqual(updated.run.executor, original.executor);
+      assert.deepEqual(updated.run.steps.done, original.steps.done);
+      assert.deepEqual(updated.run.steps.failed, original.steps.failed);
+      assert.deepEqual(updated.run.steps.decision, original.steps.decision);
+      assert.equal(updated.run.steps.verify.attempt, 2);
+      assert.deepEqual(updated.run.steps.verify.checks.map(item => item.status), ["failed", "queued", "deferred"]);
+      report.checks.push(`legacy ${state} run: explicit single switch clears approvals without modal or restart; progress, executor, failures, past attempt and blocking manual check survive`);
+    } finally { await isolated.close(); }
+  }
+  resetModeFixture(); fixtureUpgradeError = true;
+  {
+    const { context: isolated, page: isolatedPage } = await openIsolated();
+    try {
+      const mounted = await mountIsolated(isolatedPage, "mode-fixture");
+      const mark = report.isolatedFixtureMutations.length;
+      await mounted.getByRole("button", { name: "改为自主执行", exact: true }).click();
+      await mounted.locator(".sigil-card-notice").filter({ hasText: "法阵已更新" }).waitFor({ state: "visible" });
+      assert.equal(views["mode-fixture"].sigil.run.automation, undefined);
+      assert.equal(await mounted.locator(".sigil-card-approval").count(), 1);
+      assert.equal(since(mark).length, 1, "a refused upgrade never silently retries or approves individual commands");
+      report.checks.push("refused legacy upgrade preserves supervised mode and approvals and shows a recoverable error without retry");
+    } finally { await isolated.close(); }
+  }
+  resetModeFixture();
+  for (const [locale, theme] of [["zh-CN", "light"], ["en", "dark"]]) {
+    const { context: isolated, page: isolatedPage } = await openIsolated({ locale, theme, width: 360 });
+    try {
+      const mounted = await mountIsolated(isolatedPage, "mode-fixture");
+      const upgrade = mounted.locator(".sigil-card-automation-upgrade");
+      const texts = await upgrade.evaluate(measureText);
+      assert.deepEqual(texts.filter(item => item.contrast < 4.5), []);
+      assert.equal(await upgrade.evaluate(node => node.scrollWidth > node.clientWidth + 1), false);
+      assert.equal(await upgrade.locator("button").evaluate(node => node.scrollWidth > node.clientWidth + 1), false);
+      const shot = path.join(out, `legacy-automation-${locale}-${theme}-360.png`);
+      await mounted.screenshot({ path: shot, animations: "disabled" }); report.screenshots.push(shot);
+    } finally { await isolated.close(); }
+  }
+  report.checks.push("legacy mode switch: Chinese/light and English/dark narrow layout and readable text contrast");
+
+  // Unperformed review is visible after completion and can be decided or corrected directly.
+  {
+    const reviewStep = step("review", "复核页面", { checks: [
+      { kind: "command", label: "build", argv: ["npm", "run", "build"], timeout_s: 600 },
+      { kind: "manual", label: "查看页面", description: "核对页面效果", blocking: false },
+    ] });
+    const sigil = base("review-fixture", "已完成待复核", "completed", [reviewStep], { run: {
+      automation: "autonomous", started_at_ms: 4, execution_directory: "G:/isolated/sigil/review", location: "worktree",
+      branch: "fixture", base_ref: "main", base_commit: "0".repeat(40), pending_claims: [], revoked: [], replaced: [],
+      steps: { review: { status: "reported", attempt: 1, checks: [
+        { index: 0, kind: "command", label: "build", attempt: 1, status: "passed" },
+        { index: 1, kind: "manual", label: "查看页面", attempt: 1, status: "deferred" },
+      ] } },
+    } });
+    views["review-fixture"] = { sigil, review: review(true), lights: { review: "review_pending" }, next: null, card_id: "sigil-review-fixture" };
+    const { context: isolated, page: isolatedPage } = await openIsolated();
+    try {
+      const mounted = await mountIsolated(isolatedPage, "review-fixture");
+      const row = mounted.locator(".sigil-card-step").first();
+      assert.equal(await row.locator(".sigil-light").getAttribute("data-light"), "review_pending");
+      await row.locator(".sigil-card-toggle").click();
+      const check = row.locator(".sigil-card-check").nth(1);
+      assert.equal(await check.locator(".sigil-card-check-status").innerText(), "待复核（不阻塞）");
+      assert.equal(views["review-fixture"].sigil.run.steps.review.checks[1].status, "deferred", "completion did not invent a manual pass");
+      const mark = report.isolatedFixtureMutations.length;
+      await check.locator("textarea").fill("已核对");
+      await check.getByRole("button", { name: "通过", exact: true }).click();
+      await isolatedPage.waitForFunction(() => document.querySelectorAll("#host .sigil-card-check")[1]?.dataset.status === "passed");
+      assert.equal(await isolatedPage.locator("dialog.sigil-dialog[open]").count(), 0);
+      assert.equal(since(mark)[0].body.note, "已核对");
+      await check.getByRole("button", { name: "不通过", exact: true }).click();
+      await isolatedPage.waitForFunction(() => document.querySelectorAll("#host .sigil-card-check")[1]?.dataset.status === "failed");
+      assert.equal(views["review-fixture"].sigil.state, "completed");
+      assert.deepEqual(since(mark).map(item => item.body.passed), [true, false]);
+      assert.equal(await check.getByRole("button", { name: "通过", exact: true }).count(), 1, "post-completion review remains correctable");
+      assert.equal(await isolatedPage.locator("dialog.sigil-dialog[open]").count(), 0);
+      const shot = path.join(out, "autonomous-review-dark.png");
+      await mounted.screenshot({ path: shot, animations: "disabled" }); report.screenshots.push(shot);
+      report.checks.push("autonomous completed review stays deferred and non-blocking; direct pass/fail decisions preserve completion and remain correctable");
+    } finally { await isolated.close(); }
+  }
+
   // Handover states at Chinese/English, dark/light, narrow and wide windows.
   for (const [locale, theme] of [["zh-CN", "dark"], ["zh-CN", "light"], ["en", "dark"], ["en", "light"]]) {
     for (const width of [360, 1320]) {
@@ -1015,7 +1233,7 @@ try {
   process.exitCode = 1;
 } finally {
   await browser?.close().catch(() => {});
-  preview.kill();
+  preview?.kill();
   report.previewLog = previewLog.slice(-4000);
   await writeFile(path.join(out, "report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ ok: report.ok, checks: report.checks.length, errors: report.errors, screenshots: report.screenshots.length }, null, 2));

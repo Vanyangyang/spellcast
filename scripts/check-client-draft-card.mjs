@@ -9,7 +9,7 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
 const require=createRequire(import.meta.url);
 let playwright;
 try {playwright=require("playwright");} catch {playwright=require(path.join(homedir(),".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright"));}
-const methods=["approveCommand","controlSigil","decideCheck","decideHandover","deleteSigil","dispatchSigil","fetchSigilDiff","fetchSigilStep","freezeSigil","noteSigil","reopenStep","rerunChecks","revertAmendment","startSigil","unfreezeSigil"];
+const methods=["approveCommand","automateSigil","controlSigil","decideCheck","decideHandover","deleteSigil","dispatchSigil","executeSigil","fetchSigilDiff","fetchSigilStep","freezeSigil","noteSigil","reopenStep","rerunChecks","revertAmendment","startSigil","unfreezeSigil"];
 const mockedApi=`export async function fetchSigil(){window.__calls.push('read');return structuredClone(window.__view);}
 export async function reviewSigil(id,revision){window.__calls.push('review:'+revision);const v=structuredClone(window.__view);v.review={...v.review,can_freeze:false,issues:[{level:'error',code:'repository_invalid',message:'Synthetic explicit review failed'}]};return v;}
 ${methods.map(name=>`export async function ${name}(){window.__calls.push('${name}');throw Error('Unexpected operation');}`).join("\n")}`;

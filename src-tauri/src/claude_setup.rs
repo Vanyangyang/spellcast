@@ -34,6 +34,7 @@ const PLUGIN_FILES: &[&str] = &[
     "skills/spellcast/references/canvas.md",
     "skills/spellcast/references/feedback.md",
     "skills/spellcast/references/project-records.md",
+    "skills/spellcast/references/sigil.md",
     "skills/spellcast/references/works.md",
     "skills/spellcast/scripts/project-api.mjs",
 ];

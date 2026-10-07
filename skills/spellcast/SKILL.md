@@ -28,6 +28,7 @@ Spellcast gives the user's existing Agent two surfaces: sparse desktop bubbles a
 - Project development records, immutable history, authorized task handoff and portable export: [references/project-records.md](references/project-records.md)
 - A delivered 游戏开发 goal (`project_context.kind` is `goal` or `proposal_return`): answer only with `put_proposal`, never direct planning writes; read [references/project-records.md](references/project-records.md) first.
 - A delivered document selection question (`project_context.kind` is `document_question`): answer with an attributed `put_record` review comment linked to the exact goal and source, then ack; read [references/project-records.md](references/project-records.md) first. Do not alter the source document or canonical planning design.
+- Sigil / 法阵 plans and execution: [references/sigil.md](references/sigil.md). After explicit user authorization, native `execute` freezes, starts autonomously and claims your plan without another window approval. Ordinary small edits do not require a sigil.
 
 ## Memory
 

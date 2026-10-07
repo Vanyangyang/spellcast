@@ -39,6 +39,7 @@ pub mod sigils;
 mod sigil_store;
 pub mod sigil_workspace;
 pub mod sigil_run;
+mod sigil_execute;
 mod sigil_snapshot;
 mod sigil_observe;
 mod sigil_process;

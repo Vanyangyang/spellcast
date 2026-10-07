@@ -25,6 +25,14 @@ pub enum SigilLocation {
     InPlace,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SigilAutomation {
+    #[default]
+    Supervised,
+    Autonomous,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SigilState {
@@ -61,11 +69,14 @@ pub enum SigilCheck {
         #[serde(default = "default_timeout")]
         timeout_s: u32,
     },
-    /// Waits for the user's pass or fail.
+    /// Waits for the user's pass or fail, or remains for later review in an autonomous run.
     Manual {
         label: String,
         #[serde(default)]
         description: String,
+        /// An autonomous run must wait for this decision before continuing.
+        #[serde(default, skip_serializing_if = "is_false")]
+        blocking: bool,
     },
 }
 
@@ -230,6 +241,8 @@ pub enum CheckStatus {
     Failed,
     /// A manual check waiting for the user's decision.
     Waiting,
+    /// A manual check left unperformed for later review in an autonomous run.
+    Deferred,
     /// A command the user has not approved, as after an amendment.
     NeedsApproval,
     /// Ended by an abort, or by a new attempt of the step.
@@ -287,6 +300,8 @@ pub enum Verification {
     None,
     Running,
     Passed,
+    /// Commands passed and nonblocking manual checks remain for later review.
+    ReviewPending,
     Failed,
     /// A manual check or a command waiting for the user.
     NeedsYou,
@@ -436,6 +451,8 @@ pub struct SigilDelivery {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct SigilRun {
     pub started_at_ms: u64,
+    #[serde(default)]
+    pub automation: SigilAutomation,
     pub execution_directory: String,
     pub location: SigilLocation,
     /// `sigil/<id>` for a worktree run; empty in place.
@@ -508,8 +525,12 @@ pub struct SigilAmendment {
     pub reverted_at_ms: Option<u64>,
 }
 
-/// Every command the user consented to: those frozen with the plan and those approved since.
+/// Commands authorized by the run's mode: the current plan in autonomous mode, or the exact
+/// commands frozen with the plan and approved since in supervised mode.
 pub fn consented_commands(sigil: &Sigil) -> Vec<SigilCommand> {
+    if sigil.run.as_ref().is_some_and(|run| run.automation == SigilAutomation::Autonomous) {
+        return commands(&sigil.plan);
+    }
     let mut commands = sigil.freeze.as_ref().map(|freeze| freeze.commands.clone()).unwrap_or_default();
     if let Some(run) = &sigil.run {
         commands.extend(run.approved_commands.iter().cloned());
@@ -541,6 +562,7 @@ pub enum StepLight {
     Running,
     Verifying,
     Passed,
+    ReviewPending,
     DoneUnverified,
     Failed,
     NeedsYou,
@@ -557,7 +579,8 @@ pub fn current_checks(progress: &StepProgress) -> impl Iterator<Item = &CheckRes
 }
 
 /// Verification of a reported step: a failure wins, then anything waiting for the user; the
-/// step passes when every check of its latest attempt passed.
+/// step passes when every check of its latest attempt passed, or awaits review when only
+/// deferred manual checks remain.
 pub fn verification(step: &SigilStep, progress: &StepProgress) -> Verification {
     if step.checks.is_empty() || progress.status != StepStatus::Reported {
         return Verification::None;
@@ -569,17 +592,19 @@ pub fn verification(step: &SigilStep, progress: &StepProgress) -> Verification {
         Verification::NeedsYou
     } else if checks.len() == step.checks.len() && checks.iter().all(|check| check.status == CheckStatus::Passed) {
         Verification::Passed
+    } else if checks.len() == step.checks.len() && checks.iter().all(|check| matches!(check.status, CheckStatus::Passed | CheckStatus::Deferred)) {
+        Verification::ReviewPending
     } else {
         Verification::Running
     }
 }
 
-/// Finished steps satisfy their dependents. A step with checks finishes only when verified.
+/// Finished steps satisfy their dependents, including checks deferred for later review.
 pub fn step_finished(step: &SigilStep, run: Option<&SigilRun>) -> bool {
     match progress(run, step) {
         Some(progress) if progress.status == StepStatus::Skipped => true,
         Some(progress) if progress.status == StepStatus::Reported => {
-            step.checks.is_empty() || verification(step, progress) == Verification::Passed
+            step.checks.is_empty() || matches!(verification(step, progress), Verification::Passed | Verification::ReviewPending)
         }
         _ => false,
     }
@@ -601,6 +626,7 @@ pub fn step_light(plan: &SigilPlan, run: Option<&SigilRun>, step: &SigilStep) ->
         StepStatus::Reported if step.checks.is_empty() => StepLight::DoneUnverified,
         StepStatus::Reported => match verification(step, progress) {
             Verification::Passed => StepLight::Passed,
+            Verification::ReviewPending => StepLight::ReviewPending,
             Verification::Failed => StepLight::Failed,
             Verification::NeedsYou => StepLight::NeedsYou,
             Verification::Running | Verification::None => StepLight::Verifying,
@@ -634,7 +660,7 @@ pub fn all_finished(plan: &SigilPlan, run: &SigilRun) -> bool {
 /// Event kinds an executor learns about through `notices` and `wait`.
 pub fn is_notice(kind: &str) -> bool {
     matches!(kind, "handover_approved" | "executor_revoked" | "paused" | "resumed" | "aborted" | "completed" | "user_note"
-        | "check_finished" | "check_decided" | "step_verified" | "command_approved" | "amendment_reverted" | "step_reopened")
+        | "check_finished" | "check_decided" | "step_verified" | "command_approved" | "automation_changed" | "amendment_reverted" | "step_reopened")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -801,7 +827,7 @@ pub fn validate_plan(plan: &SigilPlan) -> Result<(), String> {
                         return Err("命令参数最多 2000 字，且不能包含空字符。".into());
                     }
                 }
-                SigilCheck::Manual { label, description } => {
+                SigilCheck::Manual { label, description, .. } => {
                     line("验证名称", label, 160)?;
                     text("人工检查说明", description, 4_000)?;
                 }
@@ -1287,5 +1313,22 @@ mod tests {
         assert_eq!(record.input_hashes["src/lib.rs"].len(), 64);
         assert_eq!(record.commands[0].argv, ["cargo", "test"]);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn old_runs_and_manual_checks_keep_supervised_defaults_and_plan_fingerprints() {
+        let run: SigilRun = serde_json::from_value(serde_json::json!({
+            "started_at_ms": 42,
+            "execution_directory": "repo",
+            "location": "in_place",
+            "base_ref": "main",
+            "base_commit": "abc"
+        })).unwrap();
+        assert_eq!(run.automation, SigilAutomation::Supervised);
+
+        let old_manual = serde_json::json!({"kind": "manual", "label": "look", "description": "Open it"});
+        let manual: SigilCheck = serde_json::from_value(old_manual.clone()).unwrap();
+        assert!(matches!(manual, SigilCheck::Manual { blocking: false, .. }));
+        assert_eq!(serde_json::to_value(manual).unwrap(), old_manual, "legacy plan retries keep their request fingerprint");
     }
 }

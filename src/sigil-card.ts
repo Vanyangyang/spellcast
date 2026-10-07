@@ -5,7 +5,7 @@ import "./sigil-card.css";
 import { st, type SigilKey } from "./i18n/sigil";
 import { isDesktopShell } from "./shell";
 import {
-  approveCommand, controlSigil, decideCheck, decideHandover, deleteSigil, dispatchSigil, fetchSigil, fetchSigilDiff, fetchSigilStep, freezeSigil, noteSigil, reopenStep, reviewSigil,
+  approveCommand, automateSigil, controlSigil, decideCheck, decideHandover, deleteSigil, dispatchSigil, executeSigil, fetchSigil, fetchSigilDiff, fetchSigilStep, freezeSigil, noteSigil, reopenStep, reviewSigil,
   rerunChecks, revertAmendment, startSigil, unfreezeSigil, type AmendmentChange, type ChangedPath, type CheckResult, type PendingCommand, type SigilCheck,
   type SigilStep, type SigilView, type StepProgress,
 } from "./sigil-api";
@@ -183,7 +183,7 @@ function locationLine(location: "worktree" | "in_place", directory: string): HTM
   return line;
 }
 
-function freezeSummary(view: SigilView): Node[] {
+function freezeSummary(view: SigilView, autonomous = false): Node[] {
   const { review } = view;
   const nodes: Node[] = [locationLine(review.location, review.execution_directory), el("h3", "sigil-dialog-subtitle", st("freezeCommands"))];
   if (!review.commands.length) nodes.push(el("p", "sigil-dialog-muted", st("freezeNoCommands")));
@@ -204,7 +204,7 @@ function freezeSummary(view: SigilView): Node[] {
     for (const warning of warnings) list.append(el("li", "", warning.step_id ? `${warning.step_id} · ${warning.message}` : warning.message));
     nodes.push(list);
   }
-  nodes.push(el("p", "sigil-dialog-consent", st("freezeConsent")));
+  nodes.push(el("p", "sigil-dialog-consent", st(autonomous ? "executeConsent" : "freezeConsent")));
   return nodes;
 }
 
@@ -298,6 +298,8 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
   let actionFocus: string | undefined;
   /** Open change lists survive the refreshes that live progress brings. */
   const expanded = new Set<string>();
+  const decisionNotes = new Map<string, string>();
+  const decisionKey = (step: SigilStep, result: CheckResult) => `decision:${step.id}:${result.index}:${result.attempt}`;
 
   const button = (label: string, action: () => Promise<void>, disabled = false, key = label) => {
     const node = el("button", "sigil-card-action", label);
@@ -343,19 +345,12 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
     }, "sigil-output");
   };
 
-  /** Pass or fail a manual check; the note dialog lives on the page, so refreshes keep it. */
+  /** Record a manual decision directly, with the optional note kept beside its check. */
   const decide = (step: SigilStep, result: CheckResult, passed: boolean) => button(passed ? st("decidePass") : st("decideFail"), async () => {
-    const definition = step.checks[result.index];
-    const body: Node[] = [];
-    if (definition?.kind === "manual" && definition.description) body.push(el("p", "", definition.description));
-    const note = el("textarea", "sigil-dialog-input");
-    note.placeholder = st("decideNote");
-    note.rows = 3;
-    body.push(note);
-    if (await confirmDialog(st("decideTitle", { label: result.label }), body, passed ? st("decidePassConfirm") : st("decideFailConfirm"))) {
-      await decideCheck(reference.sigil_id, step.id, result.index, passed, note.value.trim());
-    }
-  });
+    const key = decisionKey(step, result);
+    await decideCheck(reference.sigil_id, step.id, result.index, passed, (decisionNotes.get(key) ?? "").trim());
+    decisionNotes.delete(key);
+  }, false, `${decisionKey(step, result)}:${passed ? "pass" : "fail"}`);
 
   const checkRows = (step: SigilStep, progress: StepProgress, current: SigilView) => {
     const results = progress.checks ?? [];
@@ -394,7 +389,19 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
         buttons.append(show);
       }
       // A decided check offers only the other decision, to change it until the run ends.
-      if (result.kind === "manual" && open && progress.status === "reported" && result.attempt === progress.attempt) {
+      const completedReview = current.sigil.state === "completed" && current.sigil.run?.automation === "autonomous"
+        && definition?.kind === "manual" && definition.blocking !== true;
+      if (result.kind === "manual" && (open || completedReview) && progress.status === "reported" && result.attempt === progress.attempt) {
+        const note = el("textarea", "sigil-card-decision-note");
+        const key = decisionKey(step, result);
+        note.dataset.key = key;
+        note.placeholder = st("decideNote");
+        note.setAttribute("aria-label", st("decideNote"));
+        note.rows = 2;
+        note.value = decisionNotes.get(key) ?? "";
+        note.disabled = busy;
+        note.addEventListener("input", () => decisionNotes.set(key, note.value));
+        row.append(note);
         if (result.status !== "passed") buttons.append(decide(step, result, true));
         if (result.status !== "failed") buttons.append(decide(step, result, false));
       }
@@ -528,7 +535,17 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
     run.replaceChildren();
     const sigilRun = current.sigil.run;
     if (!sigilRun) return;
+    run.append(el("p", "sigil-card-automation", st(sigilRun.automation === "autonomous" ? "automationAutonomous" : "automationSupervised")));
+    if (sigilRun.automation === "autonomous") run.append(el("p", "sigil-card-observe", st("autonomousBody")));
     const id = reference.sigil_id;
+    if (sigilRun.automation !== "autonomous" && (current.sigil.state === "running" || current.sigil.state === "paused")) {
+      const upgrade = el("div", "sigil-card-automation-upgrade");
+      const action = button(st("automate"), async () => { await automateSigil(id, current.sigil.revision); }, false, "automate");
+      action.classList.add("is-primary");
+      upgrade.append(el("p", "", st("automateBody")), action);
+      if (current.sigil.state === "paused") upgrade.append(el("p", "", st("automatePaused")));
+      run.append(upgrade);
+    }
     if (sigilRun.executor) {
       run.append(el("p", "sigil-card-executor", st("executor", { label: sigilRun.executor.label })),
         el("p", "sigil-card-source", st("executorSource", { source: sigilRun.executor.source_id })));
@@ -578,7 +595,7 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
     delivery.hidden = !lines.length && !alert;
   };
 
-  /** Commands an amendment added or changed run only after the user approves them here. */
+  /** Supervised runs retain individual approvals until the user switches the run's mode. */
   const renderApprovals = (current: SigilView) => {
     approvals.replaceChildren();
     const pending = current.pending_commands ?? [];
@@ -665,16 +682,39 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
     const id = reference.sigil_id;
     if (sigil.state === "draft") {
       const pendingReview = current.review.issues.some(issue => issue.code === "native_review_required");
-      if (!pendingReview || isDesktopShell()) actions.append(button(st(pendingReview ? "nativeReviewFreeze" : "freeze"), async () => {
+      if (!pendingReview || isDesktopShell()) {
+        const execute = button(st(canHandOver(current) ? "startDispatch" : "start"), async () => {
+          const latest = pendingReview ? await reviewSigil(id, sigil.revision) : await fetchSigil(id);
+          if (!latest.review.can_freeze) { view = latest; message = latest.review.issues.map(issueMessage).join(" "); return; }
+          const handover = canHandOver(latest);
+          const body = [...freezeSummary(latest, true), el("p", "sigil-dialog-consent", st("autonomousBody")), ...(handover ? dispatchSummary(latest) : [])];
+          if (!await confirmDialog(st(handover ? "startDispatchTitle" : "startTitle"), body, st(handover ? "startDispatchConfirm" : "startConfirm")) || destroyed) return;
+          const result = await executeSigil(id, latest.sigil.revision);
+          if (destroyed) return;
+          if (result.sigil) view = { ...latest, sigil: result.sigil, review: result.review ?? latest.review };
+          if (handover) {
+            try {
+              const startedAt = result.sigil?.run?.started_at_ms;
+              if (!Number.isFinite(startedAt) || !startedAt) throw new Error(st("dispatchMissingRun"));
+              const delivered = await dispatchSigil(id, startedAt!);
+              if (!destroyed) view = delivered;
+            } catch (error) { if (!destroyed) message = st("dispatchStartedError", { error: errorText(error) }); }
+          }
+          if (!destroyed) render();
+        }, !current.review.can_freeze && !pendingReview, "execute");
+        execute.classList.add("is-primary");
+        actions.append(execute);
+        actions.append(button(st(pendingReview ? "nativeReviewFreeze" : "freeze"), async () => {
         const latest = pendingReview ? await reviewSigil(id, sigil.revision) : await fetchSigil(id);
         if (!latest.review.can_freeze) { view = latest; message = latest.review.issues.map(issueMessage).join(" "); return; }
         if (await confirmDialog(st("freezeTitle"), freezeSummary(latest), st("freezeConfirm"))) await freezeSigil(id, latest.sigil.revision);
-      }, !current.review.can_freeze && !pendingReview));
+        }, !current.review.can_freeze && !pendingReview));
+      }
     }
     if (sigil.state === "frozen") {
       if (canHandOver(current)) {
         const handover = button(st("startDispatch"), async () => {
-          if (!await confirmDialog(st("startDispatchTitle"), dispatchSummary(current), st("startDispatchConfirm")) || destroyed) return;
+          if (!await confirmDialog(st("startDispatchTitle"), [...dispatchSummary(current), el("p", "sigil-dialog-consent", st("autonomousBody"))], st("startDispatchConfirm")) || destroyed) return;
           const result = await startSigil(id, sigil.revision);
           if (destroyed) return;
           if (result.sigil) view = { ...current, sigil: result.sigil, review: result.review ?? current.review };
@@ -693,7 +733,7 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
         actions.append(handover);
       }
       actions.append(button(st("start"), async () => {
-        const body = [el("p", "", st("startBody")), locationLine(sigil.location, sigil.freeze?.execution_directory ?? current.review.execution_directory)];
+        const body = [el("p", "", st("startBody")), locationLine(sigil.location, sigil.freeze?.execution_directory ?? current.review.execution_directory), el("p", "sigil-dialog-consent", st("autonomousBody"))];
         if (await confirmDialog(st("startTitle"), body, st("startConfirm")) && !destroyed) await startSigil(id, sigil.revision);
       }, false, "start"));
       actions.append(button(st("unfreeze"), async () => { await unfreezeSigil(id, sigil.revision); }));
@@ -738,6 +778,8 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
     if (destroyed) return;
     // Keep keyboard focus on the same control across a re-render.
     const active = (document.activeElement instanceof HTMLElement && root.contains(document.activeElement) ? document.activeElement.dataset.key : undefined) ?? actionFocus;
+    const selection = document.activeElement instanceof HTMLTextAreaElement && root.contains(document.activeElement)
+      ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] as const : undefined;
     kind.textContent = st("kind");
     kind.title = st("explain");
     root.dataset.state = phase === "ready" && view ? view.sigil.state : phase;
@@ -764,8 +806,8 @@ export function mountSigilCard(host: HTMLElement, reference: SigilReference, onT
       state.textContent = label; title.textContent = label; onTitle(label);
     }
     if (active) {
-      const target = [...root.querySelectorAll<HTMLButtonElement>("button[data-key]")].find(node => node.dataset.key === active && !node.disabled);
-      if (target) { target.focus({ preventScroll: true }); actionFocus = undefined; }
+      const target = [...root.querySelectorAll<HTMLButtonElement | HTMLTextAreaElement>("button[data-key], textarea[data-key]")].find(node => node.dataset.key === active && !node.disabled);
+      if (target) { target.focus({ preventScroll: true }); if (target instanceof HTMLTextAreaElement && selection) target.setSelectionRange(...selection); actionFocus = undefined; }
     }
     tickElapsed();
   }

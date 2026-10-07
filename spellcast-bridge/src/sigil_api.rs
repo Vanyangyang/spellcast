@@ -6,7 +6,7 @@ use axum::{extract::{DefaultBodyLimit, Path, Query, State}, http::{HeaderMap, St
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::{project_api::{application, Fail}, sigil_run::RunControl, sigil_workspace::SigilQuery, sigils::SigilPlan, Bridge};
+use crate::{project_api::{application, Fail}, sigil_run::RunControl, sigil_workspace::SigilQuery, sigils::{SigilActor, SigilAutomation, SigilPlan}, Bridge};
 
 const PLAN_BODY_LIMIT: usize = 8 * 1024 * 1024;
 
@@ -32,6 +32,8 @@ pub(crate) fn router() -> Router<Arc<Bridge>> {
         .route("/api/sigils/:id/delete", post(delete))
         .route("/api/sigils/:id/pin", post(pin))
         .route("/api/sigils/:id/start", post(start))
+        .route("/api/sigils/:id/automation", post(automation))
+        .route("/api/sigils/:id/execute", post(execute))
         .route("/api/sigils/:id/dispatch", post(dispatch))
         .route("/api/sigils/:id/pause", post(pause))
         .route("/api/sigils/:id/resume", post(resume))
@@ -59,9 +61,34 @@ struct Note {
     text: String,
 }
 
-async fn start(State(b): State<Arc<Bridge>>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<Transition>) -> Result<Json<Value>, Fail> {
+#[derive(Deserialize)]
+struct StartRequest {
+    request_id: String,
+    expected_revision: u64,
+    #[serde(default)]
+    automation: SigilAutomation,
+}
+
+async fn start(State(b): State<Arc<Bridge>>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<StartRequest>) -> Result<Json<Value>, Fail> {
     application(&headers, &b)?;
-    b.sigil_start(&id, &req.request_id, req.expected_revision).await.map(Json).map_err(bad)
+    b.sigil_start_with_automation(&id, &req.request_id, req.expected_revision, req.automation, &SigilActor::user()).await.map(Json).map_err(bad)
+}
+
+#[derive(Deserialize)]
+struct AutomationRequest {
+    request_id: String,
+    expected_revision: u64,
+    automation: SigilAutomation,
+}
+
+async fn automation(State(b): State<Arc<Bridge>>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<AutomationRequest>) -> Result<Json<Value>, Fail> {
+    application(&headers, &b)?;
+    b.sigil_set_automation(&id, &req.request_id, req.expected_revision, req.automation).map(Json).map_err(bad)
+}
+
+async fn execute(State(b): State<Arc<Bridge>>, Path(id): Path<String>, headers: HeaderMap, Json(req): Json<Transition>) -> Result<Json<Value>, Fail> {
+    application(&headers, &b)?;
+    b.sigil_execute(&id, &req.request_id, req.expected_revision, &SigilActor::user()).await.map(Json).map_err(bad)
 }
 
 #[derive(Deserialize)]
@@ -295,6 +322,52 @@ mod tests {
         (status, serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap_or(Value::Null))
     }
 
+    #[tokio::test]
+    async fn automation_upgrade_route_requires_trusted_native_window_and_cannot_be_called_over_mcp() {
+        let root = std::env::temp_dir().join(format!("spellcast-sigil-automation-http-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).unwrap();
+        let bridge = Arc::new(Bridge::open(Headless, 0, &root.join("state.sqlite3")).unwrap());
+        // Install a paused legacy projection without touching a user repository or launching a watcher.
+        let legacy: crate::sigils::Sigil = serde_json::from_value(json!({
+            "id": "legacy", "title": "Legacy run", "goal": "Continue existing run", "repository": root.to_string_lossy(), "steps": [
+                {"id": "a", "title": "Review", "checks": [{"kind": "manual", "label": "review"}]}],
+            "state": "paused", "revision": 7, "created_at_ms": 1, "updated_at_ms": 1,
+            "updated_by": {"kind": "user", "source_id": "", "label": ""},
+            "run": {"started_at_ms": 2, "execution_directory": root.to_string_lossy(), "location": "in_place", "base_ref": "main", "base_commit": "kept",
+                "steps": {"a": {"status": "reported", "attempt": 1, "checks": [{"index": 0, "kind": "manual", "label": "review", "attempt": 1, "status": "waiting"}]}}}
+        })).unwrap();
+        assert_eq!(legacy.run.as_ref().unwrap().automation, SigilAutomation::Supervised, "old rows omit automation");
+        bridge.sigil_store().unwrap().sigil_apply("install-legacy", "install-legacy", "legacy", 1, None, |_, _| {
+            Ok(crate::sigil_store::Applied::Write { sigil: Box::new(legacy), history: None, created: true })
+        }).unwrap();
+        let app = router().with_state(bridge.clone());
+        let key = bridge.project_window_key();
+        let body = json!({"request_id": "window-automation", "expected_revision": 7, "automation": "autonomous"});
+        for headers in [vec![], vec![("origin", "http://tauri.localhost")], vec![("x-spellcast-window", key.as_str())],
+            vec![("origin", "http://localhost:47194"), ("x-spellcast-window", key.as_str())],
+            vec![("origin", "https://example.com"), ("x-spellcast-window", key.as_str())],
+            vec![("origin", "http://tauri.localhost"), ("x-spellcast-window", "wrong")]] {
+            assert_eq!(post(&app, "/api/sigils/legacy/automation", &headers, body.clone()).await.0, StatusCode::FORBIDDEN, "{headers:?}");
+        }
+        let window = [("origin", "http://tauri.localhost"), ("x-spellcast-window", key.as_str())];
+        assert_eq!(post(&app, "/api/sigils/legacy/automation", &window,
+            json!({"request_id": "supervised-mode", "expected_revision": 7, "automation": "supervised"})).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post(&app, "/api/sigils/legacy/automation", &window,
+            json!({"request_id": "stale-mode", "expected_revision": 6, "automation": "autonomous"})).await.0, StatusCode::BAD_REQUEST);
+        let (status, upgraded) = post(&app, "/api/sigils/legacy/automation", &window, body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{upgraded}");
+        assert_eq!(upgraded["sigil"]["run"]["automation"], "autonomous");
+        assert_eq!(upgraded["sigil"]["revision"], 8);
+        assert_eq!(upgraded["sigil"]["state"], "paused");
+        assert_eq!(upgraded["sigil"]["run"]["steps"]["a"]["checks"][0]["status"], "deferred");
+        assert_eq!(post(&app, "/api/sigils/legacy/automation", &window, body).await.1["replayed"], true);
+        assert!(serde_json::from_value::<crate::sigil_workspace::SigilUpdate>(json!({"request_id": "agent-mode", "sigil_id": "legacy",
+            "source_id": "claude:agent", "op": "automation", "expected_revision": 8, "automation": "autonomous"})).is_err(), "MCP has no mode-change operation");
+        drop(app);
+        drop(bridge);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// Runs on its own runtime: the router's delivery worker and observation loop hold the bridge
     /// until the runtime shuts down, and only then can the fixture database be removed.
     #[test]
@@ -341,6 +414,9 @@ mod tests {
         assert_eq!(post(&app, "/api/sigils/transport/freeze", &[], body.clone()).await.0, StatusCode::FORBIDDEN);
         assert_eq!(post(&app, "/api/sigils/transport/freeze", &[("origin", "http://tauri.localhost")], body.clone()).await.0, StatusCode::FORBIDDEN);
         assert_eq!(post(&app, "/api/sigils/transport/freeze", &[("x-spellcast-window", key.as_str())], body.clone()).await.0, StatusCode::FORBIDDEN);
+        for headers in [vec![], vec![("origin", "http://tauri.localhost")], vec![("x-spellcast-window", key.as_str())]] {
+            assert_eq!(post(&app, "/api/sigils/transport/execute", &headers, body.clone()).await.0, StatusCode::FORBIDDEN);
+        }
         let (status, frozen) = post(&app, "/api/sigils/transport/freeze", &[("origin", "http://tauri.localhost"), ("x-spellcast-window", key.as_str())], body).await;
         assert_eq!(status, StatusCode::OK, "{frozen}");
         assert_eq!(frozen["sigil"]["state"], "frozen");

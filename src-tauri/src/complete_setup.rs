@@ -38,6 +38,7 @@ pub const REQUIRED_RELATIVE: &[&str] = &[
     "skills/spellcast/references/works.md",
     "skills/spellcast/references/feedback.md",
     "skills/spellcast/references/project-records.md",
+    "skills/spellcast/references/sigil.md",
     "skills/spellcast/scripts/project-api.mjs",
     ".mcp.json",
     "LICENSE",
@@ -55,6 +56,7 @@ const MANAGED_RELATIVE: &[&str] = &[
     "skills/spellcast/references/works.md",
     "skills/spellcast/references/feedback.md",
     "skills/spellcast/references/project-records.md",
+    "skills/spellcast/references/sigil.md",
     "skills/spellcast/scripts/project-api.mjs",
     ".mcp.json",
     "LICENSE",
@@ -67,6 +69,7 @@ const SKILL_OFFICIAL: &[&str] = &[
     "references/works.md",
     "references/feedback.md",
     "references/project-records.md",
+    "references/sigil.md",
     "scripts/project-api.mjs",
 ];
 
@@ -950,6 +953,7 @@ fn existing_is_custom(dest: &Path, bundle: &Path) -> Result<Option<String>, Stri
         "skills/spellcast/references/canvas.md",
         "skills/spellcast/references/works.md",
         "skills/spellcast/references/feedback.md",
+        "skills/spellcast/references/sigil.md",
         "LICENSE",
     ] {
         let have = dest.join(rel);

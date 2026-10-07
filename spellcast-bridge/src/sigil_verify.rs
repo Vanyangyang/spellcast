@@ -17,7 +17,7 @@ use crate::sigil_process::{self, Outcome, Tail};
 use crate::sigil_run::complete_if_finished;
 use crate::sigil_snapshot::Session;
 use crate::sigil_store::{CheckOutput, Events};
-use crate::sigils::{current_checks, verification, CheckResult, CheckStatus, Sigil, SigilCheck, SigilCommand, SigilState, SigilStep,
+use crate::sigils::{current_checks, verification, CheckResult, CheckStatus, Sigil, SigilAutomation, SigilCheck, SigilCommand, SigilState, SigilStep,
     StepProgress, StepStatus, Verification};
 use crate::Bridge;
 
@@ -70,20 +70,30 @@ pub(crate) fn approved(consented: &[SigilCommand], step_id: &str, argv: &[String
     consented.iter().any(|command| command.step_id == step_id && command.argv == argv && command.timeout_s == timeout_s)
 }
 
-fn queued(index: usize, check: &SigilCheck, attempt: u32, step_id: &str, consented: &[SigilCommand]) -> CheckResult {
+fn queued(index: usize, check: &SigilCheck, attempt: u32, step_id: &str, consented: &[SigilCommand], automation: SigilAutomation) -> CheckResult {
     match check {
         SigilCheck::Command { label, argv, timeout_s } => CheckResult {
             index, kind: "command".into(), label: label.clone(), attempt,
             status: if approved(consented, step_id, argv, *timeout_s) { CheckStatus::Queued } else { CheckStatus::NeedsApproval },
             ..Default::default()
         },
-        SigilCheck::Manual { label, .. } => CheckResult { index, kind: "manual".into(), label: label.clone(), attempt, status: CheckStatus::Waiting, ..Default::default() },
+        SigilCheck::Manual { label, blocking, .. } => CheckResult {
+            index, kind: "manual".into(), label: label.clone(), attempt,
+            status: if automation == SigilAutomation::Autonomous && !blocking { CheckStatus::Deferred } else { CheckStatus::Waiting },
+            ..Default::default()
+        },
     }
 }
 
 /// The checks a report queues: approved commands in declared order, manual checks for the user.
+#[cfg(test)]
 pub(crate) fn queue_checks(step: &SigilStep, attempt: u32, consented: &[SigilCommand]) -> Vec<CheckResult> {
-    step.checks.iter().enumerate().map(|(index, check)| queued(index, check, attempt, &step.id, consented)).collect()
+    queue_checks_with_automation(step, attempt, consented, SigilAutomation::Supervised)
+}
+
+/// Queues commands using the run's authorization and applies its manual review policy.
+pub(crate) fn queue_checks_with_automation(step: &SigilStep, attempt: u32, consented: &[SigilCommand], automation: SigilAutomation) -> Vec<CheckResult> {
+    step.checks.iter().enumerate().map(|(index, check)| queued(index, check, attempt, &step.id, consented, automation)).collect()
 }
 
 /// Stops queued and running commands, as an abort or a new attempt of the step does.
@@ -105,7 +115,7 @@ pub(crate) fn rerun_checks(step: &SigilStep, progress: &mut StepProgress, consen
     for result in progress.checks.iter_mut().filter(|check| check.attempt == attempt && check.kind == "command") {
         let Some(check @ SigilCheck::Command { .. }) = step.checks.get(result.index) else { continue };
         if matches!(result.status, CheckStatus::Passed | CheckStatus::Failed | CheckStatus::Stopped) {
-            *result = queued(result.index, check, attempt, &step.id, consented);
+            *result = queued(result.index, check, attempt, &step.id, consented, SigilAutomation::Supervised);
             rerun.push(result.index);
         }
     }
@@ -186,7 +196,7 @@ struct Started {
 }
 
 /// Marks the next approved command running. A queued command that is not approved waits for the
-/// user instead, so an amendment can never run a command the user has not seen.
+/// user instead. Authorization is checked against the run's mode and current plan.
 fn begin(sigil: &mut Sigil, now: u64, events: &mut Events) -> (Option<Started>, bool) {
     let consented = crate::sigils::consented_commands(sigil);
     let mut changed = false;
@@ -517,7 +527,7 @@ mod tests {
     #[test]
     fn unapproved_commands_wait_for_the_user_and_manual_checks_wait_too() {
         let step = step("a", &[], vec![command("build", &["cargo", "build"]), command("test", &["cargo", "test"]),
-            SigilCheck::Manual { label: "look".into(), description: String::new() }]);
+            SigilCheck::Manual { label: "look".into(), description: String::new(), blocking: false }]);
         let consented = vec![SigilCommand { step_id: "a".into(), label: "build".into(), argv: vec!["cargo".into(), "build".into()], timeout_s: 120 }];
         let queued = queue_checks(&step, 1, &consented);
         let statuses: Vec<CheckStatus> = queued.iter().map(|check| check.status).collect();
@@ -529,12 +539,75 @@ mod tests {
         assert!(!approved(&consented, "a", &consented[0].argv, 60), "and per timeout");
     }
 
+    #[test]
+    fn autonomous_manual_reviews_are_deferred_unless_explicitly_blocking() {
+        let step = step("a", &[], vec![
+            SigilCheck::Manual { label: "later".into(), description: String::new(), blocking: false },
+            SigilCheck::Manual { label: "required".into(), description: String::new(), blocking: true },
+        ]);
+        let checks = queue_checks_with_automation(&step, 1, &[], SigilAutomation::Autonomous);
+        assert_eq!(checks.iter().map(|check| check.status).collect::<Vec<_>>(), [CheckStatus::Deferred, CheckStatus::Waiting]);
+        assert!(checks[0].finished_at_ms.is_none(), "deferred means unperformed, not passed");
+        let mut progress = StepProgress { status: StepStatus::Reported, attempt: 1, checks, ..Default::default() };
+        assert_eq!(verification(&step, &progress), Verification::NeedsYou);
+        decide_check(&step, &mut progress, 1, true, "required review passed", 2).unwrap();
+        assert_eq!(verification(&step, &progress), Verification::ReviewPending);
+        assert_eq!(progress.checks[0].status, CheckStatus::Deferred);
+
+        // A missing result or a result from an earlier attempt cannot complete verification.
+        progress.checks.pop();
+        assert_eq!(verification(&step, &progress), Verification::Running);
+        progress.checks[0].attempt = 0;
+        assert_eq!(verification(&step, &progress), Verification::Running);
+    }
+
+    #[tokio::test]
+    async fn autonomous_review_pending_allows_dependencies_but_command_failures_block_completion() {
+        let f = fixture();
+        let b = f.b();
+        let manual = || SigilCheck::Manual { label: "review".into(), description: "Review later".into(), blocking: false };
+        started(&f, "autonomous", vec![
+            step("a", &[], vec![command("version", &["git", "--version"]), manual()]),
+            step("b", &["a"], vec![command("fixed branch", &["git", "rev-parse", "--verify", "refs/heads/fixed"]), manual()]),
+        ]).await;
+        b.sigil_store().unwrap().sigil_record("autonomous", None, |sigil, _| {
+            sigil.run.as_mut().unwrap().automation = SigilAutomation::Autonomous;
+            Some(None)
+        }).unwrap();
+
+        start_and_report(b, "autonomous", "a", "1").await;
+        assert_eq!(statuses(b, "autonomous", "a"), ["queued", "deferred"]);
+        b.sigil_run_checks("autonomous").await.unwrap();
+        let current = view(b, "autonomous");
+        assert_eq!(current["lights"]["a"], "review_pending");
+        assert_eq!(current["lights"]["b"], "ready", "unperformed nonblocking review satisfies dependencies");
+        assert_eq!(current["next"], "b");
+
+        start_and_report(b, "autonomous", "b", "1").await;
+        b.sigil_run_checks("autonomous").await.unwrap();
+        assert_eq!(statuses(b, "autonomous", "b"), ["failed", "deferred"]);
+        let failed = view(b, "autonomous");
+        assert_eq!(failed["lights"]["b"], "failed", "real command failure wins over deferred review");
+        assert_eq!(failed["sigil"]["state"], "running");
+        assert_eq!(failed["next"], "b");
+
+        sh(&f.repo, &["branch", "fixed"]);
+        start_and_report(b, "autonomous", "b", "2").await;
+        b.sigil_run_checks("autonomous").await.unwrap();
+        let completed = view(b, "autonomous");
+        assert_eq!(completed["sigil"]["state"], "completed");
+        assert_eq!(completed["lights"]["a"], "review_pending");
+        assert_eq!(completed["lights"]["b"], "review_pending");
+        assert_eq!(statuses(b, "autonomous", "b"), ["passed", "deferred"]);
+        assert!(checks(b, "autonomous", "b")[1]["finished_at_ms"].is_null());
+    }
+
     #[tokio::test]
     async fn commands_and_manual_checks_drive_lights_next_and_completion() {
         let f = fixture();
         let b = f.b();
         started(&f, "lights", vec![
-            step("a", &[], vec![command("version", &["git", "--version"]), SigilCheck::Manual { label: "look".into(), description: "Open it".into() }]),
+            step("a", &[], vec![command("version", &["git", "--version"]), SigilCheck::Manual { label: "look".into(), description: "Open it".into(), blocking: false }]),
             step("b", &["a"], vec![command("fixed branch", &["git", "rev-parse", "--verify", "refs/heads/fixed"])]),
         ]).await;
         let reported = start_and_report(b, "lights", "a", "1").await;

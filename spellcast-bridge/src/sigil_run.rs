@@ -13,15 +13,25 @@ use crate::sigil_amend::{apply_amend, approve_command, reopen_step, revert_amend
 use crate::sigil_observe::{apply_agent_at, baseline};
 use crate::sigil_snapshot::git;
 use crate::sigil_store::{actor_json, check_revision, Applied, Events, SigilMutation};
-use crate::sigil_verify::{decide_check, queue_checks, rerun_checks, stop_checks, verified_event};
-use crate::sigils::{all_finished, current_checks, dependencies_finished, is_notice, next_step, step_light, validate_sigil_id, verification, Sigil,
-    SigilActor, SigilClaim, SigilCommand, SigilExecutor, SigilLocation, SigilObservation, SigilRun, SigilState, SigilStep, StepMarker, StepProgress,
+use crate::sigil_verify::{decide_check, queue_checks_with_automation, rerun_checks, stop_checks, verified_event};
+use crate::sigils::{all_finished, current_checks, dependencies_finished, is_notice, next_step, step_light, validate_sigil_id, verification, CheckStatus, Sigil, SigilCheck,
+    SigilActor, SigilAutomation, SigilClaim, SigilCommand, SigilExecutor, SigilLocation, SigilObservation, SigilRun, SigilState, SigilStep, StepMarker, StepProgress,
     StepStatus};
 use crate::Bridge;
 
 /// Wakes `wait` calls and the observation loop after any sigil change. Waiters re-check their
 /// own sigil.
 pub(crate) static SIGIL_CHANGED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
+// Serialize preparation so concurrent retries cannot create or roll back each other's worktree.
+static START_GATE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+struct PreparedWorktree {
+    directory: String,
+    branch: String,
+    base_ref: String,
+    base_commit: String,
+    created: bool,
+}
 
 pub const MAX_WAIT_S: u32 = 55;
 
@@ -63,7 +73,7 @@ fn ensure_running(sigil: &Sigil) -> Result<(), String> {
         SigilState::Running => Ok(()),
         SigilState::Paused => Err("paused：用户暂停了执行；用 wait 等待继续。".into()),
         SigilState::Completed | SigilState::Aborted | SigilState::Archived => Err("法阵已经结束。".into()),
-        SigilState::Draft | SigilState::Frozen => Err("法阵还没开始执行；请等用户在 Spellcast 窗口里点开始执行。".into()),
+        SigilState::Draft | SigilState::Frozen => Err("法阵还没开始执行；用户已明确授权执行时可用 op=execute，或在 Spellcast 窗口开始。".into()),
     }
 }
 
@@ -96,10 +106,10 @@ fn consented(sigil: &Sigil) -> Vec<SigilCommand> {
 }
 
 /// A report closes the step and queues its checks.
-fn mark_reported(step: &SigilStep, progress: &mut StepProgress, consented: &[SigilCommand], now: u64) {
+fn mark_reported(step: &SigilStep, progress: &mut StepProgress, consented: &[SigilCommand], automation: SigilAutomation, now: u64) {
     progress.status = StepStatus::Reported;
     progress.reported_at_ms = Some(now);
-    progress.checks = queue_checks(step, progress.attempt, consented);
+    progress.checks = queue_checks_with_automation(step, progress.attempt, consented, automation);
 }
 
 /// Finishing the last step completes the run; that is a lifecycle change.
@@ -189,7 +199,7 @@ pub(crate) fn apply_agent(op: &AgentRunOp<'_>, source: &str, label: &str, curren
             let run = sigil.run.as_mut().expect("run checked above");
             for previous_step in active {
                 let previous = run.steps.get_mut(&previous_step.id).expect("active step present");
-                mark_reported(&previous_step, previous, &consented, now);
+                mark_reported(&previous_step, previous, &consented, run.automation, now);
                 previous.markers.push(marker("reported_automatically", now, format!("开始 {step_id} 时自动结束")));
                 events.push(("step_reported".into(), json!({"step_id": previous_step.id, "automatic": true, "checks": previous.checks.len()})));
             }
@@ -222,7 +232,7 @@ pub(crate) fn apply_agent(op: &AgentRunOp<'_>, source: &str, label: &str, curren
                 }
                 StepStatus::Active | StepStatus::Blocked | StepStatus::Reported => {}
             }
-            mark_reported(&step, progress, &consented, now);
+            mark_reported(&step, progress, &consented, run.automation, now);
             progress.summary = summary.to_string();
             progress.evidence = evidence.to_vec();
             progress.block_reason.clear();
@@ -254,6 +264,7 @@ pub(crate) fn apply_agent(op: &AgentRunOp<'_>, source: &str, label: &str, curren
 /// Window-side run changes.
 pub(crate) enum UserRunOp<'a> {
     Control(RunControl),
+    Automation { expected_revision: u64 },
     Handover { source_id: &'a str, approve: bool },
     Revoke,
     Note { text: &'a str },
@@ -272,6 +283,43 @@ pub(crate) fn apply_user(op: &UserRunOp<'_>, current: Option<Sigil>, now: u64, e
     }
     let mut history = None;
     match op {
+        UserRunOp::Automation { expected_revision } => {
+            ensure_open(&sigil)?;
+            check_revision(&sigil, *expected_revision)?;
+            let run = sigil.run.as_mut().expect("run checked above");
+            // A fresh request at the current revision is harmless after the upgrade. Receipt
+            // replay is handled before this operation, including after a later lifecycle change.
+            if run.automation == SigilAutomation::Autonomous {
+                return Ok(Applied::Write { sigil: Box::new(sigil), history: None, created: false });
+            }
+            run.automation = SigilAutomation::Autonomous;
+            let (mut queued, mut deferred) = (0, 0);
+            for step in &sigil.plan.steps {
+                let Some(progress) = run.steps.get_mut(&step.id).filter(|progress| progress.status == StepStatus::Reported) else { continue };
+                let before = verification(step, progress);
+                for check in progress.checks.iter_mut().filter(|check| check.attempt == progress.attempt) {
+                    match (step.checks.get(check.index), check.kind.as_str(), check.status) {
+                        (Some(SigilCheck::Command { .. }), "command", CheckStatus::NeedsApproval) => {
+                            check.status = CheckStatus::Queued;
+                            queued += 1;
+                        }
+                        (Some(SigilCheck::Manual { blocking: false, .. }), "manual", CheckStatus::Waiting) => {
+                            check.status = CheckStatus::Deferred;
+                            deferred += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                verified_event(step, before, progress, events);
+            }
+            sigil.revision += 1;
+            sigil.updated_at_ms = now;
+            sigil.updated_by = user.clone();
+            events.push(("automation_changed".into(), json!({"revision": sigil.revision, "from": "supervised", "to": "autonomous",
+                "queued_commands": queued, "deferred_reviews": deferred, "actor": actor_json(&user)})));
+            history = Some("automation_changed");
+            complete_if_finished(&mut sigil, now, events);
+        }
         UserRunOp::Control(control) => {
             let (from_ok, to, kind) = match control {
                 RunControl::Pause => (sigil.state == SigilState::Running, SigilState::Paused, "paused"),
@@ -300,8 +348,13 @@ pub(crate) fn apply_user(op: &UserRunOp<'_>, current: Option<Sigil>, now: u64, e
             }
         }
         UserRunOp::DecideCheck { step_id, index, passed, note } => {
-            ensure_open(&sigil)?;
             let step = plan_step(&sigil, step_id)?.clone();
+            // Autonomous completion can leave explicitly unperformed, non-blocking reviews.
+            // They remain reviewable after execution without reopening or inventing a pass.
+            let completed_review = sigil.state == SigilState::Completed
+                && sigil.run.as_ref().is_some_and(|run| run.automation == SigilAutomation::Autonomous)
+                && matches!(step.checks.get(*index), Some(crate::sigils::SigilCheck::Manual { blocking: false, .. }));
+            if !completed_review { ensure_open(&sigil)?; }
             let progress = sigil.run.as_mut().expect("run checked above").steps.get_mut(*step_id).ok_or_else(|| format!("步骤 {step_id} 还没报告完成。"))?;
             let before = verification(&step, progress);
             let decided = decide_check(&step, progress, *index, *passed, note, now)?;
@@ -382,11 +435,14 @@ fn compact_step(sigil: &Sigil, step: &SigilStep) -> Value {
 /// What an executor needs after each call: where it stands, what to do next and what changed.
 fn agent_view(sigil: &Sigil, mutation: &SigilMutation, step_id: Option<&str>) -> Value {
     let run = sigil.run.as_ref();
-    let remaining = run.map(|run| sigil.plan.steps.iter().filter(|step| !crate::sigils::step_finished(step, Some(run))).count()).unwrap_or(0);
+    let remaining = if sigil.state == SigilState::Completed { 0 } else {
+        run.map(|run| sigil.plan.steps.iter().filter(|step| !crate::sigils::step_finished(step, Some(run))).count()).unwrap_or(0)
+    };
+    let executable = matches!(sigil.state, SigilState::Running | SigilState::Paused);
     let mut value = json!({
         "sigil_id": sigil.id, "state": sigil.state, "replayed": mutation.replayed,
         "executor": run.and_then(|run| run.executor.clone()),
-        "next": run.and_then(|run| next_step(&sigil.plan, run)).map(|step| compact_step(sigil, step)),
+        "next": run.filter(|_| executable).and_then(|run| next_step(&sigil.plan, run)).map(|step| compact_step(sigil, step)),
         "remaining": remaining, "notices": mutation.notices, "cursor": mutation.cursor,
     });
     // Commands an amendment added or changed run only after the user approves them.
@@ -483,6 +539,18 @@ impl Bridge {
         self.user_run(sigil_id, request_id, &hash, UserRunOp::Control(control))
     }
 
+    /// Window-only: consent to automatic verification for an existing, open run.
+    pub fn sigil_set_automation(&self, sigil_id: &str, request_id: &str, expected_revision: u64, automation: SigilAutomation) -> Result<Value, SpellcastError> {
+        validate_sigil_id(sigil_id).map_err(fail)?;
+        crate::sigil_workspace::validate_request_id(request_id)?;
+        if automation != SigilAutomation::Autonomous {
+            return Err(fail("执行中的法阵只能切换为自主执行。"));
+        }
+        let hash = crate::sigil_workspace::request_hash(&json!({"op": "automation", "sigil_id": sigil_id,
+            "expected_revision": expected_revision, "automation": automation}));
+        self.user_run(sigil_id, request_id, &hash, UserRunOp::Automation { expected_revision })
+    }
+
     pub fn sigil_handover(&self, sigil_id: &str, request_id: &str, source_id: &str, approve: bool) -> Result<Value, SpellcastError> {
         validate_sigil_id(sigil_id).map_err(fail)?;
         let hash = crate::sigil_workspace::request_hash(&json!({"op": "handover", "sigil_id": sigil_id, "source_id": source_id, "approve": approve}));
@@ -543,10 +611,96 @@ impl Bridge {
     }
 
     /// Window-only. Prepares the execution location for a frozen sigil, then records the run.
+    /// Persist preparation before creating Git artifacts. A restart may reuse only this
+    /// request's registered worktree, with the exact repository, branch and base commit.
+    async fn sigil_prepare_worktree(&self, sigil: &Sigil, request_id: &str, start_hash: &str,
+        directory: &str, base_ref: &str, base_commit: &str) -> Result<PreparedWorktree, SpellcastError> {
+        let repository = Path::new(&sigil.plan.repository);
+        let branch = format!("sigil/{}", sigil.id);
+        let prep_id = format!("start-preparation-{}", crate::sigil_workspace::request_hash(&json!(request_id)));
+        let prep_hash = crate::sigil_workspace::request_hash(&json!({"op": "start_preparation", "start_hash": start_hash}));
+        let prior = self.sigil_store()?.sigil_receipt(&prep_id, &prep_hash).map_err(fail)?;
+        let mut prepared = PreparedWorktree { directory: directory.into(), branch: branch.clone(),
+            base_ref: base_ref.into(), base_commit: base_commit.into(), created: false };
+        if let Some(receipt) = prior {
+            let event = self.sigil_store()?.sigil_events(&sigil.id, receipt.cursor.saturating_sub(1), 1).map_err(fail)?
+                .into_iter().next().filter(|event| event.seq == receipt.cursor && event.kind == "preparation_started")
+                .ok_or_else(|| fail("启动准备记录缺失；没有复用现有目录。"))?;
+            if event.value["directory"] != directory || event.value["branch"] != branch {
+                return Err(fail("启动准备位置已变化；没有复用现有目录。"));
+            }
+            prepared.base_ref = event.value["base_ref"].as_str().ok_or_else(|| fail("启动准备记录缺少基线。"))?.into();
+            prepared.base_commit = event.value["base_commit"].as_str().ok_or_else(|| fail("启动准备记录缺少提交。"))?.into();
+            if Path::new(directory).exists() {
+                let canonical = |path: &str| std::fs::canonicalize(path).map_err(fail);
+                let actual_root = git(Path::new(directory), &["rev-parse", "--show-toplevel"]).await.map_err(fail)?;
+                let actual_common = git(Path::new(directory), &["rev-parse", "--path-format=absolute", "--git-common-dir"]).await.map_err(fail)?;
+                let expected_common = git(repository, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).await.map_err(fail)?;
+                let actual_branch = git(Path::new(directory), &["symbolic-ref", "--quiet", "--short", "HEAD"]).await.map_err(fail)?;
+                let actual_commit = git(Path::new(directory), &["rev-parse", "--verify", "HEAD"]).await.map_err(fail)?;
+                if canonical(&actual_root)? != canonical(directory)? || canonical(&actual_common)? != canonical(&expected_common)?
+                    || actual_branch != branch || actual_commit != prepared.base_commit {
+                    return Err(fail("启动准备目录的仓库、分支或提交不匹配；没有更改它。"));
+                }
+                let registry = git(repository, &["worktree", "list", "--porcelain"]).await.map_err(fail)?;
+                let expected_path = canonical(directory)?;
+                let entry = registry.split("\n\n").find(|entry| entry.lines().find_map(|line| line.strip_prefix("worktree "))
+                    .is_some_and(|path| std::fs::canonicalize(path).is_ok_and(|path| path == expected_path)))
+                    .ok_or_else(|| fail("启动准备目录没有登记为原仓库的 worktree。"))?;
+                if !entry.lines().any(|line| line == format!("branch refs/heads/{branch}")) {
+                    return Err(fail("启动准备 worktree 登记的分支不匹配。"));
+                }
+                match entry.lines().find(|line| line.starts_with("locked")) {
+                    Some(line) if line == format!("locked sigil:{}", sigil.id) => {},
+                    Some(_) => return Err(fail("启动准备 worktree 被其他原因锁定；没有更改它。")),
+                    None => { git(repository, &["worktree", "lock", "--reason", &format!("sigil:{}", sigil.id), directory]).await.map_err(fail)?; }
+                }
+                return Ok(prepared);
+            }
+        } else {
+            if Path::new(directory).exists() { return Err(fail(format!("worktree 路径已存在：{directory}"))); }
+            if git(repository, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).await.is_ok() {
+                return Err(fail(format!("分支 {branch} 已存在。")));
+            }
+            self.sigil_store()?.sigil_apply(&prep_id, &prep_hash, &sigil.id, now_ms(), None, |current, events| {
+                let current = current.ok_or("法阵不存在。")?;
+                check_revision(&current, sigil.revision)?;
+                if current.state != SigilState::Frozen { return Err("启动准备时方案已变化。".into()); }
+                events.push(("preparation_started".into(), json!({"directory": directory, "branch": branch,
+                    "base_ref": base_ref, "base_commit": base_commit})));
+                Ok(Applied::Write { sigil: Box::new(current), history: None, created: false })
+            }).map_err(fail)?;
+        }
+        // No pre-existing directory is removed. An incomplete branch-only creation is left
+        // intact for diagnosis rather than being mistaken for a clean, reusable worktree.
+        if git(repository, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).await.is_ok() {
+            return Err(fail("上次启动留下了分支，但缺少完整 worktree；已保留分支，请检查启动记录。"));
+        }
+        git(repository, &["worktree", "add", "-b", &branch, directory, &prepared.base_commit]).await.map_err(fail)?;
+        if let Err(error) = git(repository, &["worktree", "lock", "--reason", &format!("sigil:{}", sigil.id), directory]).await {
+            rollback_worktree(repository, directory, &branch).await;
+            return Err(fail(error));
+        }
+        prepared.created = true;
+        Ok(prepared)
+    }
+
     /// A retried start replays its receipt without touching git again.
     pub async fn sigil_start(&self, sigil_id: &str, request_id: &str, expected_revision: u64) -> Result<Value, SpellcastError> {
+        self.sigil_start_with_automation(sigil_id, request_id, expected_revision, SigilAutomation::Supervised, &SigilActor::user()).await
+    }
+
+    pub(crate) async fn sigil_start_with_automation(&self, sigil_id: &str, request_id: &str, expected_revision: u64,
+        automation: SigilAutomation, actor: &SigilActor) -> Result<Value, SpellcastError> {
+        let _preparation = START_GATE.lock().await;
         validate_sigil_id(sigil_id).map_err(fail)?;
-        let hash = crate::sigil_workspace::request_hash(&json!({"op": "start", "sigil_id": sigil_id, "expected_revision": expected_revision}));
+        // Preserve the exact receipt hash of existing supervised starts.
+        let mut request = json!({"op": "start", "sigil_id": sigil_id, "expected_revision": expected_revision});
+        if automation != SigilAutomation::Supervised || actor.kind != "user" {
+            request["automation"] = json!(automation);
+            request["actor"] = json!(actor);
+        }
+        let hash = crate::sigil_workspace::request_hash(&request);
         let (replay, sigil) = {
             let store = self.sigil_store()?;
             (store.sigil_receipt(request_id, &hash).map_err(fail)?, store.sigil_get(sigil_id).map_err(fail)?)
@@ -561,30 +715,21 @@ impl Bridge {
         let freeze = sigil.freeze.clone().ok_or_else(|| fail("法阵缺少冻结记录。"))?;
         let repository = Path::new(&sigil.plan.repository).to_path_buf();
         let target = if sigil.plan.base_ref.is_empty() { "HEAD".to_string() } else { sigil.plan.base_ref.clone() };
-        let base_commit = git(&repository, &["rev-parse", "--verify", "--quiet", &format!("{target}^{{commit}}")]).await
+        let mut base_commit = git(&repository, &["rev-parse", "--verify", "--quiet", &format!("{target}^{{commit}}")]).await
             .map_err(|_| fail(format!("找不到基线 {target}。")))?;
-        let base_ref = if sigil.plan.base_ref.is_empty() {
+        let mut base_ref = if sigil.plan.base_ref.is_empty() {
             git(&repository, &["symbolic-ref", "--quiet", "--short", "HEAD"]).await.unwrap_or_else(|_| base_commit.clone())
         } else {
             sigil.plan.base_ref.clone()
         };
-        let (directory, branch) = match sigil.plan.location {
-            SigilLocation::InPlace => (sigil.plan.repository.clone(), String::new()),
+        let (directory, branch, created_worktree) = match sigil.plan.location {
+            SigilLocation::InPlace => (sigil.plan.repository.clone(), String::new(), false),
             SigilLocation::Worktree => {
                 let directory = freeze.execution_directory.clone();
-                let branch = format!("sigil/{sigil_id}");
-                if Path::new(&directory).exists() {
-                    return Err(fail(format!("worktree 路径已存在：{directory}")));
-                }
-                if git(&repository, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).await.is_ok() {
-                    return Err(fail(format!("分支 {branch} 已存在。")));
-                }
-                git(&repository, &["worktree", "add", "-b", &branch, &directory, &base_commit]).await.map_err(fail)?;
-                if let Err(error) = git(&repository, &["worktree", "lock", "--reason", &format!("sigil:{sigil_id}"), &directory]).await {
-                    rollback_worktree(&repository, &directory, &branch).await;
-                    return Err(fail(error));
-                }
-                (directory, branch)
+                let prepared = self.sigil_prepare_worktree(&sigil, request_id, &hash, &directory, &base_ref, &base_commit).await?;
+                base_ref = prepared.base_ref;
+                base_commit = prepared.base_commit;
+                (prepared.directory, prepared.branch, prepared.created)
             }
         };
         // The baseline snapshot: changes already present, such as uncommitted work in place,
@@ -596,7 +741,7 @@ impl Bridge {
         };
         let now = now_ms();
         let run = SigilRun {
-            started_at_ms: now, execution_directory: directory.clone(), location: sigil.plan.location, branch: branch.clone(),
+            automation, started_at_ms: now, execution_directory: directory.clone(), location: sigil.plan.location, branch: branch.clone(),
             base_ref, base_commit, executor: None, delivery: None, pending_claims: vec![], revoked: vec![], replaced: vec![],
             steps: Default::default(), notice_cursor: Default::default(), observation: Some(observation), check_runs: 0,
             amendments: vec![], approved_commands: vec![], amended_inputs: Default::default(),
@@ -610,11 +755,11 @@ impl Bridge {
             sigil.state = SigilState::Running;
             sigil.revision += 1;
             sigil.updated_at_ms = now;
-            sigil.updated_by = SigilActor::user();
+            sigil.updated_by = actor.clone();
             let observation = run.observation.as_ref().expect("observation set above");
             events.push(("started".into(), json!({"execution_directory": run.execution_directory, "location": run.location,
                 "branch": run.branch, "base_ref": run.base_ref, "base_commit": run.base_commit, "baseline_tree": observation.baseline_tree,
-                "inputs_differ_at_start": observation.inputs_differ_at_start})));
+                "inputs_differ_at_start": observation.inputs_differ_at_start, "automation": automation, "actor": actor})));
             if !observation.stopped.is_empty() {
                 events.push(("observation_stopped".into(), json!({"reason": observation.stopped, "detail": observation.stopped_detail})));
             }
@@ -627,12 +772,12 @@ impl Bridge {
                 Ok(json!({"sigil_id": sigil_id, "sigil": mutation.sigil, "replayed": mutation.replayed}))
             }
             Err(error) => {
-                if !branch.is_empty() {
+                if created_worktree {
                     rollback_worktree(&repository, &directory, &branch).await;
                 }
-                if let Ok(dir) = &dir {
+                if created_worktree { if let Ok(dir) = &dir {
                     let _ = std::fs::remove_dir_all(dir);
-                }
+                } }
                 Err(error)
             }
         }
@@ -784,6 +929,196 @@ mod tests {
             .as_array().unwrap().iter().map(|event| event["kind"].as_str().unwrap().to_string()).collect()
     }
 
+    fn manual(blocking: bool) -> SigilCheck {
+        SigilCheck::Manual { label: "review".into(), description: "Review later".into(), blocking }
+    }
+
+    fn command(argv: &[&str]) -> SigilCheck {
+        SigilCheck::Command { label: "git check".into(), argv: argv.iter().map(|arg| arg.to_string()).collect(), timeout_s: 30 }
+    }
+
+    fn with_checks(id: &str, depends_on: &[&str], checks: Vec<SigilCheck>) -> SigilStep {
+        SigilStep { checks, ..step(id, depends_on, false) }
+    }
+
+    async fn amend_checks(b: &Bridge, request: &str, id: &str, step_id: &str, checks: Vec<SigilCheck>) {
+        let change = serde_json::from_value(json!({"kind": "update_step", "step_id": step_id, "checks": checks})).unwrap();
+        agent(b, request, id, "claude:runner", SigilAgentOp::Amend { reason: "Update verification".into(), changes: vec![change] }).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn automation_upgrade_runs_pending_commands_and_future_amendments_with_one_receipt() {
+        let mut f = fixture();
+        let b = f.b();
+        started(&f, "upgrade", SigilLocation::InPlace, vec![
+            with_checks("a", &[], vec![command(&["git", "--version"]), manual(false)]),
+            with_checks("b", &["a"], vec![command(&["git", "--version"]), manual(false)]),
+        ]).await;
+        claim(b, "upgrade-claim", "upgrade", "claude:runner").await;
+        report(b, "upgrade-report-a", "upgrade", "claude:runner", "a").await.unwrap();
+        amend_checks(b, "upgrade-amend-a", "upgrade", "a", vec![command(&["git", "rev-parse", "--git-dir"]), manual(false)]).await;
+        let before = b.sigil_store().unwrap().sigil_get("upgrade").unwrap();
+        assert_eq!(before.run.as_ref().unwrap().steps["a"].checks[0].status, CheckStatus::NeedsApproval);
+        assert!(!waiting_commands(&before).is_empty());
+        let revision = before.revision;
+        let upgraded = b.sigil_set_automation("upgrade", "upgrade-mode", revision, SigilAutomation::Autonomous).unwrap();
+        assert_eq!(upgraded["sigil"]["revision"], revision + 1);
+        let current = b.sigil_store().unwrap().sigil_get("upgrade").unwrap();
+        assert!(waiting_commands(&current).is_empty());
+        assert_eq!(current.run.as_ref().unwrap().steps["a"].checks.iter().map(|check| check.status).collect::<Vec<_>>(),
+            [CheckStatus::Queued, CheckStatus::Deferred]);
+        let events_before = event_kinds(b, "upgrade");
+        assert!(b.sigil_set_automation("upgrade", "upgrade-stale", revision, SigilAutomation::Autonomous).is_err());
+        assert!(b.sigil_set_automation("upgrade", "upgrade-mode", revision + 1, SigilAutomation::Autonomous).is_err(), "same id with altered consent is refused");
+        assert_eq!(b.sigil_set_automation("upgrade", "upgrade-mode", revision, SigilAutomation::Autonomous).unwrap()["replayed"], true);
+        let noop = b.sigil_set_automation("upgrade", "upgrade-already", revision + 1, SigilAutomation::Autonomous).unwrap();
+        assert_eq!(noop["sigil"]["revision"], revision + 1);
+        assert_eq!(event_kinds(b, "upgrade"), events_before);
+        let audit = b.sigil_store().unwrap().sigil_events("upgrade", 0, 200).unwrap().into_iter().find(|event| event.kind == "automation_changed").unwrap();
+        assert_eq!(audit.value["actor"]["kind"], "user");
+        assert_eq!(audit.value["queued_commands"], 1);
+        assert_eq!(audit.value["deferred_reviews"], 1);
+
+        b.sigil_run_checks("upgrade").await.unwrap();
+        let checked = read(b, "upgrade");
+        assert_eq!(checked["lights"]["a"], "review_pending");
+        assert_eq!(checked["sigil"]["run"]["steps"]["a"]["checks"][0]["exit_code"], 0, "formerly unapproved command really executes");
+        amend_checks(b, "upgrade-amend-b", "upgrade", "b", vec![command(&["git", "branch", "--show-current"]), manual(false)]).await;
+        start_step(b, "upgrade-start-b", "upgrade", "claude:runner", "b").await.unwrap();
+        report(b, "upgrade-report-b", "upgrade", "claude:runner", "b").await.unwrap();
+        b.sigil_run_checks("upgrade").await.unwrap();
+        let finished = read(b, "upgrade");
+        assert_eq!(finished["sigil"]["state"], "completed");
+        assert_eq!(finished["sigil"]["run"]["steps"]["b"]["checks"][0]["status"], "passed");
+        assert_eq!(finished["sigil"]["run"]["steps"]["b"]["checks"][1]["status"], "deferred");
+        let kinds = event_kinds(b, "upgrade");
+        assert_eq!(b.sigil_set_automation("upgrade", "upgrade-mode", revision, SigilAutomation::Autonomous).unwrap()["replayed"], true,
+            "original receipt replays after completion");
+        assert_eq!(event_kinds(b, "upgrade"), kinds);
+        assert_eq!(read(b, "upgrade")["sigil"]["revision"], finished["sigil"]["revision"]);
+        assert_eq!(kinds.iter().filter(|kind| kind.as_str() == "automation_changed").count(), 1);
+        drop(f.bridge.take());
+        let connection = rusqlite::Connection::open(f.root.join("state.sqlite3")).unwrap();
+        let histories: i64 = connection.query_row("SELECT COUNT(*) FROM spellcast_sigil_plan_history WHERE sigil_id = 'upgrade' AND operation = 'automation_changed'", [], |row| row.get(0)).unwrap();
+        assert_eq!(histories, 1, "receipt replay and a current-revision no-op do not duplicate history");
+    }
+
+    #[tokio::test]
+    async fn automation_upgrade_defers_manual_review_truthfully_and_preserves_pause() {
+        let f = fixture();
+        let b = f.b();
+        for (id, paused) in [("review-upgrade", false), ("paused-upgrade", true)] {
+            started(&f, id, SigilLocation::InPlace, vec![with_checks("a", &[], vec![manual(false)])]).await;
+            claim(b, &format!("{id}-claim"), id, "claude:runner").await;
+            report(b, &format!("{id}-report"), id, "claude:runner", "a").await.unwrap();
+            if paused { b.sigil_control(id, &format!("{id}-pause"), RunControl::Pause).unwrap(); }
+            let before = b.sigil_store().unwrap().sigil_get(id).unwrap();
+            let upgraded = b.sigil_set_automation(id, &format!("{id}-mode"), before.revision, SigilAutomation::Autonomous).unwrap();
+            assert_eq!(upgraded["sigil"]["state"], if paused { "paused" } else { "completed" });
+            assert_eq!(upgraded["sigil"]["revision"], before.revision + if paused { 1 } else { 2 });
+            let check = &upgraded["sigil"]["run"]["steps"]["a"]["checks"][0];
+            assert_eq!(check["status"], "deferred");
+            assert!(check["finished_at_ms"].is_null() && check["exit_code"].is_null(), "review was not performed or passed");
+            assert_eq!(upgraded["sigil"]["run"]["started_at_ms"], before.run.as_ref().unwrap().started_at_ms);
+            if paused {
+                b.sigil_run_checks(id).await.unwrap();
+                assert_eq!(read(b, id)["sigil"]["state"], "paused");
+                b.sigil_control(id, &format!("{id}-resume"), RunControl::Resume).unwrap();
+                assert_eq!(read(b, id)["sigil"]["state"], "completed");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn automation_upgrade_still_waits_for_explicitly_blocking_manual_review() {
+        let f = fixture();
+        let b = f.b();
+        started(&f, "blocking-upgrade", SigilLocation::InPlace, vec![
+            with_checks("a", &[], vec![manual(false), manual(true)]), step("b", &["a"], false),
+        ]).await;
+        claim(b, "blocking-claim", "blocking-upgrade", "claude:runner").await;
+        report(b, "blocking-report", "blocking-upgrade", "claude:runner", "a").await.unwrap();
+        let before = b.sigil_store().unwrap().sigil_get("blocking-upgrade").unwrap();
+        let upgraded = b.sigil_set_automation("blocking-upgrade", "blocking-mode", before.revision, SigilAutomation::Autonomous).unwrap();
+        assert_eq!(upgraded["sigil"]["state"], "running");
+        assert_eq!(upgraded["sigil"]["run"]["steps"]["a"]["checks"][0]["status"], "deferred");
+        assert_eq!(upgraded["sigil"]["run"]["steps"]["a"]["checks"][1]["status"], "waiting");
+        assert!(start_step(b, "blocking-start-b-refused", "blocking-upgrade", "claude:runner", "b").await.is_err(), "explicit review still blocks dependencies");
+        b.sigil_decide_check("blocking-upgrade", "blocking-decision", "a", 1, true, "Reviewed").unwrap();
+        start_step(b, "blocking-start-b", "blocking-upgrade", "claude:runner", "b").await.unwrap();
+        report(b, "blocking-report-b", "blocking-upgrade", "claude:runner", "b").await.unwrap();
+        b.sigil_run_checks("blocking-upgrade").await.unwrap();
+        assert_eq!(read(b, "blocking-upgrade")["sigil"]["state"], "completed");
+    }
+
+    #[tokio::test]
+    async fn automation_upgrade_preserves_results_attempts_and_all_run_context() {
+        let f = fixture();
+        started(&f, "preserve-upgrade", SigilLocation::Worktree, vec![
+            with_checks("a", &[], vec![command(&["git", "--version"]); 5].into_iter().chain([manual(false), manual(true), manual(false)]).collect()),
+            with_checks("active", &[], vec![command(&["git", "--version"]), manual(false)]),
+            with_checks("pending", &[], vec![command(&["git", "--version"]), manual(false)]),
+        ]).await;
+        claim(f.b(), "preserve-claim", "preserve-upgrade", "claude:runner").await;
+        claim(f.b(), "preserve-other-claim", "preserve-upgrade", "codex:other").await;
+        agent(f.b(), "preserve-amend", "preserve-upgrade", "claude:runner", SigilAgentOp::Amend {
+            reason: "Clarify instructions".into(), changes: vec![serde_json::from_value(json!({
+                "kind": "update_step", "step_id": "a", "instructions": "Preserve this amendment"
+            })).unwrap()],
+        }).await.unwrap();
+        let mut before = f.b().sigil_store().unwrap().sigil_get("preserve-upgrade").unwrap();
+        assert_eq!(before.run.as_ref().unwrap().amendments.len(), 1);
+        let statuses = [CheckStatus::Passed, CheckStatus::Failed, CheckStatus::Running, CheckStatus::Stopped, CheckStatus::NeedsApproval,
+            CheckStatus::Waiting, CheckStatus::Waiting, CheckStatus::Failed];
+        let mut checks: Vec<crate::sigils::CheckResult> = statuses.into_iter().enumerate().map(|(index, status)| crate::sigils::CheckResult {
+            index, kind: if index < 5 { "command" } else { "manual" }.into(), label: format!("kept {index}"), attempt: 2, status,
+            run: index as u64 + 1, started_at_ms: Some(101), finished_at_ms: Some(102), exit_code: Some(7), error: "existing error".into(),
+            tail: "existing output".into(), note: "existing decision".into(), ..Default::default()
+        }).collect();
+        checks.push(crate::sigils::CheckResult { index: 4, kind: "command".into(), attempt: 1, status: CheckStatus::NeedsApproval, ..Default::default() });
+        checks.push(crate::sigils::CheckResult { index: 5, kind: "manual".into(), attempt: 1, status: CheckStatus::Waiting, ..Default::default() });
+        let run = before.run.as_mut().unwrap();
+        run.steps.insert("a".into(), StepProgress { status: StepStatus::Reported, attempt: 2, checks: checks.clone(),
+            markers: vec![marker("kept", 99, "original marker")], summary: "original summary".into(), evidence: vec!["original evidence".into()], ..Default::default() });
+        for (id, status) in [("active", StepStatus::Active), ("pending", StepStatus::Pending)] {
+            run.steps.insert(id.into(), StepProgress { status, attempt: 2, checks: checks.clone(), ..Default::default() });
+        }
+        run.revoked.push("revoked-source".into());
+        run.replaced.push("replaced-source".into());
+        run.amended_inputs.insert("src/input".into(), Some("frozen-hash".into()));
+        run.approved_commands.push(SigilCommand { step_id: "a".into(), label: "earlier approval".into(), argv: vec!["git".into(), "status".into()], timeout_s: 30 });
+        let mut expected = before.clone();
+        let expected_run = expected.run.as_mut().unwrap();
+        expected_run.automation = SigilAutomation::Autonomous;
+        expected_run.steps.get_mut("a").unwrap().checks[4].status = CheckStatus::Queued;
+        expected_run.steps.get_mut("a").unwrap().checks[5].status = CheckStatus::Deferred;
+        expected.revision += 1;
+        expected.updated_at_ms = 1234;
+        expected.updated_by = SigilActor::user();
+        let mut events = Events::new();
+        let Applied::Write { sigil, history, .. } = apply_user(&UserRunOp::Automation { expected_revision: before.revision }, Some(before), 1234, &mut events).unwrap() else { panic!("expected write") };
+        assert_eq!(*sigil, expected, "only two waiting current-attempt checks and automation metadata change; all context stays exact");
+        assert_eq!(history, Some("automation_changed"));
+        assert_eq!(sigil.state, SigilState::Running, "failed and blocking manual checks still prevent completion");
+        assert_eq!(events.iter().filter(|(kind, _)| kind == "completed").count(), 0);
+    }
+
+    #[tokio::test]
+    async fn automation_upgrade_rejects_closed_runs_and_reverse_mode_without_changes() {
+        let f = fixture();
+        started(&f, "reject-upgrade", SigilLocation::InPlace, vec![with_checks("a", &[], vec![manual(false)])]).await;
+        let before = f.b().sigil_store().unwrap().sigil_get("reject-upgrade").unwrap();
+        for state in [SigilState::Draft, SigilState::Frozen, SigilState::Completed, SigilState::Aborted, SigilState::Archived] {
+            let mut current = before.clone();
+            current.state = state;
+            let mut events = Events::new();
+            assert!(apply_user(&UserRunOp::Automation { expected_revision: current.revision }, Some(current), 1234, &mut events).is_err(), "{state:?}");
+            assert!(events.is_empty());
+        }
+        assert!(f.b().sigil_set_automation("reject-upgrade", "reverse", before.revision, SigilAutomation::Supervised).is_err());
+        assert_eq!(f.b().sigil_store().unwrap().sigil_get("reject-upgrade").unwrap(), before);
+    }
+
     #[tokio::test]
     async fn worktree_start_creates_a_locked_branch_and_replays_without_git() {
         let f = fixture();
@@ -807,6 +1142,34 @@ mod tests {
         assert!(f.b().sigil_start("clash", "clash-start", 2).await.unwrap_err().to_string().contains("已存在"));
         assert!(!f.root.join("repo.sigils").join("clash").exists());
         assert_eq!(read(f.b(), "clash")["sigil"]["state"], "frozen");
+    }
+
+    #[tokio::test]
+    async fn prepared_worktree_survives_restart_before_start_receipt_without_losing_changes() {
+        let mut f = fixture();
+        let id = "recover-preparation";
+        let plan = SigilPlan { title: "Recover preparation".into(), repository: f.repo.to_string_lossy().into(),
+            location: SigilLocation::Worktree, steps: vec![step("a", &[], false)], ..Default::default() };
+        agent(f.b(), "recover-plan", id, "claude:author", SigilAgentOp::PutPlan { expected_revision: 0, plan }).await.unwrap();
+        f.b().sigil_freeze(id, "recover-freeze", 1).unwrap();
+        let sigil = f.b().sigil_store().unwrap().sigil_get(id).unwrap();
+        let directory = sigil.freeze.as_ref().unwrap().execution_directory.clone();
+        let commit = sh(&f.repo, &["rev-parse", "HEAD"]);
+        let hash = crate::sigil_workspace::request_hash(&json!({"op":"start", "sigil_id":id, "expected_revision":2}));
+        let prepared = f.b().sigil_prepare_worktree(&sigil, "recover-start", &hash, &directory, "main", &commit).await.unwrap();
+        assert!(prepared.created);
+        std::fs::write(Path::new(&directory).join("preserved.txt"), "prepared content").unwrap();
+        // Reopen the database before a start receipt exists, as after a process exit.
+        drop(f.bridge.take());
+        f.bridge = Some(Bridge::open(Headless, 0, &f.root.join("state.sqlite3")).unwrap());
+        // Advancing the original branch does not change the recorded preparation baseline.
+        std::fs::write(f.repo.join("advanced.txt"), "new baseline").unwrap();
+        sh(&f.repo, &["add", "-A"]); sh(&f.repo, &["commit", "-q", "-m", "advance"]);
+        let started = f.b().sigil_start(id, "recover-start", 2).await.unwrap();
+        assert_eq!(started["sigil"]["state"], "running");
+        assert_eq!(started["sigil"]["run"]["base_commit"], commit);
+        assert_eq!(std::fs::read_to_string(Path::new(&directory).join("preserved.txt")).unwrap(), "prepared content");
+        assert_eq!(sh(&f.repo, &["worktree", "list", "--porcelain"]).lines().filter(|line| line.starts_with("worktree ")).count(), 2);
     }
 
     #[tokio::test]

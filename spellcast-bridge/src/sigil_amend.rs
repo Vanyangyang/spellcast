@@ -1,6 +1,6 @@
 //! Amendments: the agent changes the running plan with a one-line reason. A change applies at
-//! once as a new plan revision and marks the steps it touched; commands it adds or changes wait
-//! for the user's approval. The user can revert an amendment, restoring the earlier plan fields
+//! once as a new plan revision and marks the steps it touched; commands it adds or changes use
+//! the run's authorization mode. The user can revert an amendment, restoring the earlier plan fields
 //! without touching files, and reopen a skipped step. Contract: docs/sigil-phase1-contract.md,
 //! Amendments.
 
@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::sigil_store::Events;
-use crate::sigil_verify::{queue_checks, stop_checks};
+use crate::sigil_verify::{queue_checks_with_automation, stop_checks};
 use crate::sigils::{amendment_error, consented_commands, file_sha256, pending_commands, step_finished, validate_plan, AmendmentChange, CheckStatus,
-    Sigil, SigilActor, SigilAmendment, SigilCheck, SigilCommand, SigilStep, StepMarker, StepProgress, StepStatus};
+    Sigil, SigilActor, SigilAmendment, SigilAutomation, SigilCheck, SigilCommand, SigilStep, StepMarker, StepProgress, StepStatus};
 
 const MAX_CHANGES: usize = 16;
 
@@ -62,9 +62,9 @@ fn set<T: Clone + PartialEq>(field: &mut T, value: &Option<T>, name: &str, field
 }
 
 /// A reported step whose checks changed starts its verification over from the new definition.
-fn requeue_if_checks_changed(step: &SigilStep, fields: &[String], progress: &mut StepProgress, consented: &[SigilCommand]) {
+fn requeue_if_checks_changed(step: &SigilStep, fields: &[String], progress: &mut StepProgress, consented: &[SigilCommand], automation: SigilAutomation) {
     if progress.status == StepStatus::Reported && fields.iter().any(|field| field == "checks") {
-        progress.checks = queue_checks(step, progress.attempt, consented);
+        progress.checks = queue_checks_with_automation(step, progress.attempt, consented, automation);
     }
 }
 
@@ -136,9 +136,9 @@ pub(crate) fn apply_amend(sigil: &mut Sigil, source: &str, label: &str, reason: 
     let declared: BTreeSet<&String> = sigil.plan.steps.iter().flat_map(|step| step.inputs.iter()).collect();
     let work = PathBuf::from(&run.execution_directory);
     let new_inputs: Vec<String> = plan.steps.iter().flat_map(|step| step.inputs.iter()).filter(|input| !declared.contains(input)).cloned().collect();
-    let consented = consented_commands(sigil);
     let revision = sigil.revision + 1;
     sigil.plan = plan;
+    let consented = consented_commands(sigil);
     sigil.revision = revision;
     sigil.updated_at_ms = now;
     sigil.updated_by = SigilActor { kind: "agent".into(), source_id: Some(source.into()), label: label.into() };
@@ -158,7 +158,7 @@ pub(crate) fn apply_amend(sigil: &mut Sigil, source: &str, label: &str, reason: 
         match change.kind.as_str() {
             "update_step" => {
                 let step = sigil.plan.steps.iter().find(|step| step.id == change.step_id).expect("updated step present");
-                requeue_if_checks_changed(step, &change.fields, progress, &consented);
+                requeue_if_checks_changed(step, &change.fields, progress, &consented, run.automation);
             }
             "skip_step" => {
                 stop_checks(progress, "步骤被跳过。", now);
@@ -236,9 +236,9 @@ pub(crate) fn revert_amendment(sigil: &mut Sigil, revision: u64, now: u64, event
     if let Some(error) = amendment_error(&plan) {
         return Err(format!("撤销后的方案无法执行：{error}"));
     }
-    let consented = consented_commands(sigil);
     let new_revision = sigil.revision + 1;
     sigil.plan = plan;
+    let consented = consented_commands(sigil);
     sigil.revision = new_revision;
     sigil.updated_at_ms = now;
     sigil.updated_by = SigilActor::user();
@@ -254,7 +254,7 @@ pub(crate) fn revert_amendment(sigil: &mut Sigil, revision: u64, now: u64, event
         match change.kind.as_str() {
             "update_step" => {
                 let step = sigil.plan.steps.iter().find(|step| step.id == change.step_id).expect("restored step present");
-                requeue_if_checks_changed(step, &change.fields, progress, &consented);
+                requeue_if_checks_changed(step, &change.fields, progress, &consented, run.automation);
             }
             "skip_step" if progress.status == StepStatus::Skipped => {
                 // A step that was reported before the skip keeps its report; anything else starts again.
@@ -477,6 +477,43 @@ mod tests {
         b.sigil_run_checks("approve").await.unwrap();
         assert_eq!(statuses(b), ["passed", "passed"]);
         assert_eq!(view(b, "approve")["sigil"]["state"], "completed");
+    }
+
+    #[tokio::test]
+    async fn autonomous_amendments_run_changed_and_added_commands_and_reverts_requeue_in_mode() {
+        let f = fixture();
+        let b = f.b();
+        let blocking_review = || SigilCheck::Manual { label: "required".into(), description: String::new(), blocking: true };
+        started(&f, "auto-amend", vec![step("a", &[], vec![command("version", &["git", "--version"]), blocking_review()])]).await;
+        b.sigil_store().unwrap().sigil_record("auto-amend", None, |sigil, _| {
+            sigil.run.as_mut().unwrap().automation = SigilAutomation::Autonomous;
+            Some(None)
+        }).unwrap();
+        start_and_report(b, "auto-amend", "a").await;
+
+        let changed = amend(b, "auto-amend-checks", "auto-amend", "Check directory and add branch check", vec![
+            update("a", Fields { checks: Some(vec![command("git dir", &["git", "rev-parse", "--git-dir"]), blocking_review()]), ..Default::default() }),
+            SigilAmendChange::AddStep { step: step("x", &[], vec![command("branch", &["git", "branch", "--show-current"])]), after: "a".into() },
+        ]).await.unwrap();
+        assert!(changed["commands_waiting_approval"].as_array().is_none_or(Vec::is_empty), "autonomous consent uses the amended current plan: {changed}");
+        let revision = view(b, "auto-amend")["sigil"]["revision"].as_u64().unwrap();
+        let check_statuses = |id: &str| view(b, "auto-amend")["sigil"]["run"]["steps"][id]["checks"].as_array().unwrap().iter()
+            .map(|check| check["status"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(check_statuses("a"), ["queued", "waiting"]);
+        assert!(view(b, "auto-amend")["pending_commands"].as_array().unwrap().is_empty());
+        b.sigil_run_checks("auto-amend").await.unwrap();
+        assert_eq!(check_statuses("a"), ["passed", "waiting"], "the changed command really executes, while explicit manual review blocks");
+        start_and_report(b, "auto-amend", "x").await;
+        assert_eq!(check_statuses("x"), ["queued"]);
+        b.sigil_run_checks("auto-amend").await.unwrap();
+        assert_eq!(check_statuses("x"), ["passed"], "an added step's command runs without separate approval");
+
+        b.sigil_revert_amendment("auto-amend", "auto-revert", revision).unwrap();
+        assert_eq!(check_statuses("a"), ["queued", "waiting"]);
+        assert!(!step_ids(&view(b, "auto-amend")).iter().any(|id| id == "x"));
+        b.sigil_run_checks("auto-amend").await.unwrap();
+        assert_eq!(check_statuses("a"), ["passed", "waiting"]);
+        assert_eq!(view(b, "auto-amend")["sigil"]["state"], "running", "blocking review remains required after reverting");
     }
 
     #[tokio::test]

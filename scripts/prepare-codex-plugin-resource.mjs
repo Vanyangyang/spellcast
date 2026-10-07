@@ -19,6 +19,7 @@ const MANAGED = [
   "skills/spellcast/references/works.md",
   "skills/spellcast/references/feedback.md",
   "skills/spellcast/references/project-records.md",
+  "skills/spellcast/references/sigil.md",
   "skills/spellcast/scripts/project-api.mjs",
   ".mcp.json",
   "LICENSE",

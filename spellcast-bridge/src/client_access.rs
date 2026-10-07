@@ -250,7 +250,7 @@ impl ClientRequest {
                                     check,
                                     match check.get("kind").and_then(Value::as_str) {
                                         Some("command") => &["kind", "label", "argv", "timeout_s"],
-                                        Some("manual") => &["kind", "label", "description"],
+                                        Some("manual") => &["kind", "label", "description", "blocking"],
                                         _ => return Err(ClientError::InvalidRequest),
                                     },
                                 )?;

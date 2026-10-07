@@ -1,5 +1,6 @@
 //! Sigil application boundary: agent MCP writes, window-only user actions and the live Canvas
-//! card. Agents author drafts; only the user freezes, unfreezes or deletes them.
+//! card. Agents author drafts and execute on an explicit user instruction; window-only
+//! controls retain unfreeze, delete and handover authority.
 
 use rmcp::schemars::{self, JsonSchema};
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,9 @@ pub struct SigilQuery {
 pub enum SigilAgentOp {
     /// Create a draft with expected_revision 0, or replace the plan of your own draft.
     PutPlan { expected_revision: u64, plan: SigilPlan },
+    /// Freeze, start autonomously and claim your plan after the user explicitly asks to execute.
+    /// Creating or receiving a draft alone is not execution authorization.
+    Execute { expected_revision: u64 },
     /// Take on execution after the user starts the run. Another session's claim waits for the
     /// user's handover approval; your own source can claim again after compaction.
     Claim,
@@ -70,14 +74,17 @@ pub enum SigilAgentOp {
     /// Run a reported step's finished commands again, for example after a result was marked
     /// because files changed while it ran.
     RerunChecks { step_id: String },
-    /// Change the running plan, with a one-line reason. Applies at once; commands it adds or
-    /// changes wait for the user's approval.
+    /// Change the running plan with a one-line reason. Applies at once; autonomous verification
+    /// commands run directly, while supervised runs retain approvals.
     Amend { reason: String, changes: Vec<SigilAmendChange> },
     /// A timeline note; never changes a state.
     Note { text: String },
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+/// The wire format keeps `op` and its fields flat beside the common fields. The advertised schema
+/// is written by hand below: deriving it from the flattened tagged enum puts `oneOf` at the top
+/// level, which Claude rejects (Claude Code then drops the tool) while Codex accepts it.
+#[derive(Debug, Deserialize)]
 pub struct SigilUpdate {
     /// Stable for this request; retry an uncertain result with the identical request.
     pub request_id: String,
@@ -91,6 +98,42 @@ pub struct SigilUpdate {
     pub label: String,
     #[serde(flatten)]
     pub op: SigilAgentOp,
+}
+
+impl JsonSchema for SigilUpdate {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SigilUpdate".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut plan = generator.subschema_for::<SigilPlan>();
+        plan.insert("description".into(), json!("put_plan: the complete plan."));
+        let mut changes = generator.subschema_for::<Vec<SigilAmendChange>>();
+        changes.insert("description".into(), json!("amend: the plan changes."));
+        schemars::json_schema!({
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string", "description": "Stable for this request; retry an uncertain result with the identical request."},
+                "sigil_id": {"type": "string", "default": "", "description": "Lowercase letters, digits and dashes. May be empty when creating; Spellcast then picks one."},
+                "source_id": {"type": "string", "description": "Your stable task identity, for example `claude:<UUID>` or `codex:<thread UUID>`."},
+                "label": {"type": "string", "default": "", "description": "Shown to the user, for example the host and task name."},
+                "op": {
+                    "type": "string",
+                    "enum": ["put_plan", "execute", "claim", "start_step", "report_step", "block_step", "rerun_checks", "amend", "note"],
+                    "description": "put_plan {expected_revision, plan}: create or edit your draft. execute {expected_revision}: after the user explicitly authorizes execution, freeze, start autonomously and claim your draft or frozen plan in one request. Do not execute merely because a draft was received or created. claim: claim a started run; a different executor needs handover approval. start_step/report_step: begin before editing and report afterwards; Spellcast runs checks. block_step: only an explicit stop condition or a necessary user decision. rerun_checks: repeat command checks. amend: record a plan change and continue; autonomous runs automatically run new verification commands, supervised runs require their approval. note: append a timeline note."
+                },
+                "expected_revision": {"type": "integer", "format": "uint64", "minimum": 0, "description": "put_plan: 0 creates; otherwise current revision. execute: the draft or frozen plan's current revision."},
+                "plan": plan,
+                "step_id": {"type": "string", "description": "start_step, report_step, block_step and rerun_checks."},
+                "summary": {"type": "string", "default": "", "description": "report_step."},
+                "evidence": {"type": "array", "items": {"type": "string"}, "default": [], "description": "report_step."},
+                "reason": {"type": "string", "description": "block_step and amend (one line)."},
+                "changes": changes,
+                "text": {"type": "string", "description": "note."}
+            },
+            "required": ["request_id", "source_id", "op"]
+        })
+    }
 }
 
 fn fail(error: impl ToString) -> SpellcastError {
@@ -144,7 +187,8 @@ impl Bridge {
                 let run = sigil.run.as_ref();
                 let lights: serde_json::Map<String, Value> = sigil.plan.steps.iter()
                     .map(|step| (step.id.clone(), json!(crate::sigils::step_light(&sigil.plan, run, step)))).collect();
-                let next = run.and_then(|run| crate::sigils::next_step(&sigil.plan, run)).map(|step| step.id.clone());
+                let executable = matches!(sigil.state, crate::sigils::SigilState::Running | crate::sigils::SigilState::Paused);
+                let next = run.filter(|_| executable).and_then(|run| crate::sigils::next_step(&sigil.plan, run)).map(|step| step.id.clone());
                 let live = self.sigil_observation_live(&sigil.id);
                 let check_live = self.sigil_check_live(&sigil.id);
                 let pending_commands = crate::sigil_amend::waiting_commands(&sigil);
@@ -204,8 +248,12 @@ impl Bridge {
             return Err(fail("label 最多 160 字。"));
         }
         let label = if update.label.trim().is_empty() { update.source_id.clone() } else { update.label.clone() };
+        if let SigilAgentOp::Execute { expected_revision } = &update.op {
+            let actor = SigilActor { kind: "agent".into(), source_id: Some(update.source_id.clone()), label };
+            return self.sigil_execute(&update.sigil_id, &update.request_id, *expected_revision, &actor).await;
+        }
         let run_op = match &update.op {
-            SigilAgentOp::PutPlan { .. } => None,
+            SigilAgentOp::PutPlan { .. } | SigilAgentOp::Execute { .. } => None,
             SigilAgentOp::Claim => Some(AgentRunOp::Claim),
             SigilAgentOp::StartStep { step_id } => Some(AgentRunOp::StartStep { step_id }),
             SigilAgentOp::ReportStep { step_id, summary, evidence } => Some(AgentRunOp::ReportStep { step_id, summary, evidence }),
@@ -318,9 +366,15 @@ impl Bridge {
 
     /// Window route only. Freezing records input hashes and the exact commands the user saw.
     pub fn sigil_freeze(&self, sigil_id: &str, request_id: &str, expected_revision: u64) -> Result<Value, SpellcastError> {
+        self.sigil_freeze_as(sigil_id, request_id, expected_revision, &SigilActor::user())
+    }
+
+    pub(crate) fn sigil_freeze_as(&self, sigil_id: &str, request_id: &str, expected_revision: u64, actor: &SigilActor) -> Result<Value, SpellcastError> {
         validate_request_id(request_id)?;
         validate_sigil_id(sigil_id).map_err(fail)?;
-        let hash = request_hash(&json!({"op": "freeze", "sigil_id": sigil_id, "expected_revision": expected_revision}));
+        let mut request = json!({"op": "freeze", "sigil_id": sigil_id, "expected_revision": expected_revision});
+        if actor.kind != "user" { request["actor"] = json!(actor); }
+        let hash = request_hash(&request);
         // Review and hashing happen without the store lock; the transaction replays a retried
         // freeze first and only then requires this review to match the current revision.
         let sigil = self.sigil_store()?.sigil_get(sigil_id).map_err(fail)?;
@@ -332,7 +386,7 @@ impl Bridge {
         let record = freeze_record(sigil_id, &sigil.plan, sigil.revision + 1, now_ms());
         let change = SigilChange::Freeze { expected_revision, record, reviewed_revision: sigil.revision, blocked };
         let mutation = self.sigil_store()?
-            .sigil_mutate(request_id, &hash, sigil_id, change, &SigilActor::user(), now_ms())
+            .sigil_mutate(request_id, &hash, sigil_id, change, actor, now_ms())
             .map_err(fail)?;
         self.sigil_answer(mutation, request_id)
     }

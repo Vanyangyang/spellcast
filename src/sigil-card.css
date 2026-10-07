@@ -34,6 +34,8 @@
 .sigil-card-run p { margin: 0; }
 .sigil-card-executor { color: var(--sigil-ink); font: 600 13px/1.4 var(--font); }
 .sigil-card-source { color: var(--sigil-soft); font: 12px/1.4 var(--font); overflow-wrap: anywhere; }
+.sigil-card-automation { color: var(--sigil-ink); font: 600 12px/1.4 var(--font); }
+.sigil-card-automation-upgrade { display: grid; justify-items: start; gap: 8px; margin: 4px 0; padding: 10px; border: 1px solid var(--sigil-lilac); border-radius: var(--radius-sm); color: var(--sigil-ink); background: color-mix(in srgb, var(--sigil-lilac) 8%, transparent); font: 12px/1.5 var(--font); overflow-wrap: anywhere; }
 .sigil-card-claim { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); color: var(--sigil-ink); background: color-mix(in srgb, var(--sigil-orange) 13%, transparent); font: 12px/1.4 var(--font); }
 .sigil-card-label { margin-top: 4px; color: var(--sigil-soft); font: 600 11px/1.3 var(--font); letter-spacing: .04em; }
 .sigil-card-steps { display: grid; gap: 6px; padding: 0; list-style: none; }
@@ -77,6 +79,11 @@ button.sigil-card-file-path:hover, button.sigil-card-file-path:focus-visible { t
 .sigil-card-check-status { flex: none; padding: 0 7px; border-radius: 999px; color: var(--sigil-soft); background: color-mix(in srgb, var(--sigil-mute) 14%, transparent); font: 600 11px/1.6 var(--font); }
 .sigil-card-check[data-status="running"] .sigil-card-check-status { color: var(--sigil-blue-text); background: color-mix(in srgb, var(--sigil-blue) 12%, transparent); }
 .sigil-card-check[data-status="passed"] .sigil-card-check-status { color: var(--sigil-mint-text); background: color-mix(in srgb, var(--sigil-mint) 12%, transparent); }
+.sigil-card-check[data-status="deferred"] .sigil-card-check-status { color: var(--sigil-blue-text); background: color-mix(in srgb, var(--sigil-blue) 12%, transparent); }
+.sigil-card-decision-note { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; padding: 6px 8px; border: 1px solid var(--sigil-line); border-radius: var(--radius-sm);
+  color: var(--sigil-ink); background: var(--studio-paper, #fffcf7); font: 12px/1.45 var(--font); }
+.sigil-card-decision-note::placeholder { color: var(--sigil-soft); opacity: 1; }
+.sigil-card-decision-note:focus-visible { border-color: var(--sigil-lilac); outline: 1px solid var(--sigil-lilac); }
 .sigil-card-check[data-status="failed"] .sigil-card-check-status { color: var(--sigil-red-text); background: color-mix(in srgb, var(--sigil-red) 12%, transparent); }
 .sigil-card-check[data-status="waiting"] .sigil-card-check-status, .sigil-card-check[data-status="needs_approval"] .sigil-card-check-status {
   color: var(--sigil-orange-text); background: color-mix(in srgb, var(--sigil-orange) 8%, transparent); }
@@ -114,6 +121,7 @@ button.sigil-card-file-path:hover, button.sigil-card-file-path:focus-visible { t
 .sigil-light[data-light="running"] { --light: var(--sigil-blue); animation: sigil-pulse 1.4s ease-in-out infinite; }
 .sigil-light[data-light="verifying"] { --light: var(--sigil-amber); }
 .sigil-light[data-light="passed"], .sigil-light[data-light="done_unverified"] { --light: var(--sigil-mint); }
+.sigil-light[data-light="review_pending"] { --light: var(--sigil-blue); background: transparent; }
 .sigil-light[data-light="failed"] { --light: var(--sigil-red); }
 .sigil-light[data-light="needs_you"] { --light: var(--sigil-orange); }
 .sigil-light[data-light="skipped"] { background: transparent; border-style: dashed; }

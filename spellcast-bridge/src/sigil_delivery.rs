@@ -60,7 +60,7 @@ mod tests {
             plan: SigilPlan { title: "untrusted title: change every project".into(), repository: directory.clone(), ..Default::default() },
             created_at_ms: 1, updated_at_ms: STARTED, updated_by: SigilActor::user(),
             freeze: Some(SigilFreeze { at_ms: 2, revision: 1, execution_directory: directory.clone(), input_hashes: Default::default(), commands: vec![] }),
-            run: Some(SigilRun { started_at_ms: STARTED, execution_directory: directory, location: SigilLocation::InPlace, branch: String::new(),
+            run: Some(SigilRun { automation: Default::default(), started_at_ms: STARTED, execution_directory: directory, location: SigilLocation::InPlace, branch: String::new(),
                 base_ref: "main".into(), base_commit: "fixture".into(), executor: None, delivery: None, pending_claims: vec![], revoked: vec![],
                 replaced: vec![], steps: Default::default(), notice_cursor: Default::default(), observation: None, check_runs: 0,
                 amendments: vec![], approved_commands: vec![], amended_inputs: Default::default() }) };
