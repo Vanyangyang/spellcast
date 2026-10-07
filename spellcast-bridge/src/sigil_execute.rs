@@ -24,7 +24,31 @@ impl Bridge {
             if !matches!(sigil.state, SigilState::Draft | SigilState::Frozen) {
                 return Err("只有草稿或尚未开始的冻结法阵可以启动；已有运行请继续原运行。".into());
             }
-            if actor.kind != "user" {
+            if actor.kind == "client" {
+                // 【远程法阵写入】只有已通过 sigil_run 的管道调用会传入 client。不在这里认领。
+                // 窗口用户路径和代理路径保持原样；代理仍然不能启动客户端草稿。
+                let source = actor.source_id.as_deref().ok_or("启动缺少委托来源。")?;
+                let draft_source = if let Some(id) = source.strip_prefix("ccgui:") {
+                    format!("client:{id}")
+                } else if source.starts_with("client:") {
+                    source.to_string()
+                } else {
+                    return Err("客户端写入只能启动本委托保存的草稿。".into());
+                };
+                if sigil.updated_by.kind != "client" {
+                    return Err("客户端写入只能启动本委托保存的草稿。".into());
+                }
+                let author = sigil.updated_by.source_id.as_deref().unwrap_or("");
+                if !author.is_empty() && author != draft_source && author != source {
+                    return Err("只能启动本委托编写的法阵。".into());
+                }
+                if !sigil.owner_source.is_empty()
+                    && sigil.owner_source != draft_source
+                    && sigil.owner_source != source
+                {
+                    return Err("只能启动本委托编写的法阵。".into());
+                }
+            } else if actor.kind != "user" {
                 let source = actor.source_id.as_deref().ok_or("启动缺少原生任务来源。")?;
                 if actor.kind != "agent" || source.starts_with("client:") || sigil.updated_by.kind == "client" {
                     return Err("客户端草稿需要在 Spellcast 窗口启动；客户端写入不会授权执行。".into());

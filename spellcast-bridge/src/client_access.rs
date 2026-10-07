@@ -59,7 +59,7 @@ impl OsClient {
                 .all(|b| b.is_ascii_digit() || b == b'-' || b == b'S')
             || identity.path.len() > 32768
             || identity.path.contains('\0')
-            || !std::path::Path::new(&identity.path).is_absolute()
+            || !absolute_identity_path(&identity.path)
             || !identity
                 .path
                 .replace('/', "\\")
@@ -91,6 +91,17 @@ impl OsClient {
         digest(&json!([self.key(), self.identity, self.process_id, self.created_at]).to_string())
     }
 }
+/// 【远程法阵写入】管道身份是 Windows 路径。`C:\...` 在 Linux 单测里也算绝对路径。
+fn absolute_identity_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    std::path::Path::new(path).is_absolute()
+        || path.starts_with(r"\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && (bytes[2] == b'\\' || bytes[2] == b'/'))
+}
+
 fn digest(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
 }
@@ -169,6 +180,11 @@ pub enum ClientChange {
         #[serde(default)]
         evidence: Vec<String>,
     },
+    /// 【远程法阵写入】冻结并自主启动本委托保存的草稿。不认领，也不接受命令参数。
+    SigilExecute {
+        id: String,
+        expected_revision: u64,
+    },
 }
 impl ClientChange {
     fn scope(&self) -> &'static str {
@@ -176,7 +192,9 @@ impl ClientChange {
             Self::PutRecord { .. } => "records",
             Self::SigilCreate { .. } | Self::SigilPutPlan { .. } => "sigil_drafts",
             Self::SigilClaim { .. } => "sigil_claims",
-            Self::SigilStartStep { .. } | Self::SigilReportStep { .. } => "sigil_run",
+            Self::SigilStartStep { .. }
+            | Self::SigilReportStep { .. }
+            | Self::SigilExecute { .. } => "sigil_run",
         }
     }
     fn operation(&self) -> &'static str {
@@ -187,12 +205,16 @@ impl ClientChange {
             Self::SigilClaim { .. } => "sigil_claim",
             Self::SigilStartStep { .. } => "sigil_start_step",
             Self::SigilReportStep { .. } => "sigil_report_step",
+            Self::SigilExecute { .. } => "sigil_execute",
         }
     }
     fn is_run(&self) -> bool {
         matches!(
             self,
-            Self::SigilClaim { .. } | Self::SigilStartStep { .. } | Self::SigilReportStep { .. }
+            Self::SigilClaim { .. }
+                | Self::SigilStartStep { .. }
+                | Self::SigilReportStep { .. }
+                | Self::SigilExecute { .. }
         )
     }
 }
@@ -720,82 +742,109 @@ impl Bridge {
             ClientChange::SigilClaim { label, .. } if !label.trim().is_empty() => label.clone(),
             _ => "CCGUI".into(),
         };
-        let (sigil_id, op) = match change {
-            ClientChange::SigilClaim { id, .. } => (id.clone(), AgentRunOp::Claim),
-            ClientChange::SigilStartStep { id, step_id, .. } => {
-                (id.clone(), AgentRunOp::StartStep { step_id })
+        // 先放开 Store 锁。执行和步骤写入会再取同一把锁。
+        drop(tx);
+        drop(store);
+        let mut result = if let ClientChange::SigilExecute {
+            id,
+            expected_revision,
+        } = change
+        {
+            // 【远程法阵写入】只冻结并自主启动，认领仍要单独的 sigil_claims。
+            crate::sigils::validate_sigil_id(id).map_err(|_| ClientError::InvalidRequest)?;
+            let actor = SigilActor {
+                kind: "client".into(),
+                source_id: Some(source),
+                label,
+            };
+            let child = format!(
+                "client-exec-{}",
+                digest(&format!("{}:{request_id}", grant.id))
+            );
+            let mut started = drive(self.sigil_execute(id, &child, *expected_revision, &actor))
+                .map_err(map_run_error)?;
+            if started.get("status").is_none() {
+                started["status"] = json!("started");
             }
-            ClientChange::SigilReportStep {
-                id,
-                step_id,
-                summary,
-                evidence,
-                ..
-            } => (
-                id.clone(),
-                AgentRunOp::ReportStep {
+            started
+        } else {
+            let (sigil_id, op) = match change {
+                ClientChange::SigilClaim { id, .. } => (id.clone(), AgentRunOp::Claim),
+                ClientChange::SigilStartStep { id, step_id, .. } => {
+                    (id.clone(), AgentRunOp::StartStep { step_id })
+                }
+                ClientChange::SigilReportStep {
+                    id,
                     step_id,
                     summary,
                     evidence,
-                },
-            ),
-            _ => return Err(ClientError::InvalidRequest),
-        };
-        crate::sigils::validate_sigil_id(&sigil_id).map_err(|_| ClientError::InvalidRequest)?;
-        // Release the Store lock before sigil_apply, which needs its own transaction.
-        drop(tx);
-        drop(store);
-        let hash = digest(&format!("client-run:{}:{}", grant.id, request_id));
-        let mut sigil_store = self
-            .sigil_store()
-            .map_err(|_| ClientError::StorageUnavailable)?;
-        let applied = sigil_store.sigil_apply(
-                &format!("client-{}", digest(&format!("{}:{request_id}", grant.id))),
-                &hash,
-                &sigil_id,
-                spellcast_core::inbox::now_ms(),
-                Some(source.as_str()),
-                |current, events| apply_agent(&op, &source, &label, current, spellcast_core::inbox::now_ms(), events),
-            )
-            .map_err(|err| {
-                let text = err.to_string();
-                if text.contains("不存在") {
-                    ClientError::NotFound
-                } else if text.contains("没有开始") || text.contains("执行") {
-                    ClientError::InvalidRequest
-                } else {
-                    ClientError::InvalidRequest
-                }
-            })?;
-        if !applied.replayed {
-            self.sigil_changed(&sigil_id);
-        }
-        let sigil = self
-            .sigil_store()
-            .map_err(|_| ClientError::StorageUnavailable)?
-            .sigil_get(&sigil_id)
-            .map_err(|_| ClientError::StorageUnavailable)?;
-        let status = match change {
-            ClientChange::SigilClaim { .. } => {
-                let executor = sigil
-                    .run
-                    .as_ref()
-                    .and_then(|run| run.executor.as_ref())
-                    .map(|executor| executor.source_id.as_str());
-                if executor == Some(source.as_str()) {
-                    "accepted"
-                } else {
-                    "waiting_handover"
-                }
+                    ..
+                } => (
+                    id.clone(),
+                    AgentRunOp::ReportStep {
+                        step_id,
+                        summary,
+                        evidence,
+                    },
+                ),
+                _ => return Err(ClientError::InvalidRequest),
+            };
+            crate::sigils::validate_sigil_id(&sigil_id).map_err(|_| ClientError::InvalidRequest)?;
+            let hash = digest(&format!("client-run:{}:{}", grant.id, request_id));
+            let mut sigil_store = self
+                .sigil_store()
+                .map_err(|_| ClientError::StorageUnavailable)?;
+            let applied = sigil_store
+                .sigil_apply(
+                    &format!("client-{}", digest(&format!("{}:{request_id}", grant.id))),
+                    &hash,
+                    &sigil_id,
+                    spellcast_core::inbox::now_ms(),
+                    Some(source.as_str()),
+                    |current, events| {
+                        apply_agent(
+                            &op,
+                            &source,
+                            &label,
+                            current,
+                            spellcast_core::inbox::now_ms(),
+                            events,
+                        )
+                    },
+                )
+                .map_err(map_run_error)?;
+            // 【远程法阵写入】sigil_changed 会再取 Store 锁，持有时调用会死锁。
+            drop(sigil_store);
+            if !applied.replayed {
+                self.sigil_changed(&sigil_id);
             }
-            _ => "ok",
+            let sigil = self
+                .sigil_store()
+                .map_err(|_| ClientError::StorageUnavailable)?
+                .sigil_get(&sigil_id)
+                .map_err(|_| ClientError::StorageUnavailable)?;
+            let status = match change {
+                ClientChange::SigilClaim { .. } => {
+                    let executor = sigil
+                        .run
+                        .as_ref()
+                        .and_then(|run| run.executor.as_ref())
+                        .map(|executor| executor.source_id.as_str());
+                    if executor == Some(source.as_str()) {
+                        "accepted"
+                    } else {
+                        "waiting_handover"
+                    }
+                }
+                _ => "ok",
+            };
+            json!({
+                "sigil_id": sigil_id,
+                "status": status,
+                "replayed": applied.replayed,
+                "sigil": sigil,
+            })
         };
-        let mut result = json!({
-            "sigil_id": sigil_id,
-            "status": status,
-            "replayed": applied.replayed,
-            "sigil": sigil,
-        });
         // Persist receipt under the same grant for idempotent recovery.
         let mut store = self
             .project_store()
@@ -977,7 +1026,8 @@ impl Bridge {
                         ClientChange::PutRecord { .. }
                         | ClientChange::SigilClaim { .. }
                         | ClientChange::SigilStartStep { .. }
-                        | ClientChange::SigilReportStep { .. } => unreachable!("handled above"),
+                        | ClientChange::SigilReportStep { .. }
+                        | ClientChange::SigilExecute { .. } => unreachable!("handled above"),
                     };
                     let actor = SigilActor {
                         kind: "client".into(),
@@ -1050,7 +1100,8 @@ impl Bridge {
                 }
                 ClientChange::SigilClaim { .. }
                 | ClientChange::SigilStartStep { .. }
-                | ClientChange::SigilReportStep { .. } => unreachable!("run ops handled in client_run"),
+                | ClientChange::SigilReportStep { .. }
+                | ClientChange::SigilExecute { .. } => unreachable!("run ops handled in client_run"),
             };
             let result_json =
                 serde_json::to_string(&result).map_err(|_| ClientError::StorageUnavailable)?;
@@ -1095,6 +1146,31 @@ impl Bridge {
         Ok(result)
     }
 }
+/// 【远程法阵写入】管道处理在阻塞线程里调用。同步测试没有运行时，就临时建一个。
+fn drive<T>(
+    future: impl std::future::Future<Output = Result<T, spellcast_core::SpellcastError>>,
+) -> Result<T, spellcast_core::SpellcastError> {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return handle.block_on(future);
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| spellcast_core::SpellcastError::user("无法启动执行运行时。"))?
+        .block_on(future)
+}
+
+fn map_run_error(err: impl ToString) -> ClientError {
+    let text = err.to_string();
+    if text.contains("不存在") {
+        ClientError::NotFound
+    } else if text.contains("已经变化") || text.contains("版本超出") {
+        ClientError::Conflict
+    } else {
+        ClientError::InvalidRequest
+    }
+}
+
 fn cas(current: Option<u64>, expected: u64) -> Result<(), ClientError> {
     if current.map_or(expected != 0, |r| r != expected || expected == 0) {
         Err(ClientError::Conflict)

@@ -69,6 +69,7 @@ fn scopes() -> ClientScopes {
     ClientScopes {
         records: true,
         sigil_drafts: true,
+        ..ClientScopes::default()
     }
 }
 fn session(b: &Bridge, p: &OsClient) -> ClientSession {
@@ -158,6 +159,7 @@ fn scopes_are_enforced_at_each_save_and_receipt() {
         ClientScopes {
             records: true,
             sigil_drafts: false,
+            ..ClientScopes::default()
         },
     );
     assert_eq!(
@@ -178,6 +180,7 @@ fn scopes_are_enforced_at_each_save_and_receipt() {
             ClientScopes {
                 records: false,
                 sigil_drafts: true,
+                ..ClientScopes::default()
             },
         )
         .unwrap();
@@ -867,6 +870,7 @@ fn scope_rotation_keeps_historical_audit_scope_and_identity_fingerprint() {
         ClientScopes {
             records: true,
             sigil_drafts: false,
+            ..ClientScopes::default()
         },
     );
     f.b()
@@ -876,6 +880,7 @@ fn scope_rotation_keeps_historical_audit_scope_and_identity_fingerprint() {
             ClientScopes {
                 records: false,
                 sigil_drafts: true,
+                ..ClientScopes::default()
             },
         )
         .unwrap();
@@ -1017,4 +1022,167 @@ async fn explicit_repository_review_still_requires_original_window_key_and_origi
         assert_eq!(response.status(), expected);
     }
     assert_eq!(f.b().client_grants().unwrap()[0].generation, 1);
+}
+
+#[test]
+fn pipe_execute_freezes_and_starts_an_authored_draft_under_sigil_run() {
+    let f = Fixture::new();
+    let repo = f.root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["commit", "--allow-empty", "-q", "-m", "init"],
+    ] {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Sigil Test",
+                "-c",
+                "user.email=sigil@test.invalid",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let p = peer();
+    let drafts_only = ClientScopes {
+        sigil_drafts: true,
+        ..ClientScopes::default()
+    };
+    let s = approve(&f, &p, drafts_only);
+    let plan: SigilPlan = serde_json::from_value(json!({
+        "title": "Remote start",
+        "repository": repo,
+        "location": "in_place",
+        "steps": [{"id":"one","title":"One","instructions":"Work"}]
+    }))
+    .unwrap();
+    let created = save(
+        f.b(),
+        &p,
+        &s,
+        "draft",
+        ClientChange::SigilCreate { plan: plan.clone() },
+    );
+    assert!(created.ok, "{:?}", created.error);
+    let created = created.data.unwrap();
+    let id = created["sigil_id"].as_str().unwrap().to_string();
+    let revision = created["sigil"]["revision"].as_u64().unwrap();
+    let denied = save(
+        f.b(),
+        &p,
+        &s,
+        "execute-denied",
+        ClientChange::SigilExecute {
+            id: id.clone(),
+            expected_revision: revision,
+        },
+    );
+    assert_eq!(code(denied), "scope_denied");
+    assert_eq!(
+        f.b().sigil_store().unwrap().sigil_get(&id).unwrap().state,
+        crate::sigils::SigilState::Draft
+    );
+    f.b()
+        .client_approve(
+            &p,
+            1,
+            ClientScopes {
+                sigil_drafts: true,
+                sigil_run: true,
+                ..ClientScopes::default()
+            },
+        )
+        .unwrap();
+    let s = session(f.b(), &p);
+    assert!(ClientRequest::decode(br#"{"op":"save","protocol":1,"session":{"server_epoch":"x","process_stamp":"y","grant_id":"g","generation":1},"request_id":"argv","change":{"op":"sigil_execute","id":"remote-run","expected_revision":1,"argv":["sh"]}}"#).is_err());
+    let started = save(
+        f.b(),
+        &p,
+        &s,
+        "execute-ok",
+        ClientChange::SigilExecute {
+            id: id.clone(),
+            expected_revision: revision,
+        },
+    );
+    assert!(started.ok, "{:?}", started.error);
+    let started = started.data.unwrap();
+    assert_eq!(started["status"], "started");
+    let sigil = f.b().sigil_store().unwrap().sigil_get(&id).unwrap();
+    assert_eq!(sigil.state, crate::sigils::SigilState::Running);
+    let run = sigil.run.unwrap();
+    assert!(run.executor.is_none());
+    assert_eq!(run.automation, crate::sigils::SigilAutomation::Autonomous);
+    let again = save(
+        f.b(),
+        &p,
+        &s,
+        "execute-ok",
+        ClientChange::SigilExecute {
+            id: id.clone(),
+            expected_revision: revision,
+        },
+    );
+    assert!(again.ok, "{:?}", again.error);
+    assert_eq!(again.data.unwrap()["replayed"], true);
+    let foreign = save(
+        f.b(),
+        &p,
+        &s,
+        "other-draft",
+        ClientChange::SigilCreate { plan },
+    );
+    assert!(foreign.ok, "{:?}", foreign.error);
+    let foreign = foreign.data.unwrap();
+    let other = foreign["sigil_id"].as_str().unwrap().to_string();
+    let other_revision = foreign["sigil"]["revision"].as_u64().unwrap();
+    let raw: String = f
+        .b()
+        .project_store()
+        .unwrap()
+        .connection
+        .query_row(
+            "SELECT value_json FROM spellcast_sigils WHERE id=?1",
+            [&other],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    value["updated_by"]["kind"] = json!("user");
+    value["updated_by"]["source_id"] = serde_json::Value::Null;
+    f.b()
+        .project_store()
+        .unwrap()
+        .connection
+        .execute(
+            "UPDATE spellcast_sigils SET value_json=?2 WHERE id=?1",
+            rusqlite::params![other, value.to_string()],
+        )
+        .unwrap();
+    assert_eq!(
+        code(save(
+            f.b(),
+            &p,
+            &s,
+            "execute-foreign",
+            ClientChange::SigilExecute {
+                id: other.clone(),
+                expected_revision: other_revision,
+            },
+        )),
+        "invalid_request"
+    );
+    assert_eq!(
+        f.b().sigil_store().unwrap().sigil_get(&other).unwrap().state,
+        crate::sigils::SigilState::Draft
+    );
 }
