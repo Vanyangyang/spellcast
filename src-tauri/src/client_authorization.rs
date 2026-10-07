@@ -366,10 +366,8 @@ mod tests {
             .approve(
                 "forged",
                 0,
-                ClientScopes {
-                    records: true,
-                    sigil_drafts: true
-                }
+                ClientScopes { records: true, sigil_drafts: true
+                , ..Default::default() }
             )
             .is_err());
         manager.stop();

@@ -894,17 +894,13 @@ fn scope_rotation_keeps_historical_audit_scope_and_identity_fingerprint() {
         .collect::<Vec<_>>();
     assert_eq!(
         serde_json::from_str::<ClientScopes>(&rows[0].0).unwrap(),
-        ClientScopes {
-            records: true,
-            sigil_drafts: false
-        }
+        ClientScopes { records: true, sigil_drafts: false
+        , ..Default::default() }
     );
     assert_eq!(
         serde_json::from_str::<ClientScopes>(&rows[1].0).unwrap(),
-        ClientScopes {
-            records: false,
-            sigil_drafts: true
-        }
+        ClientScopes { records: false, sigil_drafts: true
+        , ..Default::default() }
     );
     assert_eq!(rows[0].1.len(), 64);
     assert_eq!(rows[0].1, rows[1].1);

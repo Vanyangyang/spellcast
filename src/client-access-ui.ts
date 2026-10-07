@@ -4,7 +4,7 @@ import { clientAccessText as text, type ClientAccessTextKey } from "./i18n/clien
 import "./client-access.css";
 
 type Identity = { path: string; sha256: string; sid: string; file_id: string };
-type Scopes = { records: boolean; sigil_drafts: boolean };
+type Scopes = { records: boolean; sigil_drafts: boolean; sigil_claims?: boolean; sigil_run?: boolean };
 type Grant = { id: string; identity: Identity; scopes: Scopes; state: "approved" | "revoked"; revision: number; generation: number; approved_at_ms: number; updated_at_ms: number };
 type Candidate = { id: string; identity: Identity; process_id: number; created_at: number; grant?: Grant };
 type AccessList = { available: boolean; error_code?: string; candidates: Candidate[]; grants: Grant[] };
@@ -19,7 +19,7 @@ function grantValid(value: unknown): value is Grant {
   if (!value || typeof value !== "object") return false;
   const data = value as Grant;
   return typeof data.id === "string" && identityValid(data.identity)
-    && typeof data.scopes?.records === "boolean" && typeof data.scopes?.sigil_drafts === "boolean"
+    && typeof data.scopes?.records === "boolean" && typeof data.scopes?.sigil_drafts === "boolean" && (data.scopes?.sigil_claims === undefined || typeof data.scopes.sigil_claims === "boolean") && (data.scopes?.sigil_run === undefined || typeof data.scopes.sigil_run === "boolean")
     && (data.state === "approved" || data.state === "revoked")
     && [data.revision, data.generation, data.approved_at_ms, data.updated_at_ms].every(item => Number.isSafeInteger(item) && item >= 0);
 }
@@ -121,7 +121,9 @@ export function mountClientAccessSettings(parent: HTMLElement) {
     container.append(list);
     if (scopes.records) addLabel("li", "records", list);
     if (scopes.sigil_drafts) addLabel("li", "sigilDrafts", list);
-    if (!scopes.records && !scopes.sigil_drafts) addLabel("li", "scopeNone", list);
+    if (scopes.sigil_claims) addLabel("li", "sigilClaims", list);
+    if (scopes.sigil_run) addLabel("li", "sigilRun", list);
+    if (!scopes.records && !scopes.sigil_drafts && !scopes.sigil_claims && !scopes.sigil_run) addLabel("li", "scopeNone", list);
   }
   function closeConfirmation() {
     if (busy) return;
@@ -130,7 +132,7 @@ export function mountClientAccessSettings(parent: HTMLElement) {
     paint();
   }
   function review(candidate: Candidate, scopes: Scopes) {
-    if (busy || !available || dialog.open || !(scopes.records || scopes.sigil_drafts)) return;
+    if (busy || !available || dialog.open || !(scopes.records || scopes.sigil_drafts || scopes.sigil_claims || scopes.sigil_run)) return;
     for (const node of dialog.querySelectorAll<HTMLElement>("*")) { labels.delete(node); dynamicLabels.delete(node); }
     dialog.replaceChildren();
     pending = { candidate, scopes: { ...scopes }, expectedRevision: candidate.grant?.revision ?? 0 };
@@ -141,7 +143,7 @@ export function mountClientAccessSettings(parent: HTMLElement) {
     showIdentity(candidate.identity, dialog);
     addLabel("h3", "selected", dialog);
     showScopes(scopes, dialog);
-    for (const key of ["recordsWarning", "draftsWarning", "devicesWarning", "exclusions"] as const) addLabel("p", key, dialog).className = "client-access-warning";
+    for (const key of ["recordsWarning", "draftsWarning", "claimsWarning", "runWarning", "devicesWarning", "exclusions"] as const) addLabel("p", key, dialog).className = "client-access-warning";
     const menu = document.createElement("menu");
     dialog.append(menu);
     const cancel = addLabel("button", "cancel", menu);

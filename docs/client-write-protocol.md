@@ -72,6 +72,11 @@ Exactly three changes exist:
 | `put_record` | `scopes.records`; create with expected revision 0 and absent ID, or update with the current revision. Existing archive state is preserved. object_id must exist in that project. References are saved text, not file reads or object writes. |
 | `sigil_create` with `plan` | `scopes.sigil_drafts`; global draft, new server ID, no executor ownership. Includes exactly one fixed `sigil-<id>` Canvas reference card in the same commit. |
 | `sigil_put_plan` with `id`, `expected_revision`, `plan` | Same scope; existing draft only, current revision required. Retains its original owner_source. No implicit unfreeze, archive, delete or lifecycle transition. |
+| `sigil_claim` with `id`, optional `label` | `scopes.sigil_claims`; claim or request handover on an already started Sigil. Source id is `ccgui:<grant_id>`. |
+| `sigil_start_step` with `id`, `step_id` | `scopes.sigil_run`; begin a step after a successful claim. |
+| `sigil_report_step` with `id`, `step_id`, optional `summary`/`evidence` | Same scope; report the active step. Observation snapshots may follow on the next observe loop. |
+
+CCGUI remote browsers never open the named pipe. A paired, approved web device calls workbench mutate on the desktop process; the desktop ClientWrite client performs the pipe exchange. Pin confirmation remains desktop-only.
 
 Plans use existing SigilPlan fields. Materials are Canvas object ID/content
 revision references; current existence, visibility and revision are checked
@@ -116,7 +121,7 @@ storage_unavailable and outcome_unknown. Raw OS/SQLite errors are not returned.
 ## Native approval, storage and ordering
 
 Settings → Connection → Application delegation lists OS-observed candidates
-and grants. Record and global-draft permissions start unchecked. The visible
+and grants. Record, global-draft, claim and run permissions start unchecked. The visible
 confirmation identifies canonical image path, SHA-256 and SID, all current and
 future projects, all global drafts, the fixed new-draft card, and current/future
 approved CCGUI web devices until revocation. The excluded execution, command,

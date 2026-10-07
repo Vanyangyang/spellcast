@@ -314,7 +314,7 @@ mod tests {
         let original=Connection::open(&source).unwrap();
         original.execute_batch("CREATE TABLE spellcast_client_grants(client_key TEXT PRIMARY KEY,id TEXT UNIQUE,value TEXT NOT NULL);
             CREATE TABLE spellcast_client_receipts(grant_id TEXT,request_id TEXT,body_hash TEXT,scope TEXT,result_json TEXT,generation INTEGER,PRIMARY KEY(grant_id,request_id));").unwrap();
-        let grant=ClientGrant {id:uuid::Uuid::new_v4().to_string(),identity:ClientIdentity{path:"C:\\Synthetic\\ccgui-next.exe".into(),sha256:"a".repeat(64),sid:"S-1-5-21-100-1001".into(),file_id:"00000001".into()},scopes:ClientScopes{records:true,sigil_drafts:true},state:"approved".into(),revision:1,generation:1,approved_at_ms:1,updated_at_ms:1};
+        let grant=ClientGrant {id:uuid::Uuid::new_v4().to_string(),identity:ClientIdentity{path:"C:\\Synthetic\\ccgui-next.exe".into(),sha256:"a".repeat(64),sid:"S-1-5-21-100-1001".into(),file_id:"00000001".into()},scopes:ClientScopes { records: true, sigil_drafts: true, ..Default::default() },state:"approved".into(),revision:1,generation:1,approved_at_ms:1,updated_at_ms:1};
         original.execute("INSERT INTO spellcast_client_grants VALUES('synthetic',?1,?2)",rusqlite::params![grant.id,serde_json::to_string(&grant).unwrap()]).unwrap();
         original.execute("INSERT INTO spellcast_client_receipts VALUES(?1,'committed','hash','records','{\"committed\":true}',1)",[&grant.id]).unwrap();
         drop(original); fs::create_dir_all(f.target().parent().unwrap()).unwrap(); migrate(&source,&f.target()).unwrap();

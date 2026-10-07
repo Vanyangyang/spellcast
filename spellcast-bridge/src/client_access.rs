@@ -3,6 +3,7 @@
 //! Wire contract: docs/client-write-protocol.md. Public epochs are not credentials.
 use crate::{
     project_records::{RecordActor, RecordChange, RecordCommand, RecordFields},
+    sigil_run::{apply_agent, AgentRunOp},
     sigils::{SigilActor, SigilPlan},
     Bridge,
 };
@@ -102,14 +103,23 @@ fn hex(value: &str, length: usize) -> bool {
 pub struct ClientScopes {
     pub records: bool,
     pub sigil_drafts: bool,
+    #[serde(default)]
+    pub sigil_claims: bool,
+    #[serde(default)]
+    pub sigil_run: bool,
 }
 impl ClientScopes {
     fn allows(self, scope: &str) -> bool {
         match scope {
             "records" => self.records,
             "sigil_drafts" => self.sigil_drafts,
+            "sigil_claims" => self.sigil_claims,
+            "sigil_run" => self.sigil_run,
             _ => false,
         }
+    }
+    pub fn any(self) -> bool {
+        self.records || self.sigil_drafts || self.sigil_claims || self.sigil_run
     }
 }
 
@@ -142,20 +152,48 @@ pub enum ClientChange {
         expected_revision: u64,
         plan: SigilPlan,
     },
+    SigilClaim {
+        id: String,
+        #[serde(default)]
+        label: String,
+    },
+    SigilStartStep {
+        id: String,
+        step_id: String,
+    },
+    SigilReportStep {
+        id: String,
+        step_id: String,
+        #[serde(default)]
+        summary: String,
+        #[serde(default)]
+        evidence: Vec<String>,
+    },
 }
 impl ClientChange {
     fn scope(&self) -> &'static str {
         match self {
             Self::PutRecord { .. } => "records",
-            _ => "sigil_drafts",
+            Self::SigilCreate { .. } | Self::SigilPutPlan { .. } => "sigil_drafts",
+            Self::SigilClaim { .. } => "sigil_claims",
+            Self::SigilStartStep { .. } | Self::SigilReportStep { .. } => "sigil_run",
         }
     }
     fn operation(&self) -> &'static str {
         match self {
             Self::PutRecord { .. } => "put_record",
             Self::SigilCreate { .. } => "sigil_create",
-            _ => "sigil_put_plan",
+            Self::SigilPutPlan { .. } => "sigil_put_plan",
+            Self::SigilClaim { .. } => "sigil_claim",
+            Self::SigilStartStep { .. } => "sigil_start_step",
+            Self::SigilReportStep { .. } => "sigil_report_step",
         }
+    }
+    fn is_run(&self) -> bool {
+        matches!(
+            self,
+            Self::SigilClaim { .. } | Self::SigilStartStep { .. } | Self::SigilReportStep { .. }
+        )
     }
 }
 
@@ -467,7 +505,7 @@ impl Bridge {
         expected_revision: u64,
         scopes: ClientScopes,
     ) -> Result<ClientGrant, ClientError> {
-        if !scopes.records && !scopes.sigil_drafts {
+        if !scopes.any() {
             return Err(ClientError::ScopeDenied);
         }
         let mut store = self
@@ -622,7 +660,180 @@ impl Bridge {
             serde_json::from_str(&result).map_err(|_| ClientError::StorageUnavailable)?;
         Ok(json!({"request_id":request_id,"state":"committed","result":result}))
     }
+    fn client_run(
+        &self,
+        peer: &OsClient,
+        session: &ClientSession,
+        request_id: &str,
+        change: &ClientChange,
+    ) -> Result<Value, ClientError> {
+        let mut store = self
+            .project_store()
+            .map_err(|_| ClientError::StorageUnavailable)?;
+        let grant = self.client_authorize(&store.connection, peer, session)?;
+        if !grant.scopes.allows(change.scope()) {
+            audit(
+                &store.connection,
+                &grant,
+                change.operation(),
+                &digest(request_id),
+                "scope_denied",
+            )?;
+            return Err(ClientError::ScopeDenied);
+        }
+        let body = serde_json::to_string(change).map_err(|_| ClientError::InvalidRequest)?;
+        if body.len() > MAX_FRAME {
+            return Err(ClientError::InvalidRequest);
+        }
+        let body_hash = digest(&body);
+        let tx = store
+            .connection
+            .transaction()
+            .map_err(|_| ClientError::StorageUnavailable)?;
+        let existing: Option<(String, String)> = tx
+            .query_row(
+                "SELECT body_hash,result_json FROM spellcast_client_receipts WHERE grant_id=?1 AND request_id=?2",
+                params![grant.id, request_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| ClientError::StorageUnavailable)?;
+        if let Some((hash, result)) = existing {
+            if hash != body_hash {
+                return Err(ClientError::IdempotencyConflict);
+            }
+            let mut result: Value =
+                serde_json::from_str(&result).map_err(|_| ClientError::StorageUnavailable)?;
+            result["replayed"] = json!(true);
+            audit(
+                &tx,
+                &grant,
+                change.operation(),
+                &digest(request_id),
+                "replayed",
+            )?;
+            tx.commit().map_err(|_| ClientError::OutcomeUnknown)?;
+            return Ok(result);
+        }
+        let source = format!("ccgui:{}", grant.id);
+        let label = match change {
+            ClientChange::SigilClaim { label, .. } if !label.trim().is_empty() => label.clone(),
+            _ => "CCGUI".into(),
+        };
+        let (sigil_id, op) = match change {
+            ClientChange::SigilClaim { id, .. } => (id.clone(), AgentRunOp::Claim),
+            ClientChange::SigilStartStep { id, step_id, .. } => {
+                (id.clone(), AgentRunOp::StartStep { step_id })
+            }
+            ClientChange::SigilReportStep {
+                id,
+                step_id,
+                summary,
+                evidence,
+                ..
+            } => (
+                id.clone(),
+                AgentRunOp::ReportStep {
+                    step_id,
+                    summary,
+                    evidence,
+                },
+            ),
+            _ => return Err(ClientError::InvalidRequest),
+        };
+        crate::sigils::validate_sigil_id(&sigil_id).map_err(|_| ClientError::InvalidRequest)?;
+        // Release the Store lock before sigil_apply, which needs its own transaction.
+        drop(tx);
+        drop(store);
+        let hash = digest(&format!("client-run:{}:{}", grant.id, request_id));
+        let mut sigil_store = self
+            .sigil_store()
+            .map_err(|_| ClientError::StorageUnavailable)?;
+        let applied = sigil_store.sigil_apply(
+                &format!("client-{}", digest(&format!("{}:{request_id}", grant.id))),
+                &hash,
+                &sigil_id,
+                spellcast_core::inbox::now_ms(),
+                Some(source.as_str()),
+                |current, events| apply_agent(&op, &source, &label, current, spellcast_core::inbox::now_ms(), events),
+            )
+            .map_err(|err| {
+                let text = err.to_string();
+                if text.contains("不存在") {
+                    ClientError::NotFound
+                } else if text.contains("没有开始") || text.contains("执行") {
+                    ClientError::InvalidRequest
+                } else {
+                    ClientError::InvalidRequest
+                }
+            })?;
+        if !applied.replayed {
+            self.sigil_changed(&sigil_id);
+        }
+        let sigil = self
+            .sigil_store()
+            .map_err(|_| ClientError::StorageUnavailable)?
+            .sigil_get(&sigil_id)
+            .map_err(|_| ClientError::StorageUnavailable)?;
+        let status = match change {
+            ClientChange::SigilClaim { .. } => {
+                let executor = sigil
+                    .run
+                    .as_ref()
+                    .and_then(|run| run.executor.as_ref())
+                    .map(|executor| executor.source_id.as_str());
+                if executor == Some(source.as_str()) {
+                    "accepted"
+                } else {
+                    "waiting_handover"
+                }
+            }
+            _ => "ok",
+        };
+        let mut result = json!({
+            "sigil_id": sigil_id,
+            "status": status,
+            "replayed": applied.replayed,
+            "sigil": sigil,
+        });
+        // Persist receipt under the same grant for idempotent recovery.
+        let mut store = self
+            .project_store()
+            .map_err(|_| ClientError::StorageUnavailable)?;
+        let grant = self.client_authorize(&store.connection, peer, session)?;
+        if !grant.scopes.allows(change.scope()) {
+            return Err(ClientError::ScopeDenied);
+        }
+        let tx = store
+            .connection
+            .transaction()
+            .map_err(|_| ClientError::StorageUnavailable)?;
+        tx.execute(
+            "INSERT INTO spellcast_client_receipts(grant_id,request_id,body_hash,scope,result_json,generation) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                grant.id,
+                request_id,
+                body_hash,
+                change.scope(),
+                serde_json::to_string(&result).map_err(|_| ClientError::StorageUnavailable)?,
+                grant.generation
+            ],
+        )
+        .map_err(|_| ClientError::StorageUnavailable)?;
+        audit(
+            &tx,
+            &grant,
+            change.operation(),
+            &digest(request_id),
+            "committed",
+        )?;
+        tx.commit().map_err(|_| ClientError::OutcomeUnknown)?;
+        result["replayed"] = json!(false);
+        Ok(result)
+    }
+
     fn client_save(
+
         &self,
         peer: &OsClient,
         session: &ClientSession,
@@ -631,6 +842,9 @@ impl Bridge {
     ) -> Result<Value, ClientError> {
         crate::sigil_workspace::validate_request_id(request_id)
             .map_err(|_| ClientError::InvalidRequest)?;
+        if change.is_run() {
+            return self.client_run(peer, session, request_id, change);
+        }
         // Same lock order as all existing Canvas writes: state -> Store. Revoke
         // acquires Store, so it cannot race any part of this transaction.
         let mut current = self
@@ -760,7 +974,10 @@ impl Bridge {
                             }
                             (id.clone(), *expected_revision, false)
                         }
-                        _ => unreachable!(),
+                        ClientChange::PutRecord { .. }
+                        | ClientChange::SigilClaim { .. }
+                        | ClientChange::SigilStartStep { .. }
+                        | ClientChange::SigilReportStep { .. } => unreachable!("handled above"),
                     };
                     let actor = SigilActor {
                         kind: "client".into(),
@@ -831,6 +1048,9 @@ impl Bridge {
                     }
                     json!({"sigil_id":id,"sigil":saved.sigil,"created":created,"deleted":false,"replayed":false,"card_id":card_id})
                 }
+                ClientChange::SigilClaim { .. }
+                | ClientChange::SigilStartStep { .. }
+                | ClientChange::SigilReportStep { .. } => unreachable!("run ops handled in client_run"),
             };
             let result_json =
                 serde_json::to_string(&result).map_err(|_| ClientError::StorageUnavailable)?;
